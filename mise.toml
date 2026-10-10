@@ -1,0 +1,16 @@
+# This repo is the source of ezc (cli/), a Go CLI. `direnv allow` puts its
+# bin/ezc shim on PATH; ezc keeps its data in EZC_HOME. See README.md.
+
+[tasks."cli:build"]
+description = "Build ezc into cli/bin/ (bin/ezc also does this on demand)"
+dir = "cli"
+run = "go build -o bin/ezc ./cmd/ezc"
+
+[tasks."cli:test"]
+description = "gofmt check, go vet, go test — what a change to cli/ must pass"
+dir = "cli"
+run = [
+  'test -z "$(gofmt -l .)" || { gofmt -l .; echo "gofmt: the files above need gofmt -w" >&2; exit 1; }',
+  "go vet ./...",
+  "go test ./...",
+]

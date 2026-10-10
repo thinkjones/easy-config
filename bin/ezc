@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# ezc shim — .envrc puts this directory on PATH, so `ezc` works in any shell
+# after `direnv allow`. The shim (re)builds cli/bin/ezc whenever a Go source
+# is newer than the binary, then replaces itself with it. ezc keeps its data
+# in EZC_HOME, not in this checkout.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cli="$root/cli"
+bin="$cli/bin/ezc"
+
+if [[ ! -x $bin ]] || [[ -n $(find "$cli" -path "$cli/bin" -prune -o \( -name '*.go' -o -name go.mod -o -name go.sum \) -newer "$bin" -print -quit) ]]; then
+  (cd "$cli" && go build -o bin/ezc ./cmd/ezc) >&2
+fi
+
+exec "$bin" "$@"
