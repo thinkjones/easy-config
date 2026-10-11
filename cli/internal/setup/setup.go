@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -183,7 +184,7 @@ func CloneStore(e Env, source string) (remote string, err error) {
 		err = e.Git.Clone(source, store)
 	}
 	if err == nil && !exists(filepath.Join(e.Paths.StoreEzc(), manifestName)) {
-		err = fmt.Errorf("%s is not an ezc store (it has no %s/%s).", source, ezcDir, manifestName)
+		err = fmt.Errorf("%s is not an ezc store (it has no %s/%s).", Redact(source), ezcDir, manifestName)
 	}
 	if err != nil {
 		unclone(store, existed)
@@ -228,6 +229,15 @@ func (e Env) gh(args ...string) error {
 		}
 	}
 	return fmt.Errorf("gh: %v", err)
+}
+
+// Redact is a repo's URL without the name and password it may carry, for a message.
+func Redact(source string) string {
+	if u, err := url.Parse(source); err == nil && u.User != nil && u.Host != "" {
+		u.User = nil
+		return u.String()
+	}
+	return source
 }
 
 func exists(path string) bool {

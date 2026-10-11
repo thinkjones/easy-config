@@ -174,7 +174,7 @@ func unchanged(t *testing.T, path string, content []byte, mod time.Time, mode os
 		t.Fatal(err)
 	}
 	if string(got) != string(content) || !info.ModTime().Equal(mod) || info.Mode().Perm() != mode {
-		t.Fatalf("%s changed: %q, %v, %o", path, got, info.ModTime(), info.Mode().Perm())
+		t.Fatalf("%s changed: %d bytes, %v, %o", path, len(got), info.ModTime(), info.Mode().Perm())
 	}
 }
 
@@ -402,6 +402,21 @@ func TestIsSlug(t *testing.T) {
 	} {
 		if IsSlug(s) != want {
 			t.Errorf("IsSlug(%q) = %v", s, !want)
+		}
+	}
+}
+
+func TestRedact(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://gene:hunter2@example.invalid/acme/config.git": "https://example.invalid/acme/config.git",
+		"https://token@example.invalid/acme/config":            "https://example.invalid/acme/config",
+		"https://example.invalid/acme/config":                  "https://example.invalid/acme/config",
+		"git@github.com:acme/config.git":                       "git@github.com:acme/config.git",
+		"/srv/store.git":                                       "/srv/store.git",
+		"acme/config":                                          "acme/config",
+	} {
+		if got := Redact(in); got != want {
+			t.Errorf("Redact(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

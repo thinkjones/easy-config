@@ -135,6 +135,18 @@ func keySource(sys System) (note string, found bool) {
 	return sops.DefaultKeyFile("~"), err == nil
 }
 
+// keyInEnvironment says what key the environment supplies to the default backend: the variable that holds it,
+// "" when there is none, and the key file it names, "" when the variable holds the key's text.
+func keyInEnvironment(sys System) (variable, file string) {
+	if sys.Getenv("SOPS_AGE_KEY") != "" {
+		return "SOPS_AGE_KEY", ""
+	}
+	if file := sys.Getenv("SOPS_AGE_KEY_FILE"); file != "" {
+		return "SOPS_AGE_KEY_FILE", file
+	}
+	return "", ""
+}
+
 // backendFor is sys.Backend, else the sops backend for this machine.
 func backendFor(sys System) backend.Backend {
 	if sys.Backend != nil {

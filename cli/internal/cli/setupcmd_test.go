@@ -703,3 +703,115 @@ func TestSetupNeverPrintsThePrivateKey(t *testing.T) {
 		}
 	}
 }
+
+func TestKeyInEnvironment(t *testing.T) {
+	f := setupFake(t)
+	if variable, file := keyInEnvironment(f.sys()); variable != "" || file != "" {
+		t.Fatalf("nothing set: %q, %q", variable, file)
+	}
+	f.env["SOPS_AGE_KEY_FILE"] = "/keys/mine.txt"
+	if variable, file := keyInEnvironment(f.sys()); variable != "SOPS_AGE_KEY_FILE" || file != "/keys/mine.txt" {
+		t.Fatalf("a file: %q, %q", variable, file)
+	}
+	// Key text is used whatever file is named, so it is what is reported.
+	f.env["SOPS_AGE_KEY"] = "text"
+	if variable, file := keyInEnvironment(f.sys()); variable != "SOPS_AGE_KEY" || file != "" {
+		t.Fatalf("text: %q, %q", variable, file)
+	}
+}
+
+func TestSetupKeyFileFromEnvironment(t *testing.T) {
+	t.Run("the file is there", func(t *testing.T) {
+		f := setupFake(t)
+		key := filepath.Join(t.TempDir(), "mine.txt")
+		public, private, err := f.backend.NewKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, key, string(private))
+		f.env["SOPS_AGE_KEY_FILE"] = key
+		if err := f.run("setup", "--new-local", "--name", "gene", "--yes"); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := os.ReadFile(key); string(got) != string(private) {
+			t.Fatal("the key file changed")
+		}
+		if !strings.Contains(f.out.String(), "✓ your key: "+key+"\n") {
+			t.Fatalf("stdout:\n%s", f.out.String())
+		}
+		reg, _, err := recipients.Load(filepath.Join(setupStore(f), ".ezc"))
+		if err != nil || reg.NameOf(public) != "gene" {
+			t.Fatalf("registry %+v, %v", reg, err)
+		}
+		if c, _, _ := config.Load(setupConfig(f)); c.KeyFile != key {
+			t.Fatalf("config %+v", c)
+		}
+		if _, err := os.Lstat(setupKeyFile(f)); err == nil {
+			t.Fatal("a key was made at the default place too")
+		}
+	})
+	t.Run("the file is not there", func(t *testing.T) {
+		f := setupFake(t)
+		key := filepath.Join(t.TempDir(), "keys", "mine.txt")
+		f.env["SOPS_AGE_KEY_FILE"] = key
+		if err := f.run("setup", "--new-local", "--name", "gene", "--yes"); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(f.out.String(), "+ created your key: "+key+"\n"+setupBackupNotice) {
+			t.Fatalf("stdout:\n%s", f.out.String())
+		}
+		info, err := os.Stat(key)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("key file: %v, %v", info, err)
+		}
+		public, err := f.backend.PublicKey(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reg, _, err := recipients.Load(filepath.Join(setupStore(f), ".ezc"))
+		if err != nil || reg.NameOf(public) != "gene" {
+			t.Fatalf("registry %+v, %v", reg, err)
+		}
+		if c, _, _ := config.Load(setupConfig(f)); c.KeyFile != key {
+			t.Fatalf("config %+v", c)
+		}
+		if _, err := os.Lstat(setupKeyFile(f)); err == nil {
+			t.Fatal("a key was made at the default place too")
+		}
+		data, _ := os.ReadFile(key)
+		if strings.Contains(f.out.String()+f.errOut.String(), strings.TrimSpace(string(data))) {
+			t.Fatal("the private key was printed")
+		}
+	})
+	t.Run("a relative path", func(t *testing.T) {
+		f := setupFake(t)
+		f.env["SOPS_AGE_KEY_FILE"] = "keys/mine.txt"
+		wantUsage(t, f.run("setup", "--new-local", "--name", "gene", "--yes"), "ezc setup: SOPS_AGE_KEY_FILE must be an absolute path.")
+		setupNothingMade(t, f)
+		if _, err := os.Lstat(filepath.Join(f.wd, "keys")); err == nil || f.out.Len() != 0 {
+			t.Fatalf("something was made or printed: %q", f.out.String())
+		}
+	})
+}
+
+func TestSetupKeyTextInEnvironment(t *testing.T) {
+	f := setupFake(t)
+	f.env["SOPS_AGE_KEY"] = "FAKE-KEY-0123456789abcdef"
+	err := f.run("setup", "--new-local", "--name", "gene", "--yes")
+	wantUsage(t, err, "ezc setup: SOPS_AGE_KEY is set, so that key would be used instead of the one setup registers. Unset it and run ezc setup again.")
+	if strings.Contains(err.Error(), "FAKE-KEY-") || f.out.Len() != 0 {
+		t.Fatalf("err %v, stdout %q", err, f.out.String())
+	}
+	setupNothingMade(t, f)
+}
+
+func TestSetupStoreWithNoRegistry(t *testing.T) {
+	f := setupFake(t)
+	store(t, f, map[string]string{"manifest.yaml": empty})
+	if err := f.run("setup", "--name", "gene", "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(f.out.String(), "cannot read") {
+		t.Fatalf("stdout:\n%s", f.out.String())
+	}
+}

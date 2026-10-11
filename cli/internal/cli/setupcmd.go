@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"net/url"
 	"path/filepath"
 	"strings"
 
@@ -98,6 +97,14 @@ func runSetup(sys System, o setupFlags) error {
 	}
 	if o.name != "" && !recipients.ValidName(o.name) {
 		return usagef("ezc setup: --name takes %s.", nameRule)
+	}
+	// A key the environment supplies is the one every command reads with, so it is the one to register.
+	envVar, envKeyFile := keyInEnvironment(sys)
+	switch {
+	case envVar != "" && envKeyFile == "":
+		return usagef("ezc setup: %s is set, so that key would be used instead of the one setup registers. Unset it and run ezc setup again.", envVar)
+	case envVar != "" && !filepath.IsAbs(envKeyFile):
+		return usagef("ezc setup: %s must be an absolute path.", envVar)
 	}
 	cfg, found, err := config.Load(p.Config())
 	if err != nil {
@@ -207,7 +214,10 @@ func runSetup(sys System, o setupFlags) error {
 	}
 
 	// Key.
-	kf := keyFile(sys)
+	kf := envKeyFile
+	if kf == "" {
+		kf = keyFile(sys)
+	}
 	if kf == "" {
 		return errors.New("can't find your home directory, where your key is kept: set HOME.")
 	}
@@ -271,10 +281,12 @@ func runSetup(sys System, o setupFlags) error {
 	}
 
 	who, err := setup.Recipient(e, public)
+	// A store with no registry says nothing about who can read it.
+	_, registered, _ := recipients.Load(p.StoreEzc())
 	switch {
 	case err != nil:
 		return err
-	case who == "":
+	case who == "" && registered:
 		fmt.Fprintf(sys.Stdout, "\n! Your key cannot read this store's secrets yet. Give this public key to someone who has access:\n%s\n", public)
 	case made:
 		fmt.Fprint(sys.Stdout, "\nNext: ezc set -g NAME --type secret --desc \"what it is\"\n")
@@ -328,9 +340,5 @@ func remoteNote(remote string) string {
 	if remote == "" {
 		return "no remote"
 	}
-	if u, err := url.Parse(remote); err == nil && u.User != nil {
-		u.User = nil
-		remote = u.String()
-	}
-	return "remote " + remote
+	return "remote " + setup.Redact(remote)
 }

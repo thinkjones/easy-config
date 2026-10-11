@@ -18,11 +18,11 @@ ezc setup --store owner/repo          # an existing store: owner/repo (needs gh)
 
 `ezc setup` takes a machine from nothing to a working store. It checks that `git` and `sops` are installed (and offers to install `sops` with Homebrew when `brew` is there), creates your key, creates or clones the store, and writes `config.toml` in ezc's home (`$EZC_HOME` when set, else `~/Library/ezc` on macOS and `~/.local/share/ezc` on Linux). The store is a git repo at `store` in that folder. On a terminal, setup asks for what no flag says: your name, where the store comes from, and whether to install with brew; `--name` and `--yes` answer in advance. Without a terminal it needs one of the three flags above.
 
-Each line it prints is something that was already there (`✓`) or something it made (`+`). A new key is written to `~/.config/sops/age/keys.txt` (or the `key_file` of `config.toml`), readable only by you. Back that file up when setup says so: without it your secrets cannot be read, and it cannot be recovered. Setup never prints the private key.
+Each line it prints is something that was already there (`✓`) or something it made (`+`). A new key is written to `~/.config/sops/age/keys.txt` (or the `key_file` of `config.toml`, or the file `SOPS_AGE_KEY_FILE` names), readable only by you. Back that file up when setup says so: without it your secrets cannot be read, and it cannot be recovered. Setup never prints the private key.
 
 A new store starts with an empty manifest, `recipients.yaml` naming you and your public key, the encryption policy written from it, and one commit. Your name is `--name`, else the `user` of `config.toml`, else your login name in lower case; it is lower case letters, digits and `-`.
 
-After `--store`, when your key is not one the store's `recipients.yaml` names, setup says so and prints your public key: give it to someone who has access. The machine is set up either way.
+`--store a/b` always means the GitHub repo `a/b`; for a folder of that shape write `./a/b`. After `--store`, when your key is not one the store's `recipients.yaml` names, setup says so and prints your public key: give it to someone who has access. The machine is set up either way.
 
 Run again, setup changes only what is missing. A key file, a store or a value in `config.toml` that is already there is never overwritten, and a store with no remote is published by `--new-github`. Asking for a different store than the one in place is refused: move the store away first. Setup manages the store in ezc's home, so it refuses to run while `EZC_STORE` is set.
 
@@ -183,7 +183,7 @@ Secrets need [`sops`](https://github.com/getsops/sops) installed: `brew install 
 
 A variable the manifest declares `secret` is stored encrypted, in `common.enc.yaml` or `env.<name>.enc.yaml`, and `ezc set` writes it there. A folder needs its encryption policy, `.ezc/.sops.yaml`, before a secret can be stored in it. `ezc setup` writes the store's from `recipients.yaml`, so `ezc set -g` works as soon as setup has run; do not edit that file. A repo that keeps secrets of its own needs the same file in its `.ezc/`: copy the store's. A policy whose `path_regex` matches no file name stores nothing, and `ezc set` says so.
 
-The key file is the `key_file` of `$EZC_HOME/config.toml` when that file names one, else `~/.config/sops/age/keys.txt`; `ezc setup` creates it when it is not there. It is passed to `sops` as `SOPS_AGE_KEY_FILE`; when `SOPS_AGE_KEY` or `SOPS_AGE_KEY_FILE` is already set in the environment, that wins, so unset them before `ezc setup` unless they name the same key.
+The key file is the `key_file` of `$EZC_HOME/config.toml` when that file names one, else `~/.config/sops/age/keys.txt`; `ezc setup` creates it when it is not there. It is passed to `sops` as `SOPS_AGE_KEY_FILE`; when `SOPS_AGE_KEY` or `SOPS_AGE_KEY_FILE` is already set in the environment, that wins. `ezc setup` follows the same rule: with `SOPS_AGE_KEY_FILE` set it uses that file as your key file (creating it when it is not there) and records it as `key_file`; the path must be absolute. With `SOPS_AGE_KEY` set it stops and asks you to unset it, because that key would be used instead of the one setup registers.
 
 A secret is typed at a hidden prompt or piped on stdin, never passed as an argument, and reaches `sops` on its stdin only. A value cannot move across the secret boundary: `ezc set` refuses a name that is already in the other file of the pair, so remove it with `ezc unset`, which clears both files of the pair, first.
 
