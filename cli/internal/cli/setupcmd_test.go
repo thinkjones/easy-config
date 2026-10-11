@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/backend/sops"
@@ -134,6 +135,12 @@ func setupFakeGh(t *testing.T, f *fake, from string) string {
 // setupRemote is a bare repo holding a store whose registry names key as gene; it returns the bare repo.
 func setupRemote(t *testing.T, key string) string {
 	t.Helper()
+	return setupRemoteHolding(t, key, false)
+}
+
+// setupRemoteHolding is setupRemote, with one secret in the store when secret is true.
+func setupRemoteHolding(t *testing.T, key string, secret bool) string {
+	t.Helper()
 	g := gitstore.Git{Run: gittest.WithIdentity(t)}
 	bare, work := gittest.Bare(t), filepath.Join(t.TempDir(), "work")
 	if err := g.Init(work); err != nil {
@@ -146,6 +153,11 @@ func setupRemote(t *testing.T, key string) string {
 	}
 	if err := (&backend.Fake{}).WritePolicy(filepath.Join(work, ".ezc"), reg.Keys()); err != nil {
 		t.Fatal(err)
+	}
+	if secret {
+		if err := (&backend.Fake{}).Set(filepath.Join(work, ".ezc", "common.enc.yaml"), "TOKEN", "s3cr3t-marker-value"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := g.Commit(work, "a store", gitstore.Author{}, ".ezc"); err != nil {
 		t.Fatal(err)
@@ -1255,8 +1267,10 @@ func TestSetupWritesAMissingManifest(t *testing.T) {
 
 // The key and the token a CI job is given. Neither may reach an argument, a file or the output.
 const (
-	ciKey   = "FAKE-KEY-c1c1c1c1"
-	ciToken = "tok-5ecr3t-0f-the-job"
+	ciKey = "FAKE-KEY-c1c1c1c1"
+	// ciPublic is the public half of ciKey.
+	ciPublic = "fake1c1c1c1c1"
+	ciToken  = "tok-5ecr3t-0f-the-job"
 )
 
 // setupCI is a CI job's machine: the key and the token in the environment, and no terminal.
@@ -1273,6 +1287,14 @@ func setupCI(t *testing.T) *fake {
 		}
 	})
 	return f
+}
+
+// readSpy is a stdin that counts how often it is read, and holds an answer for whoever asks.
+type readSpy struct{ reads int }
+
+func (r *readSpy) Read(p []byte) (int, error) {
+	r.reads++
+	return copy(p, "y\n"), nil
 }
 
 // setupCIClone is the one clone the commands ran.
@@ -1292,14 +1314,25 @@ func setupCIClone(t *testing.T, f *fake) proc.Command {
 
 // setupCIReport is what setup --ci prints when it clones the store.
 func setupCIReport(f *fake) string {
-	return "✓ git\n✓ fake\n✓ the key: EZC_AGE_KEY\n+ cloned the store: " + setupStore(f) + "\n+ wrote " + setupConfig(f) + "\n"
+	return "✓ git\n✓ fake\n+ cloned the store: " + setupStore(f) + "\n✓ the key: EZC_AGE_KEY\n+ wrote " + setupConfig(f) + "\n"
 }
 
 func TestSetupCI(t *testing.T) {
 	f := setupCI(t)
-	bare := setupRemote(t, "fake1bot")
+	f.tty = true // even on a terminal it asks nothing: stdin is never read, and stderr, where a prompt goes, stays empty
+	stdin := &readSpy{}
+	run := func(args ...string) error {
+		sys := f.sys()
+		sys.Stdin = stdin
+		err := Run(args, sys)
+		if stdin.reads != 0 {
+			t.Errorf("%v read stdin", args)
+		}
+		return err
+	}
+	bare := setupRemoteHolding(t, ciPublic, true)
 	args := []string{"setup", "--ci", "--store", bare}
-	if err := f.run(args...); err != nil {
+	if err := run(args...); err != nil {
 		t.Fatal(err)
 	}
 	if f.out.String() != setupCIReport(f) || f.errOut.Len() != 0 {
@@ -1309,7 +1342,7 @@ func TestSetupCI(t *testing.T) {
 	// The clone is shallow, and git is told which variable holds the token, never the token.
 	clone := setupCIClone(t, f)
 	line := strings.Join(clone.Args, " ")
-	for _, want := range []string{"credential.helper= ", `"password=$EZC_STORE_TOKEN"`, "--depth 1", "--no-tags"} {
+	for _, want := range []string{"-c credential.https://github.com.helper= -c credential.https://github.com.helper=!f()", `"password=$EZC_STORE_TOKEN"`, "--depth 1", "--no-tags"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("the clone lacks %q: %s", want, line)
 		}
@@ -1347,10 +1380,10 @@ func TestSetupCI(t *testing.T) {
 	before := setupSnapshot(t, f.env["HOME"], f.env["EZC_HOME"])
 	f.out.Reset()
 	f.gits = nil
-	if err := f.run(args...); err != nil {
+	if err := run(args...); err != nil {
 		t.Fatal(err)
 	}
-	want := "✓ git\n✓ fake\n✓ the key: EZC_AGE_KEY\n✓ the store: " + setupStore(f) + "\n✓ the config: " + setupConfig(f) + "\n"
+	want := "✓ git\n✓ fake\n✓ the store: " + setupStore(f) + "\n✓ the key: EZC_AGE_KEY\n✓ the config: " + setupConfig(f) + "\n"
 	if f.out.String() != want || f.errOut.Len() != 0 {
 		t.Fatalf("again, stdout:\n%s\nwant:\n%s\nstderr:\n%s", f.out.String(), want, f.errOut.String())
 	}
@@ -1387,19 +1420,100 @@ func TestSetupCITokenVariable(t *testing.T) {
 	}
 }
 
+// GH_TOKEN is a token for the store only in a CI run, where the key is in the environment as text: a developer
+// who has it set for other tools keeps git's own credentials.
 func TestStoreGitNamesTheTokenVariable(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"nothing", nil, ""},
+		{"GH_TOKEN alone", map[string]string{"GH_TOKEN": "gh-tok"}, ""},
+		{"the key alone", map[string]string{"EZC_AGE_KEY": ciKey}, ""},
+		{"GH_TOKEN and the key", map[string]string{"GH_TOKEN": "gh-tok", "EZC_AGE_KEY": ciKey}, "GH_TOKEN"},
+		{"the store's token alone", map[string]string{"EZC_STORE_TOKEN": "store-tok"}, "EZC_STORE_TOKEN"},
+		{"both tokens", map[string]string{"GH_TOKEN": "gh-tok", "EZC_STORE_TOKEN": "store-tok"}, "EZC_STORE_TOKEN"},
+		{"both tokens and the key", map[string]string{"GH_TOKEN": "gh-tok", "EZC_STORE_TOKEN": "store-tok", "EZC_AGE_KEY": ciKey}, "EZC_STORE_TOKEN"},
+	} {
+		f := newFake(t)
+		for k, v := range c.env {
+			f.env[k] = v
+		}
+		if got := storeGit(f.sys()).TokenVar; got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// A developer's fetch carries no helper for GH_TOKEN, and none of git's own is dropped.
+func TestGHTokenAloneChangesNoGitCommand(t *testing.T) {
 	f := newFake(t)
-	if got := storeGit(f.sys()).TokenVar; got != "" {
-		t.Fatalf("with no token: %q", got)
+	accessStore(t, f)
+	f.env["GH_TOKEN"] = "gh-tok-1"
+	attemptedAt(t, f, noon.Add(-time.Hour))
+	f.gits = nil
+	if err := f.run("list", "-g"); err != nil {
+		t.Fatal(err)
 	}
-	f.env["GH_TOKEN"] = "gh-tok"
-	if got := storeGit(f.sys()).TokenVar; got != "GH_TOKEN" {
-		t.Fatalf("with GH_TOKEN: %q", got)
+	fetched := false
+	for _, c := range f.gits {
+		fetched = fetched || slices.Contains(c.Args, "fetch")
+		if line := strings.Join(c.Args, " "); strings.Contains(line, "credential") {
+			t.Fatalf("a credential setting: %s", line)
+		}
 	}
-	f.env["EZC_STORE_TOKEN"] = "store-tok"
-	if got := storeGit(f.sys()).TokenVar; got != "EZC_STORE_TOKEN" {
-		t.Fatalf("with both: %q", got)
+	if !fetched {
+		t.Fatal("no fetch ran")
 	}
+}
+
+// The key is checked before it is said to be there: text that is no key stops setup before anything is made,
+// and a key the store's files are not wrapped for stops it after the clone, with no config written.
+func TestSetupCIChecksTheKey(t *testing.T) {
+	t.Run("not a key", func(t *testing.T) {
+		for _, text := range []string{"s3cr3t-not-a-key", "# public key: fake1c1c1c1c1\n", ciPublic} {
+			f := setupCI(t)
+			f.env["EZC_AGE_KEY"] = text
+			err := f.run("setup", "--ci", "--store", setupRemote(t, ciPublic))
+			var usage *UsageError
+			if want := "ezc setup --ci: EZC_AGE_KEY does not hold a key. Save the bot's key as that secret; ezc bot add does it."; err == nil || err.Error() != want || errors.As(err, &usage) {
+				t.Fatalf("%q: err %v", text, err)
+			}
+			if f.out.Len() != 0 || len(f.gits) != 0 || strings.Contains(f.out.String()+f.errOut.String(), "s3cr3t") {
+				t.Fatalf("stdout %q, git ran %d times", f.out.String(), len(f.gits))
+			}
+			setupNothingMade(t, f)
+		}
+	})
+	t.Run("not a recipient", func(t *testing.T) {
+		f := setupCI(t)
+		bare := setupRemoteHolding(t, "fake1someoneelse", true)
+		err := f.run("setup", "--ci", "--store", bare)
+		wantExit(t, err, 1)
+		if want := "✓ git\n✓ fake\n+ cloned the store: " + setupStore(f) + "\n"; f.out.String() != want {
+			t.Fatalf("stdout:\n%s", f.out.String())
+		}
+		if want := "✗ The key in EZC_AGE_KEY cannot read this store.\n"; f.errOut.String() != want {
+			t.Fatalf("stderr:\n%s", f.errOut.String())
+		}
+		if _, err := os.Lstat(setupConfig(f)); err == nil {
+			t.Fatal("the config was written")
+		}
+		// Again, with the store in place: the same answer.
+		f.out.Reset()
+		f.errOut.Reset()
+		wantExit(t, f.run("setup", "--ci", "--store", bare), 1)
+		if f.errOut.String() != "✗ The key in EZC_AGE_KEY cannot read this store.\n" || strings.Contains(f.out.String(), "the key") {
+			t.Fatalf("again:\n%s%s", f.out.String(), f.errOut.String())
+		}
+	})
+	t.Run("a store with no secret yet", func(t *testing.T) {
+		f := setupCI(t)
+		if err := f.run("setup", "--ci", "--store", setupRemote(t, "fake1someoneelse")); err != nil || f.out.String() != setupCIReport(f) {
+			t.Fatalf("%v\n%s", err, f.out.String())
+		}
+	})
 }
 
 // A slug is cloned from GitHub over HTTPS by git itself, with the token: gh is never run.

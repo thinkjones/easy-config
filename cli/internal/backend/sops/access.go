@@ -105,6 +105,19 @@ func (b *sopsBackend) CanDecrypt(path string, private []byte) error {
 	return noKey
 }
 
+// ValidKey parses the text as a key file's: at least one identity of the kind NewKey makes.
+func (b *sopsBackend) ValidKey(private []byte) error {
+	ids, err := age.ParseIdentities(bytes.NewReader(private))
+	if err == nil {
+		for _, id := range ids {
+			if _, ok := id.(*age.X25519Identity); ok {
+				return nil
+			}
+		}
+	}
+	return errors.New("not a private key")
+}
+
 func (b *sopsBackend) ValidRecipient(key string) error {
 	if _, err := age.ParseX25519Recipient(key); err != nil {
 		return errors.New("not a valid public key")

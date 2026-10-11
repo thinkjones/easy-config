@@ -470,7 +470,7 @@ func TestSetupCIEndToEnd(t *testing.T) {
 	ci := newMachine(t, t.TempDir(), "ci")
 	ci.env = append(ci.env, "EZC_AGE_KEY="+secretLine, "EZC_STORE_TOKEN="+token)
 	stdout, stderr, code := ci.run(ci.repo, "", "setup", "--ci", "--store", bare)
-	want := "✓ git\n✓ sops\n✓ the key: EZC_AGE_KEY\n+ cloned the store: " + ci.store() + "\n+ wrote " + filepath.Join(ci.ezcHome, "config.toml") + "\n"
+	want := "✓ git\n✓ sops\n+ cloned the store: " + ci.store() + "\n✓ the key: EZC_AGE_KEY\n+ wrote " + filepath.Join(ci.ezcHome, "config.toml") + "\n"
 	if code != 0 || stdout != want || stderr != "" {
 		t.Fatalf("setup --ci: exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
 	}

@@ -24,7 +24,7 @@ const (
 )
 
 const (
-	botStoreNote = "The bot also needs to read the store repo. Create a read-only deploy key or a fine-grained token for it and save it as the " + storeTokenSecret + " secret in each repo. ezc cannot create that credential."
+	botStoreNote = "The bot also needs to read the store repo. Create a fine-grained token that can read that repo's contents and save it as the " + storeTokenSecret + " secret in each repo. ezc cannot create that credential."
 	botNoGh      = "gh is not installed, so the key cannot be saved in a repo. Install it (https://cli.github.com), or pass --print-private without --repo and save the key yourself."
 )
 
@@ -126,7 +126,7 @@ The private half is never written to disk. Before the commit, ezc checks that it
 
 With --print-private the private key is printed on stdout as one line, with nothing else there: every other line goes to stderr. It is for a CI system that is not GitHub Actions; pipe it straight into that system's secret store. Give --repo, --print-private or both.
 
-The bot also needs to read the store's repo, with a credential ezc cannot create: a read-only deploy key or a fine-grained token, saved as the ` + storeTokenSecret + ` secret of each repo.
+The bot also needs to read the store's repo, with a credential ezc cannot create: a fine-grained token that can read that repo's contents, saved as the ` + storeTokenSecret + ` secret of each repo.
 
 Needs this machine's key file, as every change to who can read the store does, and gh when --repo is given.`,
 		Args: exactArgs(1, "a name"),

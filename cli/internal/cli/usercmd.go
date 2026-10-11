@@ -551,7 +551,7 @@ The old file is never touched: back the new one up, and delete the old one when 
 
 A routine rotation records nothing to rotate. With --compromised, for a key that may have leaked, every secret the old key could read is recorded in rotation-due.yaml and listed, as ` + "`ezc user remove`" + ` does: the old key still opens every older commit of the store.
 
-Needs this machine's key file, as every change to who can read the store does, and it cannot change a key file the environment names.`,
+Needs this machine's key file, as every change to who can read the store does, and it cannot change a key file the environment names or a key the environment holds as text.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				return usagef("%s replaces this machine's own key and takes no name. Nobody can rotate another person's key: there is no safe way to hand them the private half.", cmd.CommandPath())
@@ -559,7 +559,10 @@ Needs this machine's key file, as every change to who can read the store does, a
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if variable, _ := keyInEnvironment(sys); variable != "" {
+			switch variable, file := keyInEnvironment(sys); {
+			case variable != "" && file == "":
+				return fmt.Errorf("The key is supplied by %s as text, not in a key file, so ezc cannot replace it. Unset it, or rotate by hand.", variable)
+			case variable != "":
 				return fmt.Errorf("The key file is set by %s; ezc cannot change it. Unset it, or rotate by hand.", variable)
 			}
 			a, err := openAccess(sys, true)

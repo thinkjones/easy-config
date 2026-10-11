@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	botNote = "The bot also needs to read the store repo. Create a read-only deploy key or a fine-grained token for it and save it as the EZC_STORE_TOKEN secret in each repo. ezc cannot create that credential.\n"
+	botNote = "The bot also needs to read the store repo. Create a fine-grained token that can read that repo's contents and save it as the EZC_STORE_TOKEN secret in each repo. ezc cannot create that credential.\n"
 	// botOldPrivate is the private half of accessSam, the key botStore registers for the bot.
 	botOldPrivate = "FAKE-KEY-bb02\n"
 	botGhSaid     = "gh: HTTP 403: Resource not accessible by integration"

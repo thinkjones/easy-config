@@ -231,13 +231,13 @@ func TestTokenIsNamedNeverGiven(t *testing.T) {
 		if strings.Contains(joined, "tok-123") {
 			t.Fatalf("the token is in arguments: %v", args)
 		}
-		if slices.Contains(args, "credential.helper=!f() { echo username=x-access-token; echo \"password=$EZC_STORE_TOKEN\"; }; f") {
+		if slices.Contains(args, "credential.https://github.com.helper=!f() { echo username=x-access-token; echo \"password=$EZC_STORE_TOKEN\"; }; f") {
 			for _, verb := range []string{"fetch", "clone", "ls-remote"} {
 				if slices.Contains(args, verb) {
 					seen[verb] = true
 				}
 			}
-			if !slices.Contains(args, "credential.helper=") {
+			if !slices.Contains(args, "credential.https://github.com.helper=") {
 				t.Fatalf("inherited helpers are not dropped: %v", args)
 			}
 		}
@@ -246,6 +246,50 @@ func TestTokenIsNamedNeverGiven(t *testing.T) {
 		if !seen[verb] {
 			t.Errorf("no %s carried the helper; calls: %v", verb, calls)
 		}
+	}
+}
+
+// The helper is scoped to GitHub: real git, asked for a credential as it asks itself before a request, gives the
+// token for github.com and leaves every other host to the helpers that were there. No network is used.
+func TestTokenIsOfferedToGitHubOnly(t *testing.T) {
+	run := gittest.Runner(t)
+	g := Git{Run: run, TokenVar: "EZC_STORE_TOKEN"}
+	dir := t.TempDir()
+	if err := g.Init(dir); err != nil {
+		t.Fatal(err)
+	}
+	// A helper the machine already had, for every host.
+	const inherited = `!f() { echo username=someone; echo password=inherited-pw; }; f`
+	if _, stderr, err := run(proc.Command{Dir: dir, Name: "git", Args: []string{"config", "credential.helper", inherited}}); err != nil {
+		t.Fatalf("git config: %v\n%s", err, stderr)
+	}
+	fill := func(dir, url string) (string, error) {
+		out, _, err := run(proc.Command{
+			Dir:   dir,
+			Env:   []string{"EZC_STORE_TOKEN=tok-123", "GIT_TERMINAL_PROMPT=0"},
+			Name:  "git",
+			Args:  g.remote("credential", "fill"),
+			Stdin: []byte("url=" + url + "\n\n"),
+		})
+		return string(out), err
+	}
+	out, err := fill(dir, "https://github.com/o/r.git")
+	if err != nil || !strings.Contains(out, "username=x-access-token\n") || !strings.Contains(out, "password=tok-123\n") || strings.Contains(out, "inherited-pw") {
+		t.Fatalf("github.com: %v\n%s", err, out)
+	}
+	for _, url := range []string{"https://example.com/o/r.git", "https://github.com.example.com/o/r.git", "https://gist.github.com/o/r.git", "http://github.com/o/r.git"} {
+		out, err := fill(dir, url)
+		if err != nil || !strings.Contains(out, "password=inherited-pw\n") || strings.Contains(out, "tok-123") || strings.Contains(out, "x-access-token") {
+			t.Errorf("%s: %v\n%s", url, err, out)
+		}
+	}
+	// With no helper of its own, git has nothing to give another host, and the token is not what it finds.
+	bare := t.TempDir()
+	if out, err := fill(bare, "https://example.com/o/r.git"); err == nil || strings.Contains(out, "tok-123") {
+		t.Fatalf("another host with no helper: %v\n%s", err, out)
+	}
+	if out, err := fill(bare, "https://github.com/o/r.git"); err != nil || !strings.Contains(out, "password=tok-123\n") {
+		t.Fatalf("github.com with no other helper: %v\n%s", err, out)
 	}
 }
 
@@ -270,7 +314,7 @@ func TestTokenOnPush(t *testing.T) {
 		}
 		if slices.Contains(args, "push") {
 			pushed = true
-			if !slices.Contains(args, "credential.helper=!f() { echo username=x-access-token; echo \"password=$EZC_STORE_TOKEN\"; }; f") {
+			if !slices.Contains(args, "credential.https://github.com.helper=!f() { echo username=x-access-token; echo \"password=$EZC_STORE_TOKEN\"; }; f") {
 				t.Fatalf("push has no helper: %v", args)
 			}
 		}
@@ -289,7 +333,7 @@ func TestNoTokenVarNoHelper(t *testing.T) {
 	_ = g.DeleteRemoteBranch(dir, "b", "", time.Second)
 	for _, args := range calls {
 		for _, a := range args {
-			if strings.Contains(a, "credential.helper") {
+			if strings.Contains(a, "credential.") {
 				t.Fatalf("a helper without TokenVar: %v", args)
 			}
 		}

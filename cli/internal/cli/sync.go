@@ -42,13 +42,16 @@ func storeGit(sys System) gitstore.Git {
 	return gitstore.Git{Run: sys.Exec, Environ: sys.Environ(), TokenVar: tokenVar(sys)}
 }
 
-// tokenVar names the variable that holds a token for the store's remote: the store's own, else GitHub's; "" when
-// neither is set. Only the name goes to git, which reads the value from its environment.
+// tokenVar names the variable that holds a token for the store's remote, "" when there is none: the store's own,
+// else, in a CI run only (the key is in the environment as text), GitHub's. A developer who has GH_TOKEN set
+// for other tools keeps git's own credentials. It is the one place that decides. Only the name goes to git,
+// which reads the value from its environment.
 func tokenVar(sys System) string {
-	for _, name := range []string{storeTokenSecret, "GH_TOKEN"} {
-		if sys.Getenv(name) != "" {
-			return name
-		}
+	if sys.Getenv(storeTokenSecret) != "" {
+		return storeTokenSecret
+	}
+	if sys.Getenv(botSecret) != "" && sys.Getenv("GH_TOKEN") != "" {
+		return "GH_TOKEN"
 	}
 	return ""
 }

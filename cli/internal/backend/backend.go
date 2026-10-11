@@ -43,6 +43,9 @@ type Backend interface {
 	// CanDecrypt is nil when that private key alone opens the file. It needs no tool; its error names the
 	// file, never the key.
 	CanDecrypt(path string, private []byte) error
+	// ValidKey is nil when private holds a private key, as a key file's text or its one secret line. It needs
+	// no tool; its error never carries the text.
+	ValidKey(private []byte) error
 	// ValidRecipient is nil for a well-formed public key.
 	ValidRecipient(key string) error
 	// ToolHint is one line saying how to install the backend's tool; "" when it needs none.

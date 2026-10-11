@@ -493,6 +493,24 @@ func Run(t *testing.T, newEnv func(t *testing.T) Env) {
 		}
 	})
 
+	run("ValidKey", func(t *testing.T, e Env, file string) {
+		_, private := newKey(t, e)
+		for name, text := range map[string][]byte{"a key file": private, "the secret line": backend.SecretLine(private), "this machine's": e.Private} {
+			if err := e.Backend.ValidKey(text); err != nil {
+				t.Errorf("%s: %v", name, err)
+			}
+		}
+		cut := bytes.TrimSpace(backend.SecretLine(private))
+		for name, text := range map[string][]byte{"nothing": nil, "a comment": []byte("# a key\n"), "other text": []byte("not a key\n"), "a public key": []byte(e.Public + "\n"), "half a key": cut[:len(cut)/2]} {
+			err := e.Backend.ValidKey(text)
+			if err == nil {
+				t.Errorf("%s is taken for a key", name)
+			} else if len(text) > 0 && strings.Contains(err.Error(), strings.TrimSpace(string(text))) {
+				t.Errorf("%s: the error holds the text", name)
+			}
+		}
+	})
+
 	run("CanDecryptNeedsNoTool", func(t *testing.T, e Env, file string) {
 		writePolicy(t, e, e.Public)
 		set(t, e.Backend, file, "A", "a1")

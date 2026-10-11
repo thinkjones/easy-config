@@ -49,7 +49,7 @@ func newSetupCmd(sys System) *cobra.Command {
 
 Say where the store comes from with --new-local, --new-github owner/repo or --store <owner/repo | URL | path>; on a terminal, setup asks for what no flag says. Run again, it changes only what is missing: a key, a store or a config that is there is never overwritten.
 
-In a CI job, --ci --store owner/repo sets up a machine that only reads the store: the bot's key is in ` + botSecret + ` and a token that can read the store's repo is in ` + storeTokenSecret + ` (or GH_TOKEN). It clones the latest commit with the token and writes the config. It makes no key file, asks nothing, and git is told the name of the token's variable, never the token.`,
+In a CI job, --ci --store owner/repo sets up a machine that only reads the store: the bot's key is in ` + botSecret + ` and a token that can read the store's repo is in ` + storeTokenSecret + ` (or GH_TOKEN). It clones the latest commit with the token, checks that the key reads the store and writes the config. It makes no key file, asks nothing, and git is told the name of the token's variable, never the token. The store's repo must be on github.com: the token is offered to no other host, so a GitHub Enterprise host is not supported.`,
 		Args: noArgs,
 		RunE: func(*cobra.Command, []string) error { return runSetup(sys, o) },
 	}
@@ -347,7 +347,8 @@ func toolMissing(sys System, be backend.Backend) error {
 
 // runSetupCI sets up a CI job's machine, which only reads the store: a shallow clone made with the token the
 // environment holds, and the config. The key stays in the environment, so no key file is made, nothing is
-// registered and nothing is asked. A store that is in place and came from the same repo is kept.
+// registered and nothing is asked. The key is checked twice: that it is one, before anything is made, and
+// that it opens the store, before the config is written. A store that is in place and came from the same repo is kept.
 func runSetupCI(sys System, p paths.Paths, o setupFlags) error {
 	if o.newLocal || o.newGithub != "" || o.name != "" {
 		return usagef("ezc setup: --ci cannot be used with --new-local, --new-github or --name.")
@@ -365,11 +366,15 @@ func runSetupCI(sys System, p paths.Paths, o setupFlags) error {
 	if tokenVar(sys) == "" {
 		return fmt.Errorf("ezc setup --ci: set %s (or GH_TOKEN) to a token that can read %s.", storeTokenSecret, o.store)
 	}
+	be := backendFor(sys)
+	key := []byte(sys.Getenv(botSecret))
+	if be.ValidKey(key) != nil {
+		return fmt.Errorf("ezc setup --ci: %s does not hold a key. Save the bot's key as that secret; ezc bot add does it.", botSecret)
+	}
 	cfg, found, err := config.Load(p.Config())
 	if err != nil {
 		return err
 	}
-	be := backendFor(sys)
 	e := setup.Env{Git: storeGit(sys), Backend: be, Run: sys.Exec, LookPath: sys.LookPath, Now: sys.Now, Paths: p, GOOS: sys.GOOS}
 
 	if _, err := sys.LookPath("git"); err != nil {
@@ -383,7 +388,6 @@ func runSetupCI(sys System, p paths.Paths, o setupFlags) error {
 		return err
 	}
 	fmt.Fprintln(sys.Stdout, "✓", be.Name())
-	fmt.Fprintf(sys.Stdout, "✓ the key: %s\n", botSecret)
 
 	remote := ""
 	if setup.HasStore(e) {
@@ -402,6 +406,21 @@ func runSetupCI(sys System, p paths.Paths, o setupFlags) error {
 		}
 		fmt.Fprintf(sys.Stdout, "+ cloned the store: %s\n", p.Store())
 	}
+
+	// The key is said to be there once it is known to read the store: it must open an encrypted file, when the store has one.
+	encrypted, err := encryptedFiles(p.StoreEzc())
+	if err != nil {
+		return err
+	}
+	if len(encrypted) > 0 {
+		if err := be.CanDecrypt(filepath.Join(p.StoreEzc(), encrypted[0]), key); errors.Is(err, backend.ErrNoKey) {
+			fmt.Fprintf(sys.Stderr, "✗ The key in %s cannot read this store.\n", botSecret)
+			return &ExitError{1}
+		} else if err != nil {
+			return err
+		}
+	}
+	fmt.Fprintf(sys.Stdout, "✓ the key: %s\n", botSecret)
 
 	// Config: no user and no key file, because this machine has neither.
 	filled := cfg

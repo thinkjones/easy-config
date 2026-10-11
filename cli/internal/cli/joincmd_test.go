@@ -636,6 +636,18 @@ func TestJoinKeyInEnvironment(t *testing.T) {
 	}
 	setupNothingMade(t, j.b)
 
+	// The key a CI job is given is text too, and it is the one named when both are set.
+	j.b.env["EZC_AGE_KEY"] = "FAKE-KEY-c1c1c1c1"
+	for _, args := range [][]string{{"join", j.x.bare, "--name", "sam"}, {"join", "--print", "--name", "sam"}} {
+		out, _, err := joinRun(t, j.b, args...)
+		wantUsage(t, err, "ezc join: EZC_AGE_KEY is set, so that key would be used instead of the one join registers. Unset it and run ezc join again.")
+		if strings.Contains(err.Error(), "FAKE-KEY-") || out != "" {
+			t.Fatalf("err %v, stdout %q", err, out)
+		}
+	}
+	setupNothingMade(t, j.b)
+	delete(j.b.env, "EZC_AGE_KEY")
+
 	delete(j.b.env, "SOPS_AGE_KEY")
 	j.b.env["SOPS_AGE_KEY_FILE"] = "keys.txt"
 	_, _, err := joinRun(t, j.b, "join", j.x.bare, "--name", "sam")

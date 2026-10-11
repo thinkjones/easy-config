@@ -368,6 +368,13 @@ func (f *Fake) CanDecrypt(path string, private []byte) error {
 	return fmt.Errorf("%s: that key is not one of its recipients: %w", path, ErrNoKey)
 }
 
+func (f *Fake) ValidKey(private []byte) error {
+	if public, ok := fakePublicOf(private); !ok || f.ValidRecipient(public) != nil {
+		return errors.New("not a private key")
+	}
+	return nil
+}
+
 func (f *Fake) ValidRecipient(key string) error {
 	h, ok := strings.CutPrefix(key, fakePublicPrefix)
 	if _, err := hex.DecodeString(h); !ok || h == "" || err != nil {

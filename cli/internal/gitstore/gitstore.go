@@ -21,8 +21,9 @@ import (
 type Git struct {
 	Run     proc.Runner
 	Environ []string // the process environment; GIT_TERMINAL_PROMPT=0 is added
-	// TokenVar names an environment variable that holds a token for the remote. Git reads it
-	// through a credential helper whose text names the variable only; the value is never an argument.
+	// TokenVar names an environment variable that holds a token for a remote on GitHub. Git reads it
+	// through a credential helper whose text names the variable only; the value is never an argument,
+	// and no other host is offered it.
 	TokenVar string
 }
 
@@ -195,14 +196,20 @@ func (g Git) Init(dir string) error {
 	return err
 }
 
-// remote is args for a git command that can reach a remote: with TokenVar set, the first helper
-// setting drops every inherited credential helper and the second reads the token from the variable.
+// tokenHost is the one host the token is for. Both helper settings are scoped to it, so git asks the
+// helper for no other host, and a remote that is a path or uses ssh never asks at all.
+const tokenHost = "https://github.com"
+
+// remote is args for a git command that can reach a remote: with TokenVar set, the first helper setting
+// drops every inherited credential helper for tokenHost and the second reads the token from the variable.
+// For any other host the inherited helpers stay as they are.
 func (g Git) remote(args ...string) []string {
 	if g.TokenVar == "" {
 		return args
 	}
+	setting := "credential." + tokenHost + ".helper="
 	helper := `!f() { echo username=x-access-token; echo "password=$` + g.TokenVar + `"; }; f`
-	return append([]string{"-c", "credential.helper=", "-c", "credential.helper=" + helper}, args...)
+	return append([]string{"-c", setting, "-c", setting + helper}, args...)
 }
 
 // Clone clones source into dir, without its tags: ezc uses none.

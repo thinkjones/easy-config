@@ -1589,7 +1589,9 @@ func TestUserRotateRefusals(t *testing.T) {
 	accessUntouched(t, f, x, "The key file is set by SOPS_AGE_KEY_FILE; ezc cannot change it. Unset it, or rotate by hand.", "user", "rotate")
 	delete(f.env, "SOPS_AGE_KEY_FILE")
 	f.env["SOPS_AGE_KEY"] = "text"
-	accessUntouched(t, f, x, "The key file is set by SOPS_AGE_KEY; ezc cannot change it. Unset it, or rotate by hand.", "user", "rotate")
+	accessUntouched(t, f, x, "The key is supplied by SOPS_AGE_KEY as text, not in a key file, so ezc cannot replace it. Unset it, or rotate by hand.", "user", "rotate")
+	f.env["EZC_AGE_KEY"] = "more text"
+	accessUntouched(t, f, x, "The key is supplied by EZC_AGE_KEY as text, not in a key file, so ezc cannot replace it. Unset it, or rotate by hand.", "user", "rotate")
 }
 
 // A store that cannot be put back may hold files only the new key opens: the new key file stays, and the message names both.
