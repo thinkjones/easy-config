@@ -30,7 +30,7 @@ Guidance for Claude Code in this repository. [`AGENTS.md`](AGENTS.md) is the rou
 - **A secret reaches sops on stdin only**, never in arguments, the environment or a temporary plaintext file. The backend never passes sops's output through: a failure is the no-key message or a fixed "could not read/write this file" message, and "no key" is said only for sops's own no-identity failures.
 - **`ezc set` declares first**: for a new name it writes the declaration, then the value, and puts the manifest's bytes back if the value write fails. No `set` or `unset` error echoes an argument.
 - **`ezc unset` removes only the value**, from the plaintext and encrypted file of the base; `--undeclare` also removes the declaration and is refused while another values file in the scope holds the name.
-- **`Backend.Edit(path, editor)`** passes the editor `ezc edit` validated to sops as `SOPS_EDITOR`. `edit --secrets` needs the file to exist, opens one that fails validation, and checks the result afterwards.
+- **`Backend.Edit(path, editor)`** passes the editor `ezc edit` validated to sops as `SOPS_EDITOR`. `edit --secrets` needs the file to exist, opens one that fails validation, and checks the result afterwards. `sops edit` exits 200 when nothing was changed; the backend treats that as success.
 - **A shim newer than the binary** is a doctor warning ("Upgrade ezc."), and `ezc repo init` keeps it.
 - **`enc` is a reserved environment name**; names match `^[A-Za-z0-9][A-Za-z0-9_-]*$`. `codegen python` also refuses a name starting with `_`.
 - **The fake backend's file format is not sops's.** Only the real-sops tests (`cli:test:sops`, and the end-to-end tests in `cli/cmd/ezc/sops_test.go`) prove the real format. They skip without `sops` unless `EZC_REQUIRE_SOPS=1`.

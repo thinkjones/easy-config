@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -50,5 +51,16 @@ func TestExecNilEnvInheritsProcessEnv(t *testing.T) {
 	out, _, err := execCommand(proc.Command{Name: "sh", Args: []string{"-c", `printf %s "$EZC_T"`}})
 	if err != nil || string(out) != "v" {
 		t.Fatalf("got %q, %v", out, err)
+	}
+}
+
+// The backend reads a program's exit status off the error, for both kinds of run.
+func TestExecErrorCarriesTheExitStatus(t *testing.T) {
+	for _, interactive := range []bool{false, true} {
+		_, _, err := execCommand(proc.Command{Name: "sh", Args: []string{"-c", "exit 200"}, Interactive: interactive})
+		var exit interface{ ExitCode() int }
+		if !errors.As(err, &exit) || exit.ExitCode() != 200 {
+			t.Errorf("interactive %v: got %v", interactive, err)
+		}
 	}
 }

@@ -721,3 +721,67 @@ func TestCreateWithNoMatchingRuleIsNoPolicy(t *testing.T) {
 		t.Errorf("the file exists: %v", err)
 	}
 }
+
+// exitError is a failed run with an exit status, as the real runner's *exec.ExitError is.
+type exitError int
+
+func (e exitError) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
+func (e exitError) ExitCode() int { return int(e) }
+
+func TestEditThatChangesNothingSucceeds(t *testing.T) {
+	// sops edit exits 200 when the file was saved unchanged.
+	r := &recorder{err: fmt.Errorf("wrapped: %w", exitError(200))}
+	b, dir := recorded(t, r, nil)
+	file := filepath.Join(dir, "common.enc.yaml")
+	os.WriteFile(file, []byte("x"), 0o644)
+	if err := b.Edit(file, "nano"); err != nil {
+		t.Fatalf("Edit: %v", err)
+	}
+}
+
+func TestEditFailureHasAFixedMessage(t *testing.T) {
+	for _, runErr := range []error{exitError(1), errors.New("fork/exec: s3cr3t-value")} {
+		r := &recorder{err: runErr, stderr: "s3cr3t-value", stdout: "s3cr3t-value"}
+		b, dir := recorded(t, r, nil)
+		file := filepath.Join(dir, "common.enc.yaml")
+		os.WriteFile(file, []byte("x"), 0o644)
+		err := b.Edit(file, "nano")
+		if want := file + ": the editor or sops failed; the file was not changed."; err == nil || err.Error() != want {
+			t.Errorf("%v: error = %v, want %q", runErr, err, want)
+		}
+	}
+}
+
+func TestRealEditThatChangesNothingSucceeds(t *testing.T) {
+	r := newReal(t)
+	b := New(r.opts)
+	file := filepath.Join(r.dir, "common.enc.yaml")
+	if err := b.Set(file, "TOKEN", "t0k"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		t.Skip("no true on PATH")
+	}
+	if err := b.Edit(file, truePath); err != nil {
+		t.Fatalf("Edit with an editor that saves nothing: %v", err)
+	}
+	if after, _ := os.ReadFile(file); !bytes.Equal(before, after) {
+		t.Error("the file changed")
+	}
+	falsePath, err := exec.LookPath("false")
+	if err != nil {
+		t.Skip("no false on PATH")
+	}
+	err = b.Edit(file, falsePath)
+	if want := file + ": the editor or sops failed; the file was not changed."; err == nil || err.Error() != want {
+		t.Fatalf("Edit with a failing editor: %v", err)
+	}
+	if after, _ := os.ReadFile(file); !bytes.Equal(before, after) {
+		t.Error("the file changed")
+	}
+}

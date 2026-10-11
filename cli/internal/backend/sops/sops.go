@@ -27,6 +27,9 @@ const (
 	envKeyFile = "SOPS_AGE_KEY_FILE"
 	envEditor  = "SOPS_EDITOR" // wins over EDITOR and VISUAL; split on spaces
 
+	// editUnchanged is the status `sops edit` exits with when the file was saved unchanged, which is not a failure.
+	editUnchanged = 200
+
 	// noRuleMarker is what sops prints when the policy has no creation rule whose pattern matches the file.
 	noRuleMarker = "no matching creation rules found"
 
@@ -287,6 +290,7 @@ func (b *sopsBackend) Unset(path, name string) error {
 }
 
 // Edit hands the terminal to `sops edit`, which runs editor (SOPS_EDITOR replaces any in the environment). A file that does not exist is created by it, which needs the policy.
+// Leaving the file as it was is a success.
 func (b *sopsBackend) Edit(path, editor string) error {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		if err := b.requirePolicy(path); err != nil {
@@ -300,8 +304,12 @@ func (b *sopsBackend) Edit(path, editor string) error {
 		return err
 	}
 	_, _, err := b.o.Run(c)
+	var exit interface{ ExitCode() int }
+	if errors.As(err, &exit) && exit.ExitCode() == editUnchanged {
+		return nil
+	}
 	if err != nil {
-		return fmt.Errorf("%s: sops edit failed: %w", path, err)
+		return fmt.Errorf("%s: the editor or sops failed; the file was not changed.", path)
 	}
 	return nil
 }
