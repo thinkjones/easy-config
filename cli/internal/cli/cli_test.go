@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
@@ -33,6 +34,7 @@ type fake struct {
 	tty       bool                                       // StdinIsTerminal
 	paths     map[string]string                          // what LookPath finds, by name
 	backend   *backend.Fake                              // the encryption backend; System.Backend
+	now       time.Time                                  // System.Now; the zero value means 2026-10-11T12:00:00Z
 }
 
 func newFake(t *testing.T) *fake {
@@ -84,8 +86,15 @@ func (f *fake) sys() System {
 			f.prompts = append(f.prompts, prompt)
 			return f.secret, f.secretErr
 		},
-		StdinIsTerminal: func() bool { return f.tty },
-		Backend:         f.backend,
+		StdinIsTerminal:  func() bool { return f.tty },
+		StderrIsTerminal: func() bool { return false },
+		Now: func() time.Time {
+			if f.now.IsZero() {
+				return time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+			}
+			return f.now
+		},
+		Backend: f.backend,
 	}
 }
 
