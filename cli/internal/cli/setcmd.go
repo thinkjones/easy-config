@@ -469,21 +469,24 @@ func newUnsetCmd(sys System) *cobra.Command {
 }
 
 // heldInScope is the first values file in dir (common and every environment, plain or encrypted) other than skip
-// that has name; "" when none does.
+// that has name; "" when none does. The files are the ones the resolver reads.
 func heldInScope(be backend.Backend, dir, name string, skip []string) (string, error) {
-	entries, err := os.ReadDir(dir)
+	envs, err := resolve.Envs(dir)
 	if err != nil {
 		return "", err
 	}
-	for _, e := range entries {
-		n := e.Name()
-		isValues := n == "common.yaml" || n == "common.enc.yaml" ||
-			(strings.HasPrefix(n, "env.") && strings.HasSuffix(n, ".yaml") && n != "env."+resolve.ReservedEnv+".yaml")
-		if !isValues || e.IsDir() || slices.Contains(skip, n) {
-			continue
-		}
-		if in, err := holds(be, filepath.Join(dir, n), name); err != nil || in {
-			return n, err
+	bases := []string{"common"}
+	for _, e := range envs {
+		bases = append(bases, valuesBase(e))
+	}
+	for _, base := range bases {
+		for _, n := range []string{valuesFile(base, false), valuesFile(base, true)} {
+			if slices.Contains(skip, n) {
+				continue
+			}
+			if in, err := holds(be, filepath.Join(dir, n), name); err != nil || in {
+				return n, err
+			}
 		}
 	}
 	return "", nil

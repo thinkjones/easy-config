@@ -212,11 +212,16 @@ func TestEditSecretsNeedsAnExistingFile(t *testing.T) {
 	called := false
 	f.backend.EditFunc = func(p []backend.Pair) []backend.Pair { called = true; return p }
 	err := f.run("edit", "--secrets", "--env", "prod")
-	if err == nil || err.Error() != "repo/env.prod.enc.yaml does not exist yet. Create it by setting a secret: `ezc set <NAME>`." {
+	if err == nil || err.Error() != "repo/env.prod.enc.yaml does not exist yet. Create it by setting a secret: `ezc set <NAME> --env prod`." {
 		t.Fatalf("got %v", err)
 	}
 	if called || f.backend.LastEditor != "" {
 		t.Fatal("the backend edited")
+	}
+	store(t, f, map[string]string{backend.FakePolicy: ""})
+	err = f.run("edit", "--secrets", "-g")
+	if err == nil || err.Error() != "store/common.enc.yaml does not exist yet. Create it by setting a secret: `ezc set -g <NAME>`." {
+		t.Fatalf("got %v", err)
 	}
 }
 

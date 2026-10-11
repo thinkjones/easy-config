@@ -514,8 +514,14 @@ func TestNoKeyError(t *testing.T) {
 	file := filepath.Join(dir, "common.enc.yaml")
 	os.WriteFile(file, []byte("x"), 0o644)
 	_, err := b.Decrypt(file)
-	if !errors.Is(err, backend.ErrNoKey) || !strings.Contains(err.Error(), "/keys/keys.txt") || !strings.Contains(err.Error(), file) {
+	if !errors.Is(err, backend.ErrNoKey) || !strings.HasSuffix(err.Error(), "Your key file, /keys/keys.txt, does not exist.") || !strings.Contains(err.Error(), file) {
 		t.Fatalf("error = %v", err)
+	}
+	for keyFile, want := range map[string]string{file: "Your key file is " + file + ".", "": "No key file is set."} {
+		_, err = New(Options{Run: r.run, LookPath: func(string) (string, error) { return "/bin/sops", nil }, KeyFile: keyFile}).Decrypt(file)
+		if !errors.Is(err, backend.ErrNoKey) || !strings.HasSuffix(err.Error(), "is one of its recipients. "+want) {
+			t.Fatalf("key file %q: error = %v", keyFile, err)
+		}
 	}
 	b, dir = recorded(t, r, []string{"SOPS_AGE_KEY=x"})
 	file = filepath.Join(dir, "common.enc.yaml")

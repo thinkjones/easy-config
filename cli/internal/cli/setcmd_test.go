@@ -648,12 +648,37 @@ func TestUnsetSecretNeedsTheKey(t *testing.T) {
 	f := newFake(t)
 	setRepo(t, f, map[string]string{})
 	secretIn(t, f, "repo", "common.enc.yaml", "TOKEN", "t")
+	secretIn(t, f, "repo", "common.enc.yaml", "OTHER", "o")
 	f.backend.Locked = true
 	if err := f.run("unset", "TOKEN"); !errors.Is(err, backend.ErrNoKey) {
 		t.Fatalf("got %v", err)
 	}
 	if !declared(t, f, "TOKEN") {
 		t.Fatal("the declaration went")
+	}
+}
+
+// The last name's removal deletes the file, which needs no key.
+func TestUnsetTheLastSecretNeedsNoKey(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{})
+	secretIn(t, f, "repo", "common.enc.yaml", "TOKEN", "t")
+	f.backend.Locked = true
+	if err := f.run("unset", "TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	missing(t, repoFile(f, "common.enc.yaml"))
+}
+
+func TestUnsetUndeclareIgnoresAFileThatIsNotAValuesFile(t *testing.T) {
+	f := newFake(t)
+	// env.a.b.yaml names no environment, so nothing reads it.
+	setRepo(t, f, map[string]string{"common.yaml": "NAME: n\n", "env.a.b.yaml": "- not\n- a mapping\n"})
+	if err := f.run("unset", "NAME", "--undeclare"); err != nil {
+		t.Fatal(err)
+	}
+	if declared(t, f, "NAME") {
+		t.Fatal("still declared")
 	}
 }
 

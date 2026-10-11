@@ -22,7 +22,7 @@ const (
 // whose value is not encrypted: Inspect reports it, and everything that reads the file refuses the whole
 // file, as a tool that authenticates the file does once a line has been added by hand.
 type Fake struct {
-	Locked     bool                      // Decrypt, Set, Unset and Edit fail with ErrNoKey
+	Locked     bool                      // Decrypt, Set, Unset (of any name but a file's last) and Edit fail with ErrNoKey
 	Missing    bool                      // Check fails with ErrNoTool
 	EditFunc   func(pairs []Pair) []Pair // what Edit does; nil leaves the file unchanged
 	LastEditor string                    // the editor the last Edit was given
@@ -110,6 +110,14 @@ func (f *Fake) Set(path, name, value string) error {
 }
 
 func (f *Fake) Unset(path, name string) error {
+	lines, err := readFake(path)
+	if err != nil {
+		return err
+	}
+	// The last name goes with its file, which needs no key.
+	if len(lines) == 1 && lines[0].name == name {
+		return writeFake(path, nil)
+	}
 	if f.Locked {
 		return fmt.Errorf("%s: %w", path, ErrNoKey)
 	}

@@ -146,7 +146,7 @@ func machine(o Options) []Item {
 		return append(items, Item{OK, "key", o.KeyNote, ""})
 	}
 	return append(items, Item{Warn, "key", "no key at " + o.KeyNote,
-		"You can read plaintext values. Encrypted ones need a key; `ezc setup` will create one."})
+		"An environment with no encrypted file still loads. One that has any needs a key, for every command; `ezc setup` will create one."})
 }
 
 func store(o Options) []Item {

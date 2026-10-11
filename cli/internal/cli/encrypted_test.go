@@ -177,3 +177,15 @@ func TestGetAValueThatReferencesANonSecretIsNotGated(t *testing.T) {
 		t.Fatalf("got %v, %q", err, f.out.String())
 	}
 }
+
+func TestKeyFileNeedsAHome(t *testing.T) {
+	f := newFake(t)
+	if got, want := keyFile(f.sys()), filepath.Join(f.env["HOME"], ".config", "sops", "age", "keys.txt"); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	// A relative path would be resolved against whichever folder the tool runs in.
+	f.env["HOME"] = ""
+	if got := keyFile(f.sys()); got != "" {
+		t.Fatalf("got %q", got)
+	}
+}

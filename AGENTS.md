@@ -9,7 +9,7 @@ The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-
 | Path | What it is |
 | --- | --- |
 | `cli/` | `ezc`, the Go CLI. Every command is in `cli/internal/cli`; `cli/cmd/ezc` only wires the process into `cli.Run`. |
-| `cli/internal/backend` | The interface to an encryption tool (`Name`, `Check`, `HasPolicy`, `Inspect`, `Decrypt`, `Set`, `Unset`, `Edit`), an in-memory fake for tests, and `backendtest`, the contract every backend passes. |
+| `cli/internal/backend` | The interface to an encryption tool (`Name`, `Check`, `HasPolicy`, `Inspect`, `Decrypt`, `Set`, `Unset`, `Edit`), a fake for tests that needs no tool (it keeps files in its own format on disk), and `backendtest`, the contract every backend passes. |
 | `cli/internal/backend/sops` | The one place that knows `sops` exists: runs the program, picks the age key, and turns its failures into fixed messages. |
 | `cli/internal/proc` | The description of a child process (`Command`) and the runner type the backend is given, so tests can fake it. |
 | `cli/internal/valuefile` | Edits plaintext values files and manifests in place (`ezc set` and `unset`): comments kept, written through a temp file and rename, read back before it replaces the old. |
@@ -28,6 +28,8 @@ In a repo, `.ezc/` holds:
 | `.ezc/manifest.yaml` | What the repo needs from its environment. |
 | `.ezc/common.yaml` | Plaintext values for every environment. |
 | `.ezc/env.<name>.yaml` | Plaintext values for one environment; `env.local.yaml` is the default. |
+| `.ezc/common.enc.yaml`, `.ezc/env.<name>.enc.yaml` | Encrypted values, for every environment and for one. |
+| `.ezc/.sops.yaml` | The encryption policy, without which nothing can be encrypted in the folder. |
 | `.ezc/env.sh` | The shim mise or direnv sources, written by `ezc repo init` from `cli/share/env.sh`. |
 
 On a machine, `EZC_HOME` is ezc's folder and `EZC_STORE` the store's root when it is not `$EZC_HOME/store`.

@@ -192,6 +192,33 @@ func Run(t *testing.T, newEnv func(t *testing.T) Env) {
 		}
 	})
 
+	run("UnsetLastNeedsNoKey", func(t *testing.T, e Env, file string) {
+		set(t, e.Backend, file, "A", "a1")
+		e.Lock()
+		if err := e.Backend.Unset(file, "A"); err != nil {
+			t.Fatalf("Unset: %v", err)
+		}
+		if _, err := os.Stat(file); !os.IsNotExist(err) {
+			t.Errorf("file still exists (stat: %v)", err)
+		}
+	})
+
+	run("UnsetOneOfSeveralWithoutKey", func(t *testing.T, e Env, file string) {
+		set(t, e.Backend, file, "A", "a1")
+		set(t, e.Backend, file, "B", "b1")
+		before, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.Lock()
+		if err := e.Backend.Unset(file, "A"); !errors.Is(err, backend.ErrNoKey) {
+			t.Fatalf("error = %v, want ErrNoKey", err)
+		}
+		if after, _ := os.ReadFile(file); !bytes.Equal(before, after) {
+			t.Error("the file changed")
+		}
+	})
+
 	run("UnsetMissingName", func(t *testing.T, e Env, file string) {
 		set(t, e.Backend, file, "A", "a1")
 		before, err := os.ReadFile(file)

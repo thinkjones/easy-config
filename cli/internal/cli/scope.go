@@ -140,8 +140,17 @@ func backendFor(sys System) backend.Backend {
 		Run:      sys.Exec,
 		LookPath: sys.LookPath,
 		Environ:  sys.Environ(),
-		KeyFile:  sops.DefaultKeyFile(homeDir(sys)),
+		KeyFile:  keyFile(sys),
 	})
+}
+
+// keyFile is the default key file; "" with no home, where the path would be a relative one.
+func keyFile(sys System) string {
+	home := homeDir(sys)
+	if home == "" {
+		return ""
+	}
+	return sops.DefaultKeyFile(home)
 }
 
 // load resolves the environment for repo (a .ezc directory, or "" for the store alone).

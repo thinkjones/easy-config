@@ -49,7 +49,7 @@ type Options struct {
 	Run      proc.Runner
 	LookPath func(string) (string, error)
 	Environ  []string // the process environment, K=V; the whole environment sops gets (nil gives it only the key file)
-	KeyFile  string   // used unless Environ already sets SOPS_AGE_KEY or SOPS_AGE_KEY_FILE
+	KeyFile  string   // used unless Environ already sets SOPS_AGE_KEY or SOPS_AGE_KEY_FILE; "" is none
 }
 
 // New returns the sops backend.
@@ -194,7 +194,7 @@ func flatten(path string, data []byte) ([]backend.Pair, error) {
 		case json.Delim:
 			return nil, fmt.Errorf("%s: %s is not a single value", path, name)
 		default:
-			return nil, fmt.Errorf("%s: %s is not a string; it was written unquoted and has lost its exact text. Set it again with `ezc set %s`.", path, name, name)
+			return nil, fmt.Errorf("%s: %s is not a string; it was written unquoted and has lost its exact text. Set it again with `ezc set`.", path, name)
 		}
 	}
 	return pairs, nil
@@ -376,6 +376,11 @@ func (b *sopsBackend) failure(path string, stderr []byte, err error, verb string
 	}
 	if isNoKey(stderr) {
 		source := "Your key file is " + b.o.KeyFile + "."
+		if b.o.KeyFile == "" {
+			source = "No key file is set."
+		} else if _, err := os.Stat(b.o.KeyFile); errors.Is(err, os.ErrNotExist) {
+			source = "Your key file, " + b.o.KeyFile + ", does not exist."
+		}
 		if v := b.keyFromEnv(); v != "" {
 			source = "The key comes from " + v + "."
 		}

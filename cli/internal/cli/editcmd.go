@@ -103,7 +103,7 @@ The editor must wait until you finish: for example nano, vim, or "code --wait". 
 				return err
 			}
 			if secrets {
-				err = editSecrets(sys, sc, path, editor)
+				err = editSecrets(sys, sc, env, path, editor)
 			} else {
 				err = editPlain(sys, sc, file, path, editor)
 			}
@@ -147,7 +147,7 @@ func editPlain(sys System, sc scope, file, path string, editor []string) error {
 }
 
 // editSecrets has the backend edit the encrypted file, then checks that every name in it is encrypted.
-func editSecrets(sys System, sc scope, path string, editor []string) error {
+func editSecrets(sys System, sc scope, env, path string, editor []string) error {
 	be := backendFor(sys)
 	if ok, err := be.HasPolicy(sc.dir); err != nil {
 		return err
@@ -156,7 +156,15 @@ func editSecrets(sys System, sc scope, path string, editor []string) error {
 	}
 	show := sc.show(filepath.Base(path))
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("%s does not exist yet. Create it by setting a secret: `ezc set <NAME>`.", show)
+		set := "ezc set"
+		if sc.layer == "store" {
+			set += " -g"
+		}
+		set += " <NAME>"
+		if env != "" {
+			set += " --env " + env
+		}
+		return fmt.Errorf("%s does not exist yet. Create it by setting a secret: `%s`.", show, set)
 	} else if err != nil {
 		return err
 	}
