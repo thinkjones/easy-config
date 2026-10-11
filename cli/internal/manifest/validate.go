@@ -1,6 +1,10 @@
 package manifest
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+	"strings"
+)
 
 // Validate applies the rules JSON Schema cannot express.
 //
@@ -33,6 +37,13 @@ func (m Manifest) Validate() []error {
 		v := e.Var
 		// 2. Belt and braces with the schema, so `ezc manifest validate` is useful
 		//    on its own for anyone whose editor is not schema-aware.
+		if !slices.Contains(AllTypes(), v.Type) {
+			names := make([]string, len(AllTypes()))
+			for i, t := range AllTypes() {
+				names[i] = string(t)
+			}
+			errs = append(errs, fmt.Errorf("%s: unknown type %q — use %s or %s", e.Name, v.Type, strings.Join(names[:len(names)-1], ", "), names[len(names)-1]))
+		}
 		if v.Desc == "" {
 			errs = append(errs, fmt.Errorf("%s: empty desc", e.Name))
 		}

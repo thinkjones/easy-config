@@ -222,3 +222,11 @@ func TestJSONSchema(t *testing.T) {
 		t.Error("two calls returned different bytes")
 	}
 }
+
+func TestUnknownType(t *testing.T) {
+	expectErr(t, "schemaVersion: v1\nrequired:\n  A: {type: nope, desc: d}\n", `A: unknown type "nope" — use str, int, bool, secret, url, path or enum`)
+}
+
+func TestMissingType(t *testing.T) {
+	expectErr(t, "schemaVersion: v1\nrequired:\n  A: {desc: d}\n", `A: unknown type "" — use str, int, bool, secret, url, path or enum`)
+}

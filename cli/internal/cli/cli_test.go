@@ -551,3 +551,17 @@ func TestCommittedSchemaIsCurrent(t *testing.T) {
 		t.Fatal("cli/schema/v1/manifest.schema.json is stale — run: mise run schema:build")
 	}
 }
+
+func TestUnknownTypeRefusedByValidateAndCodegen(t *testing.T) {
+	for _, args := range [][]string{{"manifest", "validate"}, {"codegen", "python"}} {
+		f := newFake(t)
+		repo(t, f, map[string]string{"manifest.yaml": "schemaVersion: v1\nrequired:\n  A: {type: nope, desc: x}\n"})
+		err := f.run(args...)
+		if err == nil || !strings.Contains(err.Error(), `A: unknown type "nope"`) {
+			t.Errorf("%v: got %v", args, err)
+		}
+		if f.out.Len() != 0 {
+			t.Errorf("%v: stdout %q", args, f.out.String())
+		}
+	}
+}
