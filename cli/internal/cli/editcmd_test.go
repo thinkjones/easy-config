@@ -18,6 +18,9 @@ func editFake(t *testing.T, editor, content string) *fake {
 	setRepo(t, f, map[string]string{})
 	f.tty = true
 	f.env["EDITOR"] = editor
+	if words := strings.Fields(editor); len(words) > 0 {
+		f.paths = map[string]string{words[0]: "/bin/" + words[0]}
+	}
 	f.execFn = func(c proc.Command) ([]byte, []byte, error) {
 		if content == "" {
 			return nil, nil, nil
@@ -64,6 +67,7 @@ func TestEditRefusesNonBlockingEditor(t *testing.T) {
 func TestEditVisualWinsOverEditor(t *testing.T) {
 	f := editFake(t, "nano", "NAME: x\n")
 	f.env["VISUAL"] = "vim"
+	f.paths["vim"] = "/bin/vim"
 	if err := f.run("edit"); err != nil {
 		t.Fatal(err)
 	}
@@ -203,15 +207,60 @@ func TestEditSecrets(t *testing.T) {
 	}
 }
 
-func TestEditSecretsCreatesTheFile(t *testing.T) {
+func TestEditSecretsNeedsAnExistingFile(t *testing.T) {
 	f := editFake(t, "nano", "")
-	setRepo(t, f, map[string]string{})
-	f.backend.EditFunc = func(p []backend.Pair) []backend.Pair { return []backend.Pair{{Name: "A", Value: "a"}} }
-	if err := f.run("edit", "--secrets", "--env", "prod"); err != nil {
+	called := false
+	f.backend.EditFunc = func(p []backend.Pair) []backend.Pair { called = true; return p }
+	err := f.run("edit", "--secrets", "--env", "prod")
+	if err == nil || err.Error() != "repo/env.prod.enc.yaml does not exist yet. Create it by setting a secret: `ezc set <NAME>`." {
+		t.Fatalf("got %v", err)
+	}
+	if called || f.backend.LastEditor != "" {
+		t.Fatal("the backend edited")
+	}
+}
+
+func TestEditEditorNotInstalled(t *testing.T) {
+	f := editFake(t, "nano", "")
+	f.paths = nil
+	err := f.run("edit")
+	if err == nil || err.Error() != "nano is not installed or not on PATH." || len(f.execs) != 0 {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// brokenBackend's Decrypt fails with an error that is not a missing key, as for a file that needs repair.
+type brokenBackend struct{ *backend.Fake }
+
+func (brokenBackend) Decrypt(string) ([]backend.Pair, error) { return nil, errors.New("not valid") }
+
+func TestEditSecretsOpensAFileThatFailsToDecrypt(t *testing.T) {
+	f := editFake(t, "nano", "")
+	secretIn(t, f, "repo", "common.enc.yaml", "TOKEN", "t1")
+	sys := f.sys()
+	sys.Backend = brokenBackend{f.backend}
+	err := Run([]string{"edit", "--secrets"}, sys)
+	var x *ExitError
+	if !errors.As(err, &x) || x.Code != 1 {
+		t.Fatalf("got %v", err)
+	}
+	if f.backend.LastEditor != "nano" {
+		t.Fatal("the editor did not open")
+	}
+	if !strings.Contains(f.errOut.String(), "repo/common.enc.yaml was saved but is not valid; fix it with `ezc edit --secrets`.") {
+		t.Fatalf("stderr %q", f.errOut.String())
+	}
+}
+
+func TestEditSecretsRemovingEveryNameIsFine(t *testing.T) {
+	f := editFake(t, "nano", "")
+	secretIn(t, f, "repo", "common.enc.yaml", "TOKEN", "t1")
+	f.backend.EditFunc = func([]backend.Pair) []backend.Pair { return nil }
+	if err := f.run("edit", "--secrets"); err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := stored(t, f, "env.prod.enc.yaml", "A"); v != "a" {
-		t.Fatal("not created")
+	if f.out.String() != "edited repo/common.enc.yaml\n" {
+		t.Fatalf("got %q", f.out.String())
 	}
 }
 
@@ -298,6 +347,7 @@ func TestEditGlobalNeedsAStore(t *testing.T) {
 func TestEditSecretsPassesTheValidatedEditor(t *testing.T) {
 	f := editFake(t, "code", "")
 	f.env["VISUAL"] = "nano -u"
+	f.paths["nano"] = "/bin/nano"
 	secretIn(t, f, "repo", "common.enc.yaml", "TOKEN", "t1")
 	if err := f.run("edit", "--secrets"); err != nil {
 		t.Fatal(err)

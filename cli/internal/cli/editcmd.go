@@ -90,6 +90,9 @@ The editor must wait until you finish: for example nano, vim, or "code --wait". 
 			if err := waits(editor); err != nil {
 				return err
 			}
+			if _, err := sys.LookPath(editor[0]); err != nil {
+				return fmt.Errorf("%s is not installed or not on PATH.", editor[0])
+			}
 			sc, err := scopeFor(sys, global)
 			if err != nil {
 				return err
@@ -151,17 +154,22 @@ func editSecrets(sys System, sc scope, path string, editor []string) error {
 	} else if !ok {
 		return fmt.Errorf("%s: %w. See \"Encryption\" in the README.", sc.dir, backend.ErrNoPolicy)
 	}
-	if _, err := os.Stat(path); err == nil {
-		// Fail with the backend's own message before an editor opens; the values are dropped at once.
-		if _, err := be.Decrypt(path); err != nil {
-			return err
-		}
+	show := sc.show(filepath.Base(path))
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%s does not exist yet. Create it by setting a secret: `ezc set <NAME>`.", show)
+	} else if err != nil {
+		return err
+	}
+	// Fail with the backend's own message before an editor opens; the values are dropped at once.
+	// Any other failure is a file that needs repairing, which this command must still open.
+	if _, err := be.Decrypt(path); errors.Is(err, backend.ErrNoKey) {
+		return err
 	}
 	if err := be.Edit(path, strings.Join(editor, " ")); err != nil {
 		return err
 	}
 	if _, err := os.Stat(path); err != nil {
-		return nil // nothing was saved
+		return nil // every name was removed
 	}
 	_, unencrypted, err := be.Inspect(path)
 	if err != nil {
@@ -170,9 +178,13 @@ func editSecrets(sys System, sc scope, path string, editor []string) error {
 	if len(unencrypted) > 0 {
 		lines := make([]string, len(unencrypted))
 		for i, n := range unencrypted {
-			lines[i] = fmt.Sprintf("%s: %s is not encrypted; set it again with `ezc set %s`.", sc.show(filepath.Base(path)), n, n)
+			lines[i] = fmt.Sprintf("%s: %s is not encrypted; set it again with `ezc set %s`.", show, n, n)
 		}
 		return errors.New(strings.Join(lines, "\n"))
+	}
+	if _, err := be.Decrypt(path); err != nil {
+		fmt.Fprintf(sys.Stderr, "%v\n%s was saved but is not valid; fix it with `ezc edit --secrets`.\n", err, show)
+		return &ExitError{1}
 	}
 	return nil
 }
