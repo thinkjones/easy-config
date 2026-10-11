@@ -10,6 +10,7 @@ The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-
 | --- | --- |
 | `cli/` | `ezc`, the Go CLI. Every command is in `cli/internal/cli`; `cli/cmd/ezc` only wires the process into `cli.Run`. |
 | `cli/internal/valuefile` | Edits plaintext values files and manifests in place (`ezc set` and `unset`): comments kept, written through a temp file and rename, read back before it replaces the old. |
+| `cli/internal/storeaudit` | Audits a store's values files against its manifest (`ezc store audit`): undeclared, missing, secret-boundary, leak, placeholder and shape findings, never a value. |
 | `bin/ezc` | Shim that builds `cli/bin/ezc` when a Go source changes and runs it; `direnv allow` puts `bin/` on PATH. |
 | `docs/superpowers/` | Design specs and implementation plans. Historical: never rewrite them to match the code. |
 | `LICENSE` | MIT. |

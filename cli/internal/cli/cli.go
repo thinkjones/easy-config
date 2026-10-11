@@ -122,6 +122,7 @@ Config
 		newSetCmd(sys),
 		newUnsetCmd(sys),
 		newEditCmd(sys),
+		newStoreCmd(sys),
 		newRepoCmd(sys),
 	)
 	return root

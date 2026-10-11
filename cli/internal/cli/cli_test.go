@@ -1155,3 +1155,58 @@ func TestEnvManifestFlagHelp(t *testing.T) {
 		t.Errorf("got %q", f.out.String())
 	}
 }
+
+const auditManifest = "schemaVersion: v1\nrequired:\n  NAME: {type: str, desc: who}\n"
+
+func TestStoreAuditClean(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"manifest.yaml": auditManifest, "common.yaml": "NAME: n\n"})
+	if err := f.run("store", "audit"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.out.String(); !strings.HasSuffix(got, "✓ nothing to fix\n") || !strings.Contains(got, "1 declared, 1 files") {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestStoreAuditFindings(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"manifest.yaml": auditManifest, "common.yaml": "STRAY: secret-value\n"})
+	err := f.run("store", "audit")
+	var x *ExitError
+	if !errors.As(err, &x) || x.Code != 1 {
+		t.Fatalf("got %v", err)
+	}
+	out := f.out.String()
+	if !strings.Contains(out, "STRAY (common.yaml)") || !strings.Contains(out, "NAME — declared but no file sets it") {
+		t.Fatalf("got %q", out)
+	}
+	if strings.Contains(out, "secret-value") {
+		t.Fatalf("a value leaked: %q", out)
+	}
+}
+
+func TestStoreAuditNoStore(t *testing.T) {
+	f := newFake(t)
+	err := f.run("store", "audit")
+	if err == nil || !strings.Contains(err.Error(), "no store at") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestStoreAuditBackendFailureIsAnError(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"manifest.yaml": auditManifest, "common.yaml": "NAME: n\n"})
+	secretIn(t, f, "store", "common.enc.yaml", "NAME", "v")
+	write(t, filepath.Join(f.env["EZC_HOME"], "store", ".ezc", "env.x.enc.yaml"), "garbage\n")
+	err := f.run("store", "audit")
+	var x *ExitError
+	if err == nil || errors.As(err, &x) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestStoreNeedsAVerb(t *testing.T) {
+	f := newFake(t)
+	wantUsage(t, f.run("store"), "say audit")
+}
