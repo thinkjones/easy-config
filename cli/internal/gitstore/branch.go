@@ -13,14 +13,46 @@ import (
 	"time"
 )
 
-// onRemote is the commit origin's branch is at now, asked of origin; "" when origin has no such branch.
-func (g Git) onRemote(dir, branch string, timeout time.Duration) (string, error) {
-	out, err := g.run(dir, timeout, g.remote("ls-remote", "--heads", "origin", head(branch))...)
+// remoteRef is the commit the ref of exactly this full name is at on origin now, asked of origin; "" when origin
+// has none. ls-remote matches its pattern against the end of a name, so a/refs/heads/x answers for refs/heads/x:
+// only the line whose name is the whole of ref counts.
+func (g Git) remoteRef(dir, ref string, timeout time.Duration) (string, error) {
+	out, err := g.run(dir, timeout, g.remote("ls-remote", "origin", ref)...)
 	if err != nil {
 		return "", err
 	}
-	commit, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\t")
-	return commit, nil
+	for _, line := range strings.Split(string(out), "\n") {
+		if commit, name, ok := strings.Cut(line, "\t"); ok && name == ref {
+			return commit, nil
+		}
+	}
+	return "", nil
+}
+
+// onRemote is the commit origin's branch is at now; "" when origin has no such branch.
+func (g Git) onRemote(dir, branch string, timeout time.Duration) (string, error) {
+	return g.remoteRef(dir, head(branch), timeout)
+}
+
+// TagError is a push that origin refused because it has a tag whose own name is refs/heads/<Branch>: git then
+// finds two refs for the branch's full name. Nothing is read from such a tag; it only blocks the push.
+type TagError struct{ Branch string }
+
+func (e *TagError) Error() string {
+	return "git: the remote has a tag named " + head(e.Branch) + ", which blocks pushes to that branch. Delete the tag on the remote."
+}
+
+// push runs a push that names branch on origin as head(branch). When it fails and origin has the tag that makes
+// that name ambiguous, the error is a *TagError; else it is git's.
+func (g Git) push(dir, branch string, timeout time.Duration, args ...string) error {
+	_, err := g.run(dir, timeout, g.remote(append([]string{"push", "--quiet"}, args...)...)...)
+	if err == nil {
+		return nil
+	}
+	if tag, terr := g.remoteRef(dir, "refs/tags/"+head(branch), timeout); terr == nil && tag != "" {
+		return &TagError{Branch: branch}
+	}
+	return err
 }
 
 // PushBranch commits paths (relative to dir) on a new branch cut from the current commit, pushes it to origin
@@ -67,8 +99,7 @@ func (g Git) PushBranch(dir, branch, message string, a Author, paths ...string) 
 	if _, err := g.Commit(dir, message, a, paths...); err != nil {
 		return err
 	}
-	_, err = g.run(dir, 0, g.remote("push", "--quiet", "origin", head(branch)+":"+head(branch))...)
-	return err
+	return g.push(dir, branch, 0, "origin", head(branch)+":"+head(branch))
 }
 
 // sameOnRemote is nil when origin's branch holds, at each path, the bytes the work tree has.
@@ -164,7 +195,7 @@ func (g Git) DeleteRemoteBranch(dir, branch, commit string, timeout time.Duratio
 	if err != nil || now == "" {
 		return err
 	}
-	args := []string{"push", "--quiet"}
+	var args []string
 	if commit != "" {
 		if now != commit {
 			return fmt.Errorf("git: %w", ErrBranchMoved)
@@ -172,8 +203,7 @@ func (g Git) DeleteRemoteBranch(dir, branch, commit string, timeout time.Duratio
 		// The lease covers a push that lands between the question above and this one.
 		args = append(args, "--force-with-lease="+head(branch)+":"+commit)
 	}
-	_, err = g.run(dir, timeout, g.remote(append(args, "origin", ":"+head(branch))...)...)
-	return err
+	return g.push(dir, branch, timeout, append(args, "origin", ":"+head(branch))...)
 }
 
 // Restore puts the tracked paths back to the last commit and removes the untracked ones among them.

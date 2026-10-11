@@ -81,7 +81,9 @@ var (
 const allBranches = "+refs/heads/*:refs/remotes/origin/*"
 
 // A ref is always named in full. Git looks a short name up among the tags first, so a tag called origin/main
-// or ezc/join-sam, which anybody who can push can make, would stand in for the branch of that name.
+// or ezc/join-sam, which anybody who can push can make, would stand in for the branch of that name. That makes
+// every read safe from a tag. A push is not: a tag on the remote whose own name is refs/heads/<branch> makes the
+// branch's full name match two refs there, and git refuses the push (a *TagError says so).
 
 // tracking is the full name of the remote-tracking branch for a branch of origin.
 func tracking(branch string) string { return "refs/remotes/origin/" + branch }
@@ -396,7 +398,7 @@ func (g Git) Push(dir string) (int, error) {
 	if st.Ahead == 0 {
 		return 0, nil
 	}
-	if _, err := g.run(dir, 0, g.remote("push", "--quiet", "--set-upstream", "origin", head(st.Branch)+":"+head(st.Branch))...); err != nil {
+	if err := g.push(dir, st.Branch, 0, "--set-upstream", "origin", head(st.Branch)+":"+head(st.Branch)); err != nil {
 		return 0, err
 	}
 	return st.Ahead, nil

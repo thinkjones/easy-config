@@ -8,7 +8,7 @@
 go install github.com/thinkjones/easy-config/cli/cmd/ezc@latest
 ```
 
-`ezc` needs `git`, and [`sops`](https://github.com/getsops/sops) for secrets. `ezc setup` checks for both.
+`ezc` needs `git` 2.23 or later, and [`sops`](https://github.com/getsops/sops) for secrets. `ezc setup` checks for both.
 
 ## Quick start
 
@@ -268,7 +268,7 @@ Anything but `y` or `yes` changes nothing, prints `Not approved.` and exits 1. T
 
 **The request's branch is never merged.** Approve reads one file from it, `.ezc/requests/<name>.yaml`, and ignores everything else it holds, so a branch that also changes `recipients.yaml` or a values file changes nothing in the store. After the push the branch is deleted from the remote, which closes its pull request, but only while it is still at the commit the request was read from: when somebody pushed another request under the same name in the meantime, the branch is left and a `!` line says that a new request arrived. Do not merge that pull request on GitHub: a merge brings in whatever the branch holds. When somebody did merge it, the request file is in the store itself; it is listed and approved the same way and removed in the approve commit. When the branch and the store hold different requests under one name, neither is approved.
 
-A request is read from the branch itself and never from a tag. Git looks a short name up among the tags first, so a tag called `origin/ezc/join-sam` would otherwise stand in for the branch; ezc names every ref in full and fetches and clones without tags.
+A request is read from the branch itself and never from a tag. Git looks a short name up among the tags first, so a tag called `origin/ezc/join-sam` would otherwise stand in for the branch; ezc names every ref in full and fetches and clones without tags, so no tag changes what is read. One tag can still get in the way of a push: a tag on the remote whose own name is `refs/heads/<branch>` makes git refuse every push to that branch, `ezc store push` included when the branch is the store's. Nothing is read from it, and ezc says what it is: `the remote has a tag named refs/heads/<branch>, which blocks pushes to that branch. Delete the tag on the remote.`
 
 When the push fails the commit stays, the branch is left and the command says so: run `ezc store push`, then `ezc user approve <name>` again, which finds the key already registered and only deletes the branch. The same second run finishes the job when only the branch could not be deleted. It ends with `Tell <name> to run ezc store pull.`: on their machine that brings the re-wrapped files, which their key now opens.
 

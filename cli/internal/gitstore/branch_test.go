@@ -313,7 +313,8 @@ func hostileTags(t *testing.T, g Git, bare, branch string) {
 }
 
 // A tag is found before a branch of the same short name, and anybody who can push can make one. Nothing gitstore
-// reads, compares against, rebases onto, pushes or deletes may be chosen by a tag.
+// reads, compares against or rebases onto may be chosen by a tag, and these tags do not stop a push or a delete.
+// The one tag that does is in TestATagNamedLikeABranchBlocksThePushAndIsNamed.
 func TestTagsNeverStandInForABranch(t *testing.T) {
 	const branch = "ezc/join-laptop"
 	for _, held := range []bool{false, true} {
@@ -469,5 +470,107 @@ func TestDeleteRemoteBranchHoldsToTheCommitRead(t *testing.T) {
 	}
 	if got := raw(t, g, bare, "for-each-ref", "refs/heads/ezc/"); got != "" {
 		t.Fatalf("the branch is left: %q", got)
+	}
+}
+
+// ls-remote matches the end of a name: a branch whose name ends in another's full name must not answer for it.
+func TestABranchNamedLikeTheTailOfAnotherIsNotIt(t *testing.T) {
+	const branch = "ezc/join-laptop"
+	g, bare, a, b := twoClones(t)
+	// Sorted before the real one, so it is ls-remote's first line.
+	raw(t, g, a, "push", "--quiet", "origin", "HEAD:refs/heads/a/refs/heads/"+branch)
+	if got := raw(t, g, bare, "for-each-ref", "--format=%(refname)", "refs/heads/a/"); got != "refs/heads/a/refs/heads/"+branch {
+		t.Fatalf("the decoy: %q", got)
+	}
+
+	// With only the decoy there, the branch is not taken and there is nothing to delete.
+	if err := g.DeleteRemoteBranch(b, branch, "", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	writeRequest(t, a, "key: one\n")
+	if err := g.PushBranch(a, branch, "request", author, requestPath); err != nil {
+		t.Fatalf("PushBranch: %v", err)
+	}
+	if err := g.Fetch(b, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	read, err := g.RemoteCommit(b, branch)
+	if err != nil || read == raw(t, g, bare, "rev-parse", "refs/heads/a/refs/heads/"+branch) {
+		t.Fatalf("RemoteCommit = %q, %v", read, err)
+	}
+	// The same request again is the same request, and the delete held to the commit read goes through.
+	writeRequest(t, a, "key: one\n")
+	if err := g.PushBranch(a, branch, "request", author, requestPath); err != nil {
+		t.Fatalf("PushBranch again: %v", err)
+	}
+	if err := g.DeleteRemoteBranch(b, branch, read, time.Minute); err != nil {
+		t.Fatalf("DeleteRemoteBranch: %v", err)
+	}
+	if got := raw(t, g, bare, "for-each-ref", "--format=%(refname)", "refs/heads/"); got != "refs/heads/a/refs/heads/"+branch+"\nrefs/heads/main" {
+		t.Fatalf("the remote's branches: %q", got)
+	}
+}
+
+// A tag on the remote whose own name is refs/heads/<branch> makes git refuse a push to the branch. Nothing is read
+// from it, and the error says what it is and what to do.
+func TestATagNamedLikeABranchBlocksThePushAndIsNamed(t *testing.T) {
+	const branch = "ezc/join-laptop"
+	g, bare, a, b := twoClones(t)
+	writeRequest(t, a, "key: one\n")
+	if err := g.PushBranch(a, branch, "request", author, requestPath); err != nil {
+		t.Fatal(err)
+	}
+	c := clone(t, g, bare)
+	write(t, c, "hostile.txt", "theirs\n")
+	raw(t, g, c, "add", "--all")
+	raw(t, g, c, "commit", "--quiet", "-m", "hostile")
+	for _, name := range []string{"main", branch, "ezc/join-desk"} {
+		raw(t, g, c, "push", "--quiet", "origin", "HEAD:refs/tags/refs/heads/"+name)
+	}
+	blocked := func(what string, err error, name string) {
+		t.Helper()
+		var tag *TagError
+		want := "git: the remote has a tag named refs/heads/" + name + ", which blocks pushes to that branch. Delete the tag on the remote."
+		if !errors.As(err, &tag) || err.Error() != want {
+			t.Fatalf("%s: got %v\nwant %s", what, err, want)
+		}
+	}
+
+	// Reading is as with no tag.
+	if err := g.Fetch(b, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	wantCounts(t, g, b, InSync, 0, 0)
+	read, err := g.RemoteCommit(b, branch)
+	if body, serr := g.ShowAt(b, read, requestPath); err != nil || serr != nil || string(body) != "key: one\n" {
+		t.Fatalf("ShowAt = %q, %v, %v", body, err, serr)
+	}
+
+	// Each push says which tag is in the way, and leaves the store as it was.
+	write(t, b, "mine.txt", "x\n")
+	if _, err := g.Commit(b, "mine", author, "mine.txt"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = g.Push(b)
+	blocked("Push", err, "main")
+	blocked("DeleteRemoteBranch", g.DeleteRemoteBranch(b, branch, read, time.Minute), branch)
+	if err := os.MkdirAll(filepath.Join(b, ".ezc", "requests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, b, ".ezc/requests/desk.yaml", "key: two\n")
+	blocked("PushBranch", g.PushBranch(b, "ezc/join-desk", "request", author, ".ezc/requests/desk.yaml"), "ezc/join-desk")
+	if st := status(t, g, b); st.Branch != "main" || st.Dirty || st.Ahead != 1 {
+		t.Fatalf("b is not as before: %+v", st)
+	}
+
+	// With the tags gone, the same calls work.
+	for _, name := range []string{"main", branch, "ezc/join-desk"} {
+		raw(t, g, c, "push", "--quiet", "origin", ":refs/tags/refs/heads/"+name)
+	}
+	if n, err := g.Push(b); err != nil || n != 1 {
+		t.Fatalf("Push = %d, %v", n, err)
+	}
+	if err := g.DeleteRemoteBranch(b, branch, read, time.Minute); err != nil {
+		t.Fatal(err)
 	}
 }
