@@ -204,6 +204,50 @@ func TestSyncRequestsAlone(t *testing.T) {
 	}
 }
 
+// Whoever can push to the store names these files, and the names reach a terminal: only a recipient's name is shown or counted.
+func TestSyncRequestsOnlyValidNames(t *testing.T) {
+	f := newFake(t)
+	x := remoteStore(t, f)
+	for _, name := range []string{"sam", "kim-2", "Lee", "bad name", "evil\x1b[31m", "-dash", "a\rb"} {
+		x.commit(x.store, "requests/"+name+".yaml", "name: x\n")
+	}
+	x.push(x.store)
+	if got, want := stderrOf(t, f, "list", "-g"), "store: 2 access requests pending: kim-2, sam\n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+
+	f = newFake(t)
+	x = remoteStore(t, f)
+	for _, name := range []string{"Lee", "bad name", "evil\x1b[31m"} {
+		x.commit(x.store, "requests/"+name+".yaml", "name: x\n")
+	}
+	x.push(x.store)
+	if got := stderrOf(t, f, "list", "-g"); got != "" {
+		t.Fatalf("all invalid: stderr %q", got)
+	}
+	// With something else to say, the line says only that.
+	x.commit(x.store, "env.a.yaml", "A: b\n")
+	if got, want := stderrOf(t, f, "list", "-g"), "store: 1 commit ahead of origin — run ezc store push\n"; got != want {
+		t.Fatalf("all invalid, ahead: got %q, want %q", got, want)
+	}
+}
+
+// A state.json that says nothing readable means never: one fetch, and a clean file after it.
+func TestSyncUnreadableState(t *testing.T) {
+	future := noon.Add(time.Hour).Format(time.RFC3339)
+	for _, content := range []string{"not json", "null", `{"attempted": 7}`, `{"attempted": "yesterday"}`, `{"attempted": "` + future + `"}`} {
+		f := newFake(t)
+		remoteStore(t, f)
+		write(t, statePath(f), content)
+		if got := stderrOf(t, f, "list", "-g"); got != "" || len(fetches(f)) != 1 {
+			t.Errorf("%s: stderr %q, fetches %v", content, got, fetches(f))
+		}
+		if state, want := readStateFile(t, f), noon.Format(time.RFC3339); state["attempted"] != want || state["fetched"] != want {
+			t.Errorf("%s: state %v", content, state)
+		}
+	}
+}
+
 func TestInSyncPrintsNothing(t *testing.T) {
 	f := newFake(t)
 	remoteStore(t, f)
@@ -309,7 +353,7 @@ func TestOfflineNeverChecked(t *testing.T) {
 }
 
 func TestOfflineAges(t *testing.T) {
-	for ago, want := range map[time.Duration]string{
+	for since, want := range map[time.Duration]string{
 		30 * time.Second: "just now",
 		time.Minute:      "1 minute ago",
 		59 * time.Minute: "59 minutes ago",
@@ -318,9 +362,9 @@ func TestOfflineAges(t *testing.T) {
 		72 * time.Hour:   "3 days ago",
 	} {
 		f := newFake(t)
-		indicate(f.sys(), storeSync{Git: true, Offline: true, Fetched: noon.Add(-ago)})
+		indicate(f.sys(), storeSync{Git: true, Offline: true, Fetched: noon.Add(-since)})
 		if got, want := f.errOut.String(), "store: origin could not be reached; last checked "+want+"\n"; got != want {
-			t.Errorf("%v: got %q, want %q", ago, got, want)
+			t.Errorf("%v: got %q, want %q", since, got, want)
 		}
 	}
 }
@@ -382,7 +426,7 @@ func TestPlainFolderStore(t *testing.T) {
 			t.Errorf("%v: stderr %q", args, got)
 		}
 		// One question, whether the folder is a repo, and nothing after it.
-		if len(f.gits) != 1 || len(fetches(f)) != 0 {
+		if len(f.gits) != 1 || f.gits[0].Dir != plain || len(fetches(f)) != 0 {
 			t.Errorf("%v: git ran %v", args, f.gits)
 		}
 	}

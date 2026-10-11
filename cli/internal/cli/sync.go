@@ -13,6 +13,7 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/config"
 	"github.com/thinkjones/easy-config/cli/internal/gitstore"
 	"github.com/thinkjones/easy-config/cli/internal/paths"
+	"github.com/thinkjones/easy-config/cli/internal/recipients"
 )
 
 const (
@@ -82,6 +83,7 @@ func syncStore(sys System, maxAge, timeout time.Duration) storeSync {
 }
 
 // requests are the names of the access requests in a store's .ezc folder: its requests/*.yaml, sorted.
+// Whoever can push to the store names those files, so a name that could not be a recipient's is left out.
 func requests(storeEzc string) []string {
 	entries, err := os.ReadDir(filepath.Join(storeEzc, requestsDir))
 	if err != nil {
@@ -89,7 +91,7 @@ func requests(storeEzc string) []string {
 	}
 	var names []string
 	for _, e := range entries {
-		if name, ok := strings.CutSuffix(e.Name(), ".yaml"); ok && name != "" && !e.IsDir() {
+		if name, ok := strings.CutSuffix(e.Name(), ".yaml"); ok && recipients.ValidName(name) && !e.IsDir() {
 			names = append(names, name)
 		}
 	}
