@@ -1104,3 +1104,150 @@ func TestSetupCloneWithNeitherARegistryNorAPolicy(t *testing.T) {
 	setupCommitHolds(t, f, "setup: add the registry", recipients.File, backend.FakePolicy)
 	setupAgainChangesNothing(t, f, setupSecondRun(f))
 }
+
+const setupUnmanagedNotice = "\n! This store holds encrypted values but has no recipients.yaml and no encryption policy in .ezc, so ezc does not manage who can read it.\n"
+
+// setupWroteNoAccessFiles fails when the store got a registry or a policy.
+func setupWroteNoAccessFiles(t *testing.T, f *fake) {
+	t.Helper()
+	missing(t, filepath.Join(setupStore(f), ".ezc", recipients.File))
+	missing(t, filepath.Join(setupStore(f), ".ezc", backend.FakePolicy))
+	if strings.Contains(f.out.String(), "Next:") || strings.Contains(f.out.String(), "wrote the") || !strings.HasSuffix(f.out.String(), setupUnmanagedNotice) {
+		t.Fatalf("stdout:\n%s", f.out.String())
+	}
+}
+
+// A store that holds encrypted values was set up by someone, under a policy ezc cannot see: whoever runs setup
+// is not made its one recipient.
+func TestSetupLeavesAStoreThatHoldsEncryptedValues(t *testing.T) {
+	t.Run("cloned", func(t *testing.T) {
+		g := gitstore.Git{Run: gittest.WithIdentity(t)}
+		bare, work := gittest.Bare(t), filepath.Join(t.TempDir(), "work")
+		if err := g.Init(work); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(work, ".ezc", "manifest.yaml"), empty)
+		write(t, filepath.Join(work, ".ezc", "env.prod.enc.yaml"), "OWNED: theirs\n")
+		if _, err := g.Commit(work, "a store", gitstore.Author{}, ".ezc"); err != nil {
+			t.Fatal(err)
+		}
+		if err := g.SetRemote(work, bare); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := g.Push(work); err != nil {
+			t.Fatal(err)
+		}
+		f := setupFake(t)
+		if err := f.run("setup", "--store", bare, "--name", "kim", "--yes"); err != nil {
+			t.Fatal(err)
+		}
+		setupWroteNoAccessFiles(t, f)
+		if setupGitOut(t, f, "rev-list", "--count", "HEAD") != "1" || setupGitOut(t, f, "status", "--porcelain", "--untracked-files=all") != "" {
+			t.Fatal("setup committed or left something in the clone")
+		}
+		setupAgainChangesNothing(t, f, setupSecondRun(f)+setupUnmanagedNotice)
+	})
+
+	t.Run("in place, a git repo", func(t *testing.T) {
+		f := setupFake(t)
+		x := storeWriteFix{localStore(t, f)}
+		x.commit(x.store, "manifest.yaml", empty)
+		x.commit(x.store, "common.enc.yaml", "OWNED: theirs\n")
+		if err := f.run("setup", "--name", "gene", "--yes"); err != nil {
+			t.Fatal(err)
+		}
+		setupWroteNoAccessFiles(t, f)
+		if x.commits() != "3" {
+			t.Fatalf("%s commits, want 3", x.commits())
+		}
+		x.wantClean()
+		setupAgainChangesNothing(t, f, setupSecondRun(f)+setupUnmanagedNotice)
+	})
+
+	// A plain folder still becomes a git repo; that rewrites nothing and decides nothing about access.
+	t.Run("in place, a plain folder", func(t *testing.T) {
+		f := setupFake(t)
+		setupHandMade(t, f, map[string]string{"common.enc.yaml": "OWNED: theirs\n"})
+		if err := f.run("setup", "--name", "gene", "--yes"); err != nil {
+			t.Fatal(err)
+		}
+		setupWroteNoAccessFiles(t, f)
+		setupCommitHolds(t, f, "setup: adopt the store", "manifest.yaml", "common.yaml", "common.enc.yaml")
+		setupAgainChangesNothing(t, f, setupSecondRun(f)+setupUnmanagedNotice)
+	})
+}
+
+// Setup does not commit to a store whose state cannot be read, and finds that out before it makes the key.
+func TestSetupRefusedOffABranch(t *testing.T) {
+	f := setupFake(t)
+	x := storeWriteFix{localStore(t, f)}
+	x.commit(x.store, "manifest.yaml", empty)
+	x.git("checkout", "--quiet", "--detach")
+	head := x.git("rev-parse", "HEAD")
+	err := f.run("setup", "--name", "gene", "--yes")
+	want := "the store in " + x.store + " is not on a branch (a rebase may be in progress). Finish or abort it with git, then run this again."
+	if err == nil || err.Error() != want {
+		t.Fatalf("err %v\nwant %s", err, want)
+	}
+	storeWriteExitsOne(t, err)
+	missing(t, x.file(recipients.File))
+	missing(t, x.file(backend.FakePolicy))
+	missing(t, setupKeyFile(f))
+	missing(t, setupConfig(f))
+	if x.git("rev-parse", "HEAD") != head {
+		t.Fatal("a commit was made")
+	}
+	x.wantClean()
+
+	// With nothing to write there is nothing to refuse.
+	x.git("checkout", "--quiet", "main")
+	if err := f.run("setup", "--name", "gene", "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	x.git("checkout", "--quiet", "--detach")
+	setupAgainChangesNothing(t, f, setupSecondRun(f))
+}
+
+// A .ezc with no manifest gets the empty one, so the command setup names next works.
+func TestSetupWritesAMissingManifest(t *testing.T) {
+	const newManifest = "schemaVersion: v1\nrequired: {}\noptional: {}\n"
+	f := setupFake(t)
+	store(t, f, map[string]string{"common.yaml": "NAME: n\n"})
+	if err := f.run("setup", "--name", "gene", "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	want := "+ made the store a git repo: " + setupStore(f) + "\n+ wrote an empty manifest\n+ wrote the registry and the encryption policy\n"
+	if !strings.Contains(f.out.String(), want) || !strings.HasSuffix(f.out.String(), setupNextLine) {
+		t.Fatalf("stdout:\n%s", f.out.String())
+	}
+	if got := readFile(t, filepath.Join(setupStore(f), ".ezc", "manifest.yaml")); got != newManifest {
+		t.Fatalf("manifest %q", got)
+	}
+	setupCommitHolds(t, f, "setup: adopt the store", "manifest.yaml", "common.yaml", recipients.File, backend.FakePolicy)
+	setupAgainChangesNothing(t, f, setupSecondRun(f))
+	f.stdin = "v\n"
+	if err := f.run("set", "-g", "TOKEN", "--type", "secret", "--desc", "what it is"); err != nil {
+		t.Fatal(err)
+	}
+
+	// In a store that is a git repo, the manifest goes into the commit of what else was written.
+	f = setupFake(t)
+	x := storeWriteFix{localStore(t, f)}
+	if err := f.run("setup", "--name", "gene", "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	setupCommitHolds(t, f, "setup: add the registry", "manifest.yaml", recipients.File, backend.FakePolicy)
+	x.wantClean()
+
+	// Alone, it has a commit of its own; a policy written by hand is still left as it is.
+	f = setupFake(t)
+	x = storeWriteFix{localStore(t, f)}
+	x.commit(x.store, backend.FakePolicy, setupHandPolicy)
+	if err := f.run("setup", "--name", "gene", "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	setupCommitHolds(t, f, "setup: add the manifest", "manifest.yaml")
+	if readFile(t, x.file(backend.FakePolicy)) != setupHandPolicy || !strings.HasSuffix(f.out.String(), setupByHandNotice) {
+		t.Fatalf("stdout:\n%s", f.out.String())
+	}
+}

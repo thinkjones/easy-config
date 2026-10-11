@@ -301,10 +301,56 @@ func handMade(t *testing.T, m *machine, files map[string]string) {
 	}
 }
 
+// encrypted is the rule the command passes in for an encrypted values file.
+func encrypted(name string) bool { return strings.HasSuffix(name, ".enc.yaml") }
+
+func TestAdoptLeavesAStoreThatHoldsEncryptedValues(t *testing.T) {
+	m := newMachine(t, gittest.Runner(t))
+	handMade(t, m, map[string]string{manifestName: emptyManifest, "common.enc.yaml": "A: theirs\n"})
+	a, err := Adopt(m.Env, "gene", "fake1abc", encrypted)
+	if err != nil || a != (Adopted{Repo: true, Unmanaged: true}) {
+		t.Fatalf("got %+v, %v", a, err)
+	}
+	entries, _ := os.ReadDir(m.Paths.StoreEzc())
+	if len(entries) != 2 {
+		t.Fatalf("the store now holds %v", entries)
+	}
+	if a, err := Adopt(m.Env, "gene", "fake1abc", encrypted); err != nil || a != (Adopted{Unmanaged: true}) || m.git("rev-list", "--count", "HEAD") != "1" {
+		t.Fatalf("again: %+v, %v", a, err)
+	}
+}
+
+func TestAdoptRefusesAStoreOffABranch(t *testing.T) {
+	m := newMachine(t, gittest.Runner(t))
+	handMade(t, m, map[string]string{manifestName: emptyManifest, backend.FakePolicy: "by hand\n"})
+	if _, err := Adopt(m.Env, "gene", "fake1abc", encrypted); err != nil {
+		t.Fatal(err)
+	}
+	m.git("checkout", "--quiet", "--detach")
+	// Nothing to write: nothing to refuse.
+	if err := Adoptable(m.Env, encrypted); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(m.Paths.StoreEzc(), backend.FakePolicy)); err != nil {
+		t.Fatal(err)
+	}
+	var state *StateError
+	if err := Adoptable(m.Env, encrypted); !errors.As(err, &state) || !errors.Is(err, gitstore.ErrNoBranch) {
+		t.Fatalf("Adoptable: %v", err)
+	}
+	if a, err := Adopt(m.Env, "gene", "fake1abc", encrypted); !errors.As(err, &state) || a != (Adopted{}) {
+		t.Fatalf("Adopt: %+v, %v", a, err)
+	}
+	entries, _ := os.ReadDir(m.Paths.StoreEzc())
+	if len(entries) != 1 || m.git("rev-list", "--count", "HEAD") != "1" {
+		t.Fatalf("the store was written to: %v", entries)
+	}
+}
+
 func TestAdopt(t *testing.T) {
 	m := newMachine(t, gittest.Runner(t))
 	handMade(t, m, map[string]string{manifestName: emptyManifest, "common.yaml": "A: 1\n"})
-	a, err := Adopt(m.Env, "gene", "fake1abc")
+	a, err := Adopt(m.Env, "gene", "fake1abc", encrypted)
 	if err != nil || a != (Adopted{Repo: true, Registry: true}) {
 		t.Fatalf("got %+v, %v", a, err)
 	}
@@ -319,7 +365,7 @@ func TestAdopt(t *testing.T) {
 		t.Fatalf("registry %+v, %v, %v", reg, found, err)
 	}
 	// All is there now: nothing more is done.
-	if a, err := Adopt(m.Env, "gene", "fake1abc"); err != nil || a != (Adopted{}) || m.git("rev-list", "--count", "HEAD") != "1" {
+	if a, err := Adopt(m.Env, "gene", "fake1abc", encrypted); err != nil || a != (Adopted{}) || m.git("rev-list", "--count", "HEAD") != "1" {
 		t.Fatalf("again: %+v, %v", a, err)
 	}
 }
@@ -327,7 +373,7 @@ func TestAdopt(t *testing.T) {
 func TestAdoptLeavesAHandWrittenPolicy(t *testing.T) {
 	m := newMachine(t, gittest.Runner(t))
 	handMade(t, m, map[string]string{manifestName: emptyManifest, backend.FakePolicy: "by hand\n"})
-	a, err := Adopt(m.Env, "gene", "fake1abc")
+	a, err := Adopt(m.Env, "gene", "fake1abc", encrypted)
 	if err != nil || a != (Adopted{Repo: true}) {
 		t.Fatalf("got %+v, %v", a, err)
 	}
@@ -343,7 +389,7 @@ func TestAdoptFailureLeavesTheStoreAsItWas(t *testing.T) {
 	m := newMachine(t, gittest.Runner(t))
 	m.Backend = &failingPolicy{}
 	handMade(t, m, map[string]string{manifestName: emptyManifest})
-	if a, err := Adopt(m.Env, "gene", "fake1abc"); err == nil || a != (Adopted{}) {
+	if a, err := Adopt(m.Env, "gene", "fake1abc", encrypted); err == nil || a != (Adopted{}) {
 		t.Fatalf("got %+v, %v", a, err)
 	}
 	entries, _ := os.ReadDir(m.Paths.StoreEzc())

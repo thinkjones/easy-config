@@ -33,6 +33,7 @@ const (
 	adoptMessage    = "setup: adopt the store"
 	registryMessage = "setup: add the registry"
 	policyMessage   = "setup: write the encryption policy"
+	manifestMessage = "setup: add the manifest"
 )
 
 // ErrNoGh is gh missing from PATH.
@@ -168,37 +169,87 @@ func (e Env) registry(name, public string) recipients.Registry {
 	}}
 }
 
-// Adopted is what Adopt found in a store and what it added to it.
+// Adopted is what Adopt added to a store, and what it found that it will not manage.
 type Adopted struct {
 	Repo     bool // the folder was made a git repo
+	Manifest bool // the empty manifest was written
 	Registry bool // the registry and the policy were written
 	Policy   bool // the policy was written from the registry that was there
+	// Unmanaged is a store that holds encrypted values with neither a registry nor a policy in its .ezc:
+	// someone set it up under a policy that is elsewhere, so neither is written.
+	Unmanaged bool
+}
+
+// StateError is a store that is a git repo whose state git could not give (it is not on a branch, for one).
+// Nothing is written to such a store: a commit made there could be lost.
+type StateError struct{ Err error }
+
+func (e *StateError) Error() string { return e.Err.Error() }
+func (e *StateError) Unwrap() error { return e.Err }
+
+// survey is what a store in place has and lacks.
+type survey struct {
+	repo, hasManifest, hasRegistry, hasPolicy bool
+	encrypted                                 bool // its .ezc holds an encrypted values file
+	registry                                  recipients.Registry
+	names                                     []string // what its .ezc holds
+}
+
+// look surveys the store. It is a *StateError when the store is a git repo that lacks something and git
+// cannot say how it stands.
+func look(e Env, isEncrypted func(name string) bool) (v survey, err error) {
+	store, ezc := e.Paths.Store(), e.Paths.StoreEzc()
+	if v.repo, err = e.Git.IsRepo(store); err != nil {
+		return v, err
+	}
+	if v.registry, v.hasRegistry, err = recipients.Load(ezc); err != nil {
+		return v, err
+	}
+	if v.hasPolicy, err = e.Backend.HasPolicy(ezc); err != nil {
+		return v, err
+	}
+	if v.names, err = fileNames(ezc); err != nil {
+		return v, err
+	}
+	v.hasManifest = slices.Contains(v.names, manifestName)
+	v.encrypted = slices.ContainsFunc(v.names, isEncrypted)
+	if v.repo && v.writes() {
+		if _, err := e.Git.Status(store); err != nil {
+			return v, &StateError{err}
+		}
+	}
+	return v, nil
+}
+
+// unmanaged reports whether the store holds encrypted values with neither a registry nor a policy.
+func (v survey) unmanaged() bool { return v.encrypted && !v.hasRegistry && !v.hasPolicy }
+
+// writes reports whether Adopt has a file to write.
+func (v survey) writes() bool {
+	return !v.hasManifest || !v.hasPolicy && !v.unmanaged()
+}
+
+// Adoptable is the error Adopt would stop on before it writes anything; setup asks before it makes the key.
+func Adoptable(e Env, isEncrypted func(name string) bool) error {
+	_, err := look(e, isEncrypted)
+	return err
 }
 
 // Adopt gives a store that is in place what it lacks and writes over nothing: a folder that is not a git repo
-// becomes one, with its .ezc in one commit; a store with neither a registry nor a policy gets both, name with
-// this key as its one user; a store with a registry and no policy gets the policy written from it. A policy
-// with no registry was written by hand and stays as it is. When it fails it removes what it made.
-func Adopt(e Env, name, public string) (a Adopted, err error) {
+// becomes one, with its .ezc in one commit; a .ezc with no manifest gets the empty one; a store with neither a
+// registry nor a policy gets both, name with this key as its one user, unless it holds an encrypted values file
+// (isEncrypted, of a file's name), which someone set up; a store with a registry and no policy gets the policy
+// written from it. A policy with no registry was written by hand and stays as it is. A store that is a git repo
+// is written to only when git can say how it stands. When Adopt fails it removes what it made.
+func Adopt(e Env, name, public string, isEncrypted func(name string) bool) (a Adopted, err error) {
 	store, ezc := e.Paths.Store(), e.Paths.StoreEzc()
-	repo, err := e.Git.IsRepo(store)
+	v, err := look(e, isEncrypted)
 	if err != nil {
 		return a, err
 	}
-	reg, hasRegistry, err := recipients.Load(ezc)
-	if err != nil {
-		return a, err
-	}
-	hasPolicy, err := e.Backend.HasPolicy(ezc)
-	if err != nil {
-		return a, err
-	}
-	if repo && hasPolicy {
+	a.Unmanaged = v.unmanaged()
+	if v.repo && !v.writes() {
 		return a, nil
-	}
-	before, err := fileNames(ezc)
-	if err != nil {
-		return a, err
 	}
 	gitDir := filepath.Join(store, ".git")
 	hadGitDir := exists(gitDir)
@@ -206,25 +257,31 @@ func Adopt(e Env, name, public string) (a Adopted, err error) {
 		if err == nil {
 			return
 		}
-		for _, name := range added(ezc, before) {
+		for _, name := range added(ezc, v.names) {
 			os.Remove(filepath.Join(ezc, name))
 		}
-		if !repo && !hadGitDir {
+		if !v.repo && !hadGitDir {
 			os.RemoveAll(gitDir)
 		}
 		a = Adopted{}
 	}()
 
 	message := ""
+	if !v.hasManifest {
+		if err := os.WriteFile(filepath.Join(ezc, manifestName), []byte(emptyManifest), 0o644); err != nil {
+			return a, fmt.Errorf("%s: cannot write this file", filepath.Join(ezc, manifestName))
+		}
+		a.Manifest, message = true, manifestMessage
+	}
 	switch {
-	case hasPolicy:
-	case hasRegistry:
-		if err := e.Backend.WritePolicy(ezc, reg.Keys()); err != nil {
+	case v.hasPolicy, a.Unmanaged:
+	case v.hasRegistry:
+		if err := e.Backend.WritePolicy(ezc, v.registry.Keys()); err != nil {
 			return a, err
 		}
 		a.Policy, message = true, policyMessage
 	default:
-		reg = e.registry(name, public)
+		reg := e.registry(name, public)
 		if err := reg.Save(ezc); err != nil {
 			return a, err
 		}
@@ -236,9 +293,9 @@ func Adopt(e Env, name, public string) (a Adopted, err error) {
 
 	// A folder that was no repo is committed whole; a repo gets only the files written here.
 	paths := []string{ezcDir}
-	if repo {
+	if v.repo {
 		paths = nil
-		for _, name := range added(ezc, before) {
+		for _, name := range added(ezc, v.names) {
 			paths = append(paths, ezcDir+"/"+name)
 		}
 	} else {
@@ -251,7 +308,7 @@ func Adopt(e Env, name, public string) (a Adopted, err error) {
 	if err != nil {
 		return a, err
 	}
-	if !done && !repo {
+	if !done && !v.repo {
 		return a, fmt.Errorf("git: nothing in %s could be committed (is it ignored?)", ezc)
 	}
 	return a, nil

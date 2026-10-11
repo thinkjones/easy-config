@@ -14,6 +14,7 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/gitstore"
 	"github.com/thinkjones/easy-config/cli/internal/paths"
 	"github.com/thinkjones/easy-config/cli/internal/recipients"
+	"github.com/thinkjones/easy-config/cli/internal/resolve"
 	"github.com/thinkjones/easy-config/cli/internal/setup"
 )
 
@@ -179,6 +180,9 @@ func runSetup(sys System, o setupFlags) error {
 				return err
 			}
 		}
+		if err := setup.Adoptable(e, resolve.IsEncrypted); err != nil {
+			return adoptError(p.Store(), err)
+		}
 		want := source + slug
 		switch {
 		case slug != "" && remote == "":
@@ -248,8 +252,8 @@ func runSetup(sys System, o setupFlags) error {
 	var adopted setup.Adopted
 	switch plan {
 	case keepStore, publishStore:
-		if adopted, err = setup.Adopt(e, name, public); err != nil {
-			return err
+		if adopted, err = setup.Adopt(e, name, public, resolve.IsEncrypted); err != nil {
+			return adoptError(p.Store(), err)
 		}
 		if adopted.Repo {
 			fmt.Fprintf(sys.Stdout, "+ made the store a git repo: %s\n", p.Store())
@@ -266,9 +270,12 @@ func runSetup(sys System, o setupFlags) error {
 			return err
 		}
 		fmt.Fprintf(sys.Stdout, "+ cloned the store: %s\n", p.Store())
-		if adopted, err = setup.Adopt(e, name, public); err != nil {
-			return err
+		if adopted, err = setup.Adopt(e, name, public, resolve.IsEncrypted); err != nil {
+			return adoptError(p.Store(), err)
 		}
+	}
+	if adopted.Manifest {
+		fmt.Fprintln(sys.Stdout, "+ wrote an empty manifest")
 	}
 	switch {
 	case adopted.Registry:
@@ -282,7 +289,7 @@ func runSetup(sys System, o setupFlags) error {
 		}
 		fmt.Fprintf(sys.Stdout, "+ published the store: %s\n", slug)
 	}
-	made = made || plan != keepStore || adopted.Repo || adopted.Registry || adopted.Policy
+	made = made || plan != keepStore || adopted.Repo || adopted.Manifest || adopted.Registry || adopted.Policy
 
 	// Config: what it says already stays; what it lacks is filled in.
 	filled := cfg
@@ -318,10 +325,21 @@ func runSetup(sys System, o setupFlags) error {
 		fmt.Fprintf(sys.Stdout, "\n! Your key cannot read this store's secrets yet. Give this public key to someone who has access:\n%s\n", public)
 	case hasPolicy && !registered:
 		fmt.Fprint(sys.Stdout, "\n! This store's encryption policy was written by hand and it has no recipients.yaml, so ezc does not manage who can read it. Keep editing the policy by hand for now.\n")
+	case adopted.Unmanaged:
+		fmt.Fprint(sys.Stdout, "\n! This store holds encrypted values but has no recipients.yaml and no encryption policy in .ezc, so ezc does not manage who can read it.\n")
 	case made && hasPolicy:
 		fmt.Fprint(sys.Stdout, "\nNext: ezc set -g NAME --type secret --desc \"what it is\"\n")
 	}
 	return nil
+}
+
+// adoptError is err from setup.Adopt as setup says it: a store whose state cannot be read gets the write guard's sentence.
+func adoptError(dir string, err error) error {
+	var state *setup.StateError
+	if errors.As(err, &state) {
+		return cannotTell(dir, state.Err)
+	}
+	return err
 }
 
 // yes reports whether answer is a yes.
