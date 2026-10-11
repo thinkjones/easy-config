@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
+	"github.com/thinkjones/easy-config/cli/internal/proc"
 	"github.com/thinkjones/easy-config/cli/share"
 )
 
@@ -21,6 +22,14 @@ type fake struct {
 	wd          string
 	children    [][]string // each RunChild call: name, args..., then "--env--", then the env
 	childExit   int
+
+	execs     []proc.Command                             // every Exec call
+	execFn    func(proc.Command) ([]byte, []byte, error) // the Exec response; nil is an error
+	secret    string                                     // what ReadSecret returns
+	secretErr error                                      // what ReadSecret fails with
+	stdin     string                                     // what Stdin holds
+	tty       bool                                       // StdinIsTerminal
+	paths     map[string]string                          // what LookPath finds, by name
 }
 
 func newFake(t *testing.T) *fake {
@@ -35,7 +44,7 @@ func (f *fake) sys() System {
 	return System{
 		Stdout: &f.out,
 		Stderr: &f.errOut,
-		Stdin:  strings.NewReader(""),
+		Stdin:  strings.NewReader(f.stdin),
 		Getenv: func(k string) string { return f.env[k] },
 		Environ: func() []string {
 			var env []string
@@ -53,6 +62,21 @@ func (f *fake) sys() System {
 			return f.childExit, nil
 		},
 		Version: "0.1.0",
+		Exec: func(c proc.Command) ([]byte, []byte, error) {
+			f.execs = append(f.execs, c)
+			if f.execFn == nil {
+				return nil, nil, errors.New("no exec configured")
+			}
+			return f.execFn(c)
+		},
+		LookPath: func(name string) (string, error) {
+			if p, ok := f.paths[name]; ok {
+				return p, nil
+			}
+			return "", fmt.Errorf("%s: not found", name)
+		},
+		ReadSecret:      func(string) (string, error) { return f.secret, f.secretErr },
+		StdinIsTerminal: func() bool { return f.tty },
 	}
 }
 
