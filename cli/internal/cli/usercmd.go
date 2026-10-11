@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -281,10 +282,11 @@ A request that does not hold to the rules is listed as not valid, and cannot be 
 			if err != nil {
 				return err
 			}
-			if s := syncStore(sys, 0, accessFetchTimeout); s.Offline {
+			s := syncStore(sys, 0, accessFetchTimeout)
+			if s.Offline {
 				fmt.Fprintln(sys.Stderr, "! The store's remote could not be reached: these are the requests as they were when it last was.")
 			}
-			all := pendingRequests(sys, p.Store())
+			all := pendingRequests(sys, p.Store(), s.Git && s.Status.Remote != "")
 			if len(all) == 0 {
 				fmt.Fprintln(sys.Stdout, "No pending requests.")
 			}
@@ -306,7 +308,7 @@ func (a *access) request(name string) (pending, error) {
 	if a.sync.Offline {
 		return pending{}, errors.New("The store's remote could not be reached, so the request cannot be read as it stands. Run this again when it can be.")
 	}
-	for _, q := range pendingRequests(a.sys, filepath.Dir(a.dir)) {
+	for _, q := range pendingRequests(a.sys, filepath.Dir(a.dir), a.sync.Git && a.sync.Status.Remote != "") {
 		if q.Name == name {
 			return q, nil
 		}
@@ -314,9 +316,15 @@ func (a *access) request(name string) (pending, error) {
 	return pending{}, fmt.Errorf("There is no request from %s. ezc user requests lists them.", name)
 }
 
-// deleteRequestBranch removes a request's branch from the remote.
-func (a *access) deleteRequestBranch(name string) error {
-	return storeGit(a.sys).DeleteRemoteBranch(a.sync.Dir, requestBranch+name, accessFetchTimeout)
+// deleteRequestBranch removes a request's branch from the remote, as long as it is still at the commit the request
+// was read at: a request pushed under the same name since then is left, with gitstore.ErrBranchMoved.
+func (a *access) deleteRequestBranch(q pending) error {
+	return storeGit(a.sys).DeleteRemoteBranch(a.sync.Dir, requestBranch+q.Name, q.Commit, accessFetchTimeout)
+}
+
+// requestArrived is what is said when a request's branch moved while its request was being answered.
+func requestArrived(name string) string {
+	return fmt.Sprintf("A new request named %s arrived in the meantime, so its branch %s was left. ezc user requests shows it.", name, requestBranch+name)
 }
 
 // dropRequest removes a request's file from the store and commits that alone as message, then pushes. A failure
@@ -358,7 +366,8 @@ func (a *access) dropRequest(name, message string) error {
 }
 
 func newUserApproveCmd(sys System) *cobra.Command {
-	return &cobra.Command{
+	var yes bool
+	cmd := &cobra.Command{
 		Use:   "approve <name>",
 		Short: "let whoever filed a request read the store",
 		Long: `Fetch from the store's remote, read the request filed under name as the remote holds it now, print it with its whole public key, then add that key to recipients.yaml, write the encryption policy and re-wrap every encrypted file, in one commit named ` + "`approve <name>`" + `, and push. Afterwards the request's branch is deleted, which closes its pull request.
@@ -366,6 +375,8 @@ func newUserApproveCmd(sys System) *cobra.Command {
 The request's branch is never merged: only its request file is read, so nothing else on the branch reaches the store. A request file that is in the store itself, because its pull request was merged, is removed in the same commit.
 
 Approving trusts a key that somebody else wrote down. Compare the key printed here, and by ` + "`ezc user requests`" + `, with the one the person gives you some other way before you run this. The host and the author are whatever the requester typed.
+
+On a terminal it asks ` + "`Approve <name>? [y/N]`" + ` after showing the request, and anything but y or yes changes nothing. Without a terminal it needs --yes. What was shown is what is added: the request is not read again after the answer.
 
 Needs this machine's key file, as ` + "`ezc user add`" + ` does, and refuses a name that is taken, a key that is registered and a request that is not valid. A failure puts the store back as it was; a push that fails leaves the commit and the branch.`,
 		Args: exactArgs(1, "a name"),
@@ -405,8 +416,20 @@ Needs this machine's key file, as ` + "`ezc user add`" + ` does, and refuses a n
 				}
 			}
 
-			// The key is shown before anything is changed.
+			if !already && !yes && !sys.StdinIsTerminal() {
+				return usagef("%s: say --yes to approve without being asked: there is no terminal to ask on. Try `%s`.", cmd.CommandPath(), helpFor(cmd))
+			}
+
+			// The key is shown before anything is changed, and q is what is added: nothing reads the request again.
 			showRequest(sys.Stdout, q)
+			if !already && !yes {
+				switch strings.ToLower((&asker{sys: sys, in: bufio.NewReader(sys.Stdin)}).ask("Approve " + name + "? [y/N] ")) {
+				case "y", "yes":
+				default:
+					fmt.Fprintln(sys.Stdout, "Not approved.")
+					return &ExitError{1}
+				}
+			}
 			branch := requestBranch + name
 			if already {
 				fmt.Fprintf(sys.Stdout, "✓ %s can already read the store\n", name)
@@ -423,9 +446,12 @@ Needs this machine's key file, as ` + "`ezc user add`" + ` does, and refuses a n
 				return err
 			}
 			if q.Branch {
-				if err := a.deleteRequestBranch(name); err != nil {
+				switch err := a.deleteRequestBranch(q); {
+				case errors.Is(err, gitstore.ErrBranchMoved):
+					fmt.Fprintf(sys.Stdout, "! %s\n", requestArrived(name))
+				case err != nil:
 					fmt.Fprintf(sys.Stdout, "! The request's branch %s could not be deleted (%s). Run ezc user approve %s again.\n", branch, gitReason(err), name)
-				} else {
+				default:
 					fmt.Fprintf(sys.Stdout, "✓ deleted the branch %s\n", branch)
 				}
 			}
@@ -433,13 +459,15 @@ Needs this machine's key file, as ` + "`ezc user add`" + ` does, and refuses a n
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "approve without being asked; needed when there is no terminal")
+	return cmd
 }
 
 func newUserDenyCmd(sys System) *cobra.Command {
 	return &cobra.Command{
 		Use:   "deny <name>",
 		Short: "refuse a request for access to the store",
-		Long: `Fetch from the store's remote, then remove the request filed under name: its branch is deleted from the remote, which closes its pull request, and a request file that is in the store itself is removed in a commit named ` + "`deny <name>`" + ` and pushed. recipients.yaml and the encrypted files are not touched, and a request that is not valid is removed like any other.
+		Long: `Fetch from the store's remote, then remove the request filed under name: a request file that is in the store itself is removed in a commit named ` + "`deny <name>`" + ` and pushed, and its branch is deleted from the remote, which closes its pull request. recipients.yaml and the encrypted files are not touched, and a request that is not valid is removed like any other.
 
 Needs this machine's key file and a key that recipients.yaml names, as every change to who can read the store does.`,
 		Args: exactArgs(1, "a name"),
@@ -456,15 +484,21 @@ Needs this machine's key file and a key that recipients.yaml names, as every cha
 			if err != nil {
 				return err
 			}
+			// The file first: when its commit fails nothing was changed, and the branch is still there to deny again.
+			if q.File {
+				if err := a.dropRequest(name, "deny "+name); err != nil {
+					return err
+				}
+			}
 			if q.Branch {
 				branch := requestBranch + name
-				if err := a.deleteRequestBranch(name); err != nil {
-					return fmt.Errorf("The request's branch %s could not be deleted (%s). Nothing was changed.", branch, gitReason(err))
+				switch err := a.deleteRequestBranch(q); {
+				case errors.Is(err, gitstore.ErrBranchMoved):
+					return errors.New(requestArrived(name))
+				case err != nil:
+					return fmt.Errorf("The request's branch %s could not be deleted (%s). Run ezc user deny %s again.", branch, gitReason(err), name)
 				}
 				fmt.Fprintf(sys.Stdout, "✓ deleted the branch %s\n", branch)
-			}
-			if q.File {
-				return a.dropRequest(name, "deny "+name)
 			}
 			return nil
 		},

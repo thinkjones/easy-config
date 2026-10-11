@@ -41,6 +41,7 @@ type fake struct {
 	noGit     bool                                       // git cannot be found
 	gitFail   string                                     // a git command with this argument fails
 	hostname  string                                     // System.Hostname; "" means test-host
+	execHook  func(proc.Command)                         // called before each git command, when set
 
 	t    *testing.T
 	gits []proc.Command // every git command Exec ran; they are not in execs
@@ -62,6 +63,9 @@ func newFake(t *testing.T) *fake {
 // runGit runs the real git, cut off from the user's config. Without git it answers as a machine that has none.
 func (f *fake) runGit(c proc.Command) ([]byte, []byte, error) {
 	f.gits = append(f.gits, c)
+	if f.execHook != nil {
+		f.execHook(c)
+	}
 	if f.noGit {
 		return nil, nil, exec.ErrNotFound
 	}

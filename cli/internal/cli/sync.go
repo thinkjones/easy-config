@@ -141,17 +141,19 @@ type pending struct {
 	Req    recipients.Request
 	Author string // the Git author of the commit that filed it; "" when git knows none
 	Branch bool   // on a request branch of origin
+	Commit string // the commit that branch was at when the request was read; "" when it could not be told
 	File   bool   // in the store's working tree
 	Err    error  // why it is not a valid request
 }
 
 // pendingRequests are the requests for access to the store in storeDir: the union, by name and sorted, of the request
 // branches of origin as of the last fetch and of the files in the working tree's requests folder. Of a branch only
-// its request file is read. A name that fails ValidName is left out entirely; a request that cannot be read or fails
+// its request file is read, at the commit the branch is at when this is called (pending.Commit), and origin is asked
+// only when remote is true: a store that is no git repo, or has no remote, has no branch. A name that fails ValidName is left out entirely; a request that cannot be read or fails
 // ParseRequest, or that its branch and the working tree hold differently, is kept with Err.
-func pendingRequests(sys System, storeDir string) []pending {
+func pendingRequests(sys System, storeDir string, remote bool) []pending {
 	g, valid := storeGit(sys), backendFor(sys).ValidRecipient
-	branches, files := requestNames(sys, storeDir, true)
+	branches, files := requestNames(sys, storeDir, remote)
 	// The author of a request that is only in the working tree is asked of origin's copy of the store's branch.
 	branch := ""
 	var all []pending
@@ -159,7 +161,12 @@ func pendingRequests(sys System, storeDir string) []pending {
 		q := pending{Name: name, Branch: slices.Contains(branches, name), File: slices.Contains(files, name)}
 		rel := ezcDir + "/" + recipients.RequestPath(name)
 		if q.Branch {
-			data, err := g.Show(storeDir, requestBranch+name, rel)
+			// Everything is read at one commit, which is also the one a later delete of the branch is held to.
+			var err error
+			var data []byte
+			if q.Commit, err = g.RemoteCommit(storeDir, requestBranch+name); err == nil {
+				data, err = g.ShowAt(storeDir, q.Commit, rel)
+			}
 			switch {
 			case errors.Is(err, fs.ErrNotExist):
 				q.Err = errors.New("its branch holds no request")
@@ -167,8 +174,8 @@ func pendingRequests(sys System, storeDir string) []pending {
 				q.Err = errors.New("it cannot be read from its branch")
 			default:
 				q.Req, q.Err = recipients.ParseRequest(name, data, valid)
+				q.Author, _ = g.LastAuthorAt(storeDir, q.Commit, rel)
 			}
-			q.Author, _ = g.LastAuthor(storeDir, requestBranch+name, rel)
 		}
 		if q.File {
 			path := filepath.Join(storeDir, filepath.FromSlash(rel))
@@ -185,7 +192,7 @@ func pendingRequests(sys System, storeDir string) []pending {
 			switch {
 			case !q.Branch:
 				q.Req, q.Err = req, err
-				if branch == "" {
+				if branch == "" && remote {
 					st, _ := g.Status(storeDir)
 					branch = st.Branch
 				}
@@ -300,7 +307,7 @@ func indicate(sys System, s storeSync) {
 		line = "uncommitted changes in " + s.Dir + alsoStands(st)
 	}
 	if n := len(s.Requests); n > 0 {
-		pending := count(n, "access request") + " pending: " + strings.Join(s.Requests, ", ")
+		pending := count(n, "access request") + " pending: " + someNames(s.Requests)
 		if line == "" {
 			line, colour = pending, amber
 		} else {
@@ -317,6 +324,16 @@ func indicate(sys System, s storeSync) {
 		}
 		say(amber, "store: origin could not be reached; "+checked)
 	}
+}
+
+// someNames is the first names of a list and how many more there are: whoever can push to the store can file any
+// number of requests, and the line is printed by every command.
+func someNames(names []string) string {
+	const shown = 5
+	if len(names) <= shown {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(names[:shown], ", "), len(names)-shown)
 }
 
 // alsoStands is what follows "uncommitted changes" when the store is also ahead, behind or diverged; "" when it is level.

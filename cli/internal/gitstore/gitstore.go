@@ -73,10 +73,21 @@ var (
 	ErrUnreachable = errors.New("the remote could not be reached")
 	// ErrBranchTaken is a branch the remote already has, holding other bytes than the ones to push.
 	ErrBranchTaken = errors.New("the remote already has that branch with other content")
+	// ErrBranchMoved is a branch of the remote that is no longer at the commit it was read at.
+	ErrBranchMoved = errors.New("the remote's branch has changed since it was read")
 )
 
 // allBranches is the refspec that maps every branch of origin to its remote-tracking branch.
 const allBranches = "+refs/heads/*:refs/remotes/origin/*"
+
+// A ref is always named in full. Git looks a short name up among the tags first, so a tag called origin/main
+// or ezc/join-sam, which anybody who can push can make, would stand in for the branch of that name.
+
+// tracking is the full name of the remote-tracking branch for a branch of origin.
+func tracking(branch string) string { return "refs/remotes/origin/" + branch }
+
+// head is the full name of a branch, here or on origin.
+func head(branch string) string { return "refs/heads/" + branch }
 
 // fixed is what every git call has in its environment: no password prompt,
 // messages in one language, and a path that is never a pattern.
@@ -192,15 +203,15 @@ func (g Git) remote(args ...string) []string {
 	return append([]string{"-c", "credential.helper=", "-c", "credential.helper=" + helper}, args...)
 }
 
-// Clone clones source into dir.
+// Clone clones source into dir, without its tags: ezc uses none.
 func (g Git) Clone(source, dir string) error {
-	_, err := g.run("", 0, g.remote("clone", "--", source, dir)...)
+	_, err := g.run("", 0, g.remote("clone", "--no-tags", "--", source, dir)...)
 	return err
 }
 
 // CloneShallow clones source into dir with only its latest commit.
 func (g Git) CloneShallow(source, dir string) error {
-	_, err := g.run("", 0, g.remote("clone", "--depth", "1", "--", source, dir)...)
+	_, err := g.run("", 0, g.remote("clone", "--no-tags", "--depth", "1", "--", source, dir)...)
 	return err
 }
 
@@ -285,13 +296,13 @@ func (g Git) hasIdentity(dir string) bool {
 
 // Fetch updates what is known of origin; a store with no origin has nothing
 // to fetch. It fetches every branch (a shallow clone tracks only one) and drops
-// remote-tracking branches the remote no longer has. A timeout or a network failure wraps ErrUnreachable.
+// remote-tracking branches the remote no longer has. It fetches no tag. A timeout or a network failure wraps ErrUnreachable.
 func (g Git) Fetch(dir string, timeout time.Duration) error {
 	remote, err := g.Remote(dir)
 	if err != nil || remote == "" {
 		return err
 	}
-	_, err = g.run(dir, timeout, g.remote("fetch", "--quiet", "--prune", "origin", allBranches)...)
+	_, err = g.run(dir, timeout, g.remote("fetch", "--quiet", "--prune", "--no-tags", "origin", allBranches)...)
 	if err != nil && !errors.Is(err, ErrNotInstalled) {
 		return fmt.Errorf("%w: %v", ErrUnreachable, err)
 	}
@@ -323,7 +334,7 @@ func (g Git) Status(dir string) (Status, error) {
 		return st, err
 	}
 
-	ref := "refs/remotes/origin/" + st.Branch
+	ref := tracking(st.Branch)
 	out, err = g.run(dir, 0, "for-each-ref", "--format=%(refname)", ref)
 	if err != nil {
 		return Status{}, err
@@ -385,7 +396,7 @@ func (g Git) Push(dir string) (int, error) {
 	if st.Ahead == 0 {
 		return 0, nil
 	}
-	if _, err := g.run(dir, 0, g.remote("push", "--quiet", "--set-upstream", "origin", st.Branch)...); err != nil {
+	if _, err := g.run(dir, 0, g.remote("push", "--quiet", "--set-upstream", "origin", head(st.Branch)+":"+head(st.Branch))...); err != nil {
 		return 0, err
 	}
 	return st.Ahead, nil

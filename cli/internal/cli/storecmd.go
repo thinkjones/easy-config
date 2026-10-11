@@ -158,7 +158,7 @@ With --due, print instead the secrets that need a new value because somebody who
 			}
 			requests := "none"
 			if len(s.Requests) > 0 {
-				requests = strings.Join(s.Requests, ", ")
+				requests = someNames(s.Requests)
 			}
 			remote := "none (local only)"
 			if st.Remote != "" {

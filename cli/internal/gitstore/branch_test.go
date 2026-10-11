@@ -109,7 +109,7 @@ func TestDeleteRemoteBranch(t *testing.T) {
 	if names, _ := g.RemoteBranches(a, "ezc/"); len(names) != 1 {
 		t.Fatalf("branches before: %v", names)
 	}
-	if err := g.DeleteRemoteBranch(a, "ezc/join-laptop", time.Minute); err != nil {
+	if err := g.DeleteRemoteBranch(a, "ezc/join-laptop", "", time.Minute); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if err := g.Fetch(a, time.Minute); err != nil {
@@ -118,7 +118,7 @@ func TestDeleteRemoteBranch(t *testing.T) {
 	if names, _ := g.RemoteBranches(a, "ezc/"); len(names) != 0 {
 		t.Fatalf("branches after: %v", names)
 	}
-	if err := g.DeleteRemoteBranch(a, "ezc/join-laptop", time.Minute); err != nil {
+	if err := g.DeleteRemoteBranch(a, "ezc/join-laptop", "", time.Minute); err != nil {
 		t.Fatalf("second delete: %v", err)
 	}
 }
@@ -222,7 +222,7 @@ func TestTokenIsNamedNeverGiven(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The fake answers "status" with nothing, so Push stops before pushing; ask for the push through the branch commands.
-	if err := g.DeleteRemoteBranch(dir, "ezc/join-x", time.Second); err != nil {
+	if err := g.DeleteRemoteBranch(dir, "ezc/join-x", "", time.Second); err != nil {
 		t.Fatal(err)
 	}
 	seen := map[string]bool{}
@@ -286,12 +286,188 @@ func TestNoTokenVarNoHelper(t *testing.T) {
 	dir := t.TempDir()
 	_ = g.Fetch(dir, time.Second)
 	_ = g.CloneShallow("https://example.invalid/o/r.git", filepath.Join(dir, "c"))
-	_ = g.DeleteRemoteBranch(dir, "b", time.Second)
+	_ = g.DeleteRemoteBranch(dir, "b", "", time.Second)
 	for _, args := range calls {
 		for _, a := range args {
 			if strings.Contains(a, "credential.helper") {
 				t.Fatalf("a helper without TokenVar: %v", args)
 			}
 		}
+	}
+}
+
+// hostileTags pushes, from a clone of bare, a commit that changes the request and adds a file, with tags on it that a
+// short name finds before the branch of the same name: origin/<branch>, <branch>, origin/main and main.
+func hostileTags(t *testing.T, g Git, bare, branch string) {
+	t.Helper()
+	c := clone(t, g, bare)
+	raw(t, g, c, "checkout", "--quiet", "-b", "hostile")
+	writeRequest(t, c, "key: hostile\n")
+	write(t, c, "hostile.txt", "theirs\n")
+	raw(t, g, c, "add", "--all")
+	raw(t, g, c, "-c", "user.name=Mallory", "commit", "--quiet", "-m", "hostile")
+	for _, tag := range []string{"origin/" + branch, branch, "origin/main", "main"} {
+		raw(t, g, c, "tag", tag)
+		raw(t, g, c, "push", "--quiet", "origin", "refs/tags/"+tag)
+	}
+}
+
+// A tag is found before a branch of the same short name, and anybody who can push can make one. Nothing gitstore
+// reads, compares against, rebases onto, pushes or deletes may be chosen by a tag.
+func TestTagsNeverStandInForABranch(t *testing.T) {
+	const branch = "ezc/join-laptop"
+	for _, held := range []bool{false, true} {
+		g, bare, a, b := twoClones(t)
+		writeRequest(t, a, "key: one\n")
+		if err := g.PushBranch(a, branch, "request", author, requestPath); err != nil {
+			t.Fatalf("PushBranch: %v", err)
+		}
+		hostileTags(t, g, bare, branch)
+		if held {
+			// A store that took the tags in some other way, or before ezc stopped fetching them.
+			raw(t, g, b, "fetch", "--quiet", "--tags", "origin")
+		}
+		if err := g.Fetch(b, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if got := raw(t, g, b, "tag", "--list"); (got != "") != held {
+			t.Fatalf("held %v: b's tags %q", held, got)
+		}
+
+		body, err := g.Show(b, branch, requestPath)
+		if err != nil || string(body) != "key: one\n" {
+			t.Fatalf("held %v: Show = %q, %v", held, body, err)
+		}
+		if who, err := g.LastAuthor(b, branch, requestPath); err != nil || strings.Contains(who, "Mallory") {
+			t.Fatalf("held %v: LastAuthor = %q, %v", held, who, err)
+		}
+		commit, err := g.RemoteCommit(b, branch)
+		if err != nil || commit != raw(t, g, bare, "rev-parse", "refs/heads/"+branch) {
+			t.Fatalf("held %v: RemoteCommit = %q, %v", held, commit, err)
+		}
+		if names, err := g.RemoteBranches(b, "ezc/join-"); err != nil || !slices.Equal(names, []string{branch}) {
+			t.Fatalf("held %v: RemoteBranches = %v, %v", held, names, err)
+		}
+
+		// Status and Pull count against, and bring in, the remote's main: one commit from a.
+		wantCounts(t, g, b, InSync, 0, 0)
+		commit1 := func(dir, name string) {
+			write(t, dir, name, "x\n")
+			if done, err := g.Commit(dir, "change "+name, author, name); err != nil || !done {
+				t.Fatalf("commit: %v, %v", done, err)
+			}
+		}
+		commit1(a, "theirs.txt")
+		if n, err := g.Push(a); err != nil || n != 1 {
+			t.Fatalf("held %v: Push = %d, %v", held, n, err)
+		}
+		commit1(b, "mine.txt")
+		if err := g.Fetch(b, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		wantCounts(t, g, b, Diverged, 1, 1)
+		res, err := g.Pull(b, time.Minute, func(string) bool { return false })
+		if err != nil || res.Commits != 1 {
+			t.Fatalf("held %v: Pull = %+v, %v", held, res, err)
+		}
+		if _, err := os.Stat(filepath.Join(b, "hostile.txt")); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("held %v: the tag's commit was pulled: %v", held, err)
+		}
+		if n, err := g.Push(b); err != nil || n != 1 {
+			t.Fatalf("held %v: Push = %d, %v", held, n, err)
+		}
+		if raw(t, g, bare, "rev-parse", "refs/heads/main") != raw(t, g, b, "rev-parse", "HEAD") {
+			t.Fatalf("held %v: the remote's main is not b's", held)
+		}
+
+		// A second request is pushed from the store that holds the tags, and the first is deleted.
+		if err := os.MkdirAll(filepath.Join(b, ".ezc", "requests"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, b, ".ezc/requests/desk.yaml", "key: two\n")
+		if err := g.PushBranch(b, "ezc/join-desk", "request", author, ".ezc/requests/desk.yaml"); err != nil {
+			t.Fatalf("held %v: PushBranch: %v", held, err)
+		}
+		if st := status(t, g, b); st.Branch != "main" || st.Dirty || st.Ahead != 0 {
+			t.Fatalf("held %v: b is not as before: %+v", held, st)
+		}
+		if err := g.DeleteRemoteBranch(b, branch, commit, time.Minute); err != nil {
+			t.Fatalf("held %v: DeleteRemoteBranch: %v", held, err)
+		}
+		if got := raw(t, g, bare, "for-each-ref", "--format=%(refname)", "refs/heads/ezc/"); got != "refs/heads/ezc/join-desk" {
+			t.Fatalf("held %v: the remote's request branches: %q", held, got)
+		}
+		if got := raw(t, g, bare, "for-each-ref", "--format=%(refname)", "refs/tags/"); strings.Count(got, "\n") != 3 {
+			t.Fatalf("held %v: the remote's tags: %q", held, got)
+		}
+	}
+}
+
+func TestCloneTakesNoTags(t *testing.T) {
+	g, bare, a, _ := twoClones(t)
+	raw(t, g, a, "tag", "origin/main")
+	raw(t, g, a, "push", "--quiet", "origin", "refs/tags/origin/main")
+	for _, cloneIt := range []func(source, dir string) error{g.Clone, g.CloneShallow} {
+		dir := filepath.Join(t.TempDir(), "c")
+		if err := cloneIt(bare, dir); err != nil {
+			t.Fatal(err)
+		}
+		if err := g.Fetch(dir, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if got := raw(t, g, dir, "tag", "--list"); got != "" {
+			t.Fatalf("tags %q", got)
+		}
+	}
+}
+
+// A branch is deleted only while it is at the commit it was read at.
+func TestDeleteRemoteBranchHoldsToTheCommitRead(t *testing.T) {
+	g, bare, a, b := twoClones(t)
+	writeRequest(t, a, "key: one\n")
+	if err := g.PushBranch(a, "ezc/join-laptop", "request", author, requestPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Fetch(b, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	read, err := g.RemoteCommit(b, "ezc/join-laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := g.ShowAt(b, read, requestPath)
+	if err != nil || string(body) != "key: one\n" {
+		t.Fatalf("ShowAt = %q, %v", body, err)
+	}
+	if who, err := g.LastAuthorAt(b, read, requestPath); err != nil || who == "" {
+		t.Fatalf("LastAuthorAt = %q, %v", who, err)
+	}
+
+	// Somebody else moves the branch.
+	c := clone(t, g, bare)
+	raw(t, g, c, "checkout", "--quiet", "-b", "ezc/join-laptop", "origin/ezc/join-laptop")
+	writeRequest(t, c, "key: two\n")
+	raw(t, g, c, "commit", "--quiet", "-am", "another")
+	raw(t, g, c, "push", "--quiet", "origin", "refs/heads/ezc/join-laptop")
+
+	if err := g.DeleteRemoteBranch(b, "ezc/join-laptop", read, time.Minute); !errors.Is(err, ErrBranchMoved) {
+		t.Fatalf("got %v, want ErrBranchMoved", err)
+	}
+	moved := raw(t, g, bare, "rev-parse", "refs/heads/ezc/join-laptop")
+	if moved == read {
+		t.Fatal("the branch did not move")
+	}
+	// What was read stays readable, whatever is fetched afterwards.
+	if err := g.Fetch(b, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if body, err := g.ShowAt(b, read, requestPath); err != nil || string(body) != "key: one\n" {
+		t.Fatalf("ShowAt after the fetch = %q, %v", body, err)
+	}
+	if err := g.DeleteRemoteBranch(b, "ezc/join-laptop", moved, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if got := raw(t, g, bare, "for-each-ref", "refs/heads/ezc/"); got != "" {
+		t.Fatalf("the branch is left: %q", got)
 	}
 }

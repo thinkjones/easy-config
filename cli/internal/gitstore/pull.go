@@ -66,7 +66,7 @@ func (g Git) Pull(dir string, timeout time.Duration, keepRemote func(path string
 		return PullResult{}, err
 	}
 	// The commit is pinned, so every step below sees the same remote.
-	remote, err := g.revParse(dir, "refs/remotes/origin/"+st.Branch)
+	remote, err := g.revParse(dir, tracking(st.Branch))
 	if err != nil {
 		return PullResult{}, err
 	}

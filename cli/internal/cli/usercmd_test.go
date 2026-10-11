@@ -133,7 +133,7 @@ func accessRegistry(t *testing.T, dir string) recipients.Registry {
 // accessLevel fails unless the remote's branch is at the store's last commit.
 func accessLevel(t *testing.T, x storeWriteFix) {
 	t.Helper()
-	stdout, stderr, err := x.g.Run(proc.Command{Dir: x.bare, Name: "git", Args: []string{"rev-parse", "main"}})
+	stdout, stderr, err := x.g.Run(proc.Command{Dir: x.bare, Name: "git", Args: []string{"rev-parse", "refs/heads/main"}})
 	if err != nil {
 		t.Fatalf("%v\n%s", err, stderr)
 	}
@@ -902,7 +902,7 @@ func TestUserRequestsAndApprove(t *testing.T) {
 	accessWant(t, j.a, shown, "user", "requests")
 
 	head := j.x.git("rev-parse", "HEAD")
-	accessWant(t, j.a, shown+"✓ approve sam\n✓ pushed to "+j.x.bare+"\n✓ deleted the branch "+joinBranch+"\nTell sam to run ezc store pull.\n", "user", "approve", "sam")
+	accessWant(t, j.a, shown+"✓ approve sam\n✓ pushed to "+j.x.bare+"\n✓ deleted the branch "+joinBranch+"\nTell sam to run ezc store pull.\n", "user", "approve", "sam", "--yes")
 	j.approved(head, "sam", public)
 	want := recipients.Recipient{Key: public, Kind: recipients.KindUser, Added: "2026-10-11", AddedBy: "gene"}
 	if got := accessRegistry(t, filepath.Join(j.x.store, ezcDir)).Recipients["sam"]; got.Key != want.Key || got.Kind != want.Kind || got.Owner != "" || got.Added != want.Added || got.AddedBy != want.AddedBy {
@@ -934,7 +934,7 @@ func TestUserRequestsAndApprove(t *testing.T) {
 func TestUserApproveAMachine(t *testing.T) {
 	j := joinMachines(t)
 	j.join(j.b, "--name", "gene-laptop", "--kind", "machine", "--owner", "gene")
-	if _, _, err := accessRun(j.a, "user", "approve", "gene-laptop"); err != nil {
+	if _, _, err := accessRun(j.a, "user", "approve", "gene-laptop", "--yes"); err != nil {
 		t.Fatal(err)
 	}
 	got := accessRegistry(t, filepath.Join(j.x.store, ezcDir)).Recipients["gene-laptop"]
@@ -956,7 +956,7 @@ func TestUserApproveTakesOnlyTheRequest(t *testing.T) {
 	})
 
 	head := j.x.git("rev-parse", "HEAD")
-	if _, _, err := accessRun(j.a, "user", "approve", "sam"); err != nil {
+	if _, _, err := accessRun(j.a, "user", "approve", "sam", "--yes"); err != nil {
 		t.Fatal(err)
 	}
 	j.approved(head, "sam", public)
@@ -1017,7 +1017,7 @@ func TestUserRequestsAreUntrusted(t *testing.T) {
 
 	// The one that is valid is approved as it was shown, and the one that is not is refused with deny.
 	head := j.x.git("rev-parse", "HEAD")
-	out, _, err := accessRun(j.a, "user", "approve", "esc")
+	out, _, err := accessRun(j.a, "user", "approve", "esc", "--yes")
 	if err != nil || !strings.HasPrefix(out, "esc\n") || strings.ContainsAny(out, "\x1b\x07") || !strings.Contains(out, "  host       ?]0;x?\n") {
 		t.Fatalf("approve esc: %v\n%q", err, out)
 	}
@@ -1049,7 +1049,7 @@ func TestUserApproveReadsTheRequestAgain(t *testing.T) {
 	j.byHand(joinBranch, joinBranch, map[string]string{recipients.RequestPath("sam"): string(q.Marshal())})
 
 	head := j.x.git("rev-parse", "HEAD")
-	out, _, err := accessRun(j.a, "user", "approve", "sam")
+	out, _, err := accessRun(j.a, "user", "approve", "sam", "--yes")
 	if err != nil || !strings.HasPrefix(out, "sam\n") || !strings.Contains(out, "  key        "+requestHand+"\n") || strings.Contains(out, first) {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -1075,7 +1075,7 @@ func TestUserApproveARequestMergedIntoTheStore(t *testing.T) {
 		if branchLeft {
 			want += "✓ deleted the branch " + joinBranch + "\n"
 		}
-		accessWant(t, j.a, want+"Tell sam to run ezc store pull.\n", "user", "approve", "sam")
+		accessWant(t, j.a, want+"Tell sam to run ezc store pull.\n", "user", "approve", "sam", "--yes")
 		j.approved(head, "sam", public, recipients.RequestPath("sam"))
 		missing(t, j.x.file(recipients.RequestPath("sam")))
 		if got := j.branches(); !slices.Equal(got, []string{"main"}) {
@@ -1105,12 +1105,14 @@ func TestUserApproveRefused(t *testing.T) {
 	request("gene", requestHand, "user", "")
 	request("twin", accessGene, "user", "")
 	request("laptop", requestHand, "machine", "nobody")
+	request("robo", "fake1ee05", "bot", "")
+	accessUntouched(t, j.a, j.x, "The request of robo is not valid (kind must be user or machine). Refuse it with ezc user deny robo.", "user", "approve", "robo")
 	accessUntouched(t, j.a, j.x, "gene is already a recipient.", "user", "approve", "gene")
 	accessUntouched(t, j.a, j.x, "that key is already registered to gene.", "user", "approve", "twin")
 	accessUntouched(t, j.a, j.x, "the owner of a machine must be a user among the recipients.", "user", "approve", "laptop")
 	accessUntouched(t, j.a, j.x, "There is no request from sam. ezc user requests lists them.", "user", "approve", "sam")
 	accessUntouched(t, j.a, j.x, "There is no request from sam. ezc user requests lists them.", "user", "deny", "sam")
-	if got := j.branches(); len(got) != 4 {
+	if got := j.branches(); len(got) != 5 {
 		t.Fatalf("branches %q", got)
 	}
 	for _, verb := range []string{"approve", "deny"} {
@@ -1144,7 +1146,7 @@ func TestUserApproveWhenThePushFails(t *testing.T) {
 	shown := requestShown(j.request(j.b), j.author(joinBranch))
 
 	j.a.gitFail = "--set-upstream"
-	out, _, err := accessRun(j.a, "user", "approve", "sam")
+	out, _, err := accessRun(j.a, "user", "approve", "sam", "--yes")
 	var unpushed *unpushedError
 	if !errors.As(err, &unpushed) {
 		t.Fatalf("got %v", err)
@@ -1165,7 +1167,7 @@ func TestUserApproveWhenThePushFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	head := j.x.git("rev-parse", "HEAD")
-	accessWant(t, j.a, shown+"✓ sam can already read the store\n✓ deleted the branch "+joinBranch+"\nTell sam to run ezc store pull.\n", "user", "approve", "sam")
+	accessWant(t, j.a, shown+"✓ sam can already read the store\n✓ deleted the branch "+joinBranch+"\nTell sam to run ezc store pull.\n", "user", "approve", "sam", "--yes")
 	if j.x.git("rev-parse", "HEAD") != head || !slices.Equal(j.branches(), []string{"main"}) {
 		t.Fatalf("a commit was made, or the branch is left: %q", j.branches())
 	}
@@ -1178,13 +1180,13 @@ func TestUserApproveWhenTheBranchCannotBeDeleted(t *testing.T) {
 	public := setupPublicKey(t, j.b)
 	shown := requestShown(j.request(j.b), j.author(joinBranch))
 	head := j.x.git("rev-parse", "HEAD")
-	j.a.gitFail = "--delete"
-	accessWant(t, j.a, shown+"✓ approve sam\n✓ pushed to "+j.x.bare+"\n! The request's branch "+joinBranch+" could not be deleted (made to fail). Run ezc user approve sam again.\nTell sam to run ezc store pull.\n", "user", "approve", "sam")
+	j.a.gitFail = ":refs/heads/" + joinBranch
+	accessWant(t, j.a, shown+"✓ approve sam\n✓ pushed to "+j.x.bare+"\n! The request's branch "+joinBranch+" could not be deleted (made to fail). Run ezc user approve sam again.\nTell sam to run ezc store pull.\n", "user", "approve", "sam", "--yes")
 	j.approved(head, "sam", public)
 
-	accessUntouched(t, j.a, j.x, "The request's branch "+joinBranch+" could not be deleted (made to fail). Nothing was changed.", "user", "deny", "sam")
+	accessUntouched(t, j.a, j.x, "The request's branch "+joinBranch+" could not be deleted (made to fail). Run ezc user deny sam again.", "user", "deny", "sam")
 	j.a.gitFail = ""
-	accessWant(t, j.a, shown+"✓ sam can already read the store\n✓ deleted the branch "+joinBranch+"\nTell sam to run ezc store pull.\n", "user", "approve", "sam")
+	accessWant(t, j.a, shown+"✓ sam can already read the store\n✓ deleted the branch "+joinBranch+"\nTell sam to run ezc store pull.\n", "user", "approve", "sam", "--yes")
 }
 
 func TestUserDeny(t *testing.T) {
@@ -1203,7 +1205,7 @@ func TestUserDeny(t *testing.T) {
 	j = joinMachines(t)
 	j.join(j.b, "--name", "sam")
 	j.merged()
-	accessWant(t, j.a, "✓ deleted the branch "+joinBranch+"\n✓ deny sam\n✓ pushed to "+j.x.bare+"\n", "user", "deny", "sam")
+	accessWant(t, j.a, "✓ deny sam\n✓ pushed to "+j.x.bare+"\n✓ deleted the branch "+joinBranch+"\n", "user", "deny", "sam")
 	if got := j.x.git("show", "--name-status", "--format=%s", "HEAD"); got != "deny sam\n\nD\t.ezc/"+recipients.RequestPath("sam") {
 		t.Fatalf("the commit: %q", got)
 	}
@@ -1215,14 +1217,16 @@ func TestUserDeny(t *testing.T) {
 	accessWant(t, j.a, requestNone, "user", "requests")
 }
 
-// A commit that fails puts the request's file back.
+// A commit that fails puts the request's file back, and the branch is still there.
 func TestUserDenyRestoresWhenTheCommitFails(t *testing.T) {
 	j := joinMachines(t)
 	j.join(j.b, "--name", "sam")
 	j.merged()
-	j.other("push", "--quiet", "origin", "--delete", joinBranch)
 	j.a.gitFail = "commit"
 	accessUntouched(t, j.a, j.x, "the change could not be committed: made to fail. Nothing was changed.", "user", "deny", "sam")
+	if got := j.branches(); !slices.Equal(got, []string{joinBranch, "main"}) {
+		t.Fatalf("branches %q", got)
+	}
 }
 
 // A store with no remote, or that is no git repo at all, has requests only as files somebody put there.
@@ -1237,12 +1241,11 @@ func TestUserApproveAndDenyWithoutARemote(t *testing.T) {
 			write(t, filepath.Join(dir, recipients.RequestPath("sam")), string(q.Marshal()))
 		}
 		if repo {
-			x := storeWriteFix{localStore(t, f)}
+			x := localStore(t, f)
 			files()
 			if _, err := x.g.Commit(x.store, "the store", gitstore.Author{}, ezcDir); err != nil {
 				t.Fatal(err)
 			}
-			defer x.wantClean()
 		} else {
 			files()
 		}
@@ -1252,9 +1255,14 @@ func TestUserApproveAndDenyWithoutARemote(t *testing.T) {
 		accessWant(t, f, requestNone, "user", "requests")
 
 		write(t, filepath.Join(dir, recipients.RequestPath("sam")), string(q.Marshal()))
-		accessWant(t, f, requestShown(q, "-")+"✓ approve sam\nTell sam to run ezc store pull.\n", "user", "approve", "sam")
+		accessWant(t, f, requestShown(q, "-")+"✓ approve sam\nTell sam to run ezc store pull.\n", "user", "approve", "sam", "--yes")
 		missing(t, filepath.Join(dir, recipients.RequestPath("sam")))
 		accessReaders(t, f, dir, accessGene, accessSam)
+		if repo {
+			if got := setupGitOut(t, f, "status", "--porcelain", "--untracked-files=all"); got != "" {
+				t.Fatalf("left uncommitted:\n%s", got)
+			}
+		}
 	}
 }
 
@@ -1268,11 +1276,126 @@ func TestUserApproveAKeyThatIsAlreadyRegistered(t *testing.T) {
 	}
 	j.merged()
 	want := shown + "✓ sam can already read the store\n✓ approve sam\n✓ pushed to " + j.x.bare + "\n✓ deleted the branch " + joinBranch + "\nTell sam to run ezc store pull.\n"
-	accessWant(t, j.a, want, "user", "approve", "sam")
+	accessWant(t, j.a, want, "user", "approve", "sam", "--yes")
 	if got := j.x.git("show", "--name-status", "--format=%s", "HEAD"); got != "approve sam\n\nD\t.ezc/"+recipients.RequestPath("sam") {
 		t.Fatalf("the commit: %q", got)
 	}
 	j.x.wantClean()
 	accessLevel(t, j.x)
 	accessWant(t, j.a, requestNone, "user", "requests")
+}
+
+// tagged pushes tags that a short name would find before sam's request branch, and before main: each points at a
+// commit whose request for sam holds another key.
+func (j joinFix) tagged() {
+	j.t.Helper()
+	q := recipients.Request{Name: "sam", Key: requestHand, Kind: "user", Host: "elsewhere", Requested: "2026-10-11"}
+	j.byHand("hostile", "main", map[string]string{recipients.RequestPath("sam"): string(q.Marshal()), "common.yaml": "NAME: theirs\n"})
+	for _, tag := range []string{"origin/" + joinBranch, joinBranch, "origin/main", "main"} {
+		j.other("tag", tag, "hostile")
+		j.other("push", "--quiet", "origin", "refs/tags/"+tag)
+	}
+}
+
+// A tag is found before a branch of the same short name. Whoever can push one must not thereby choose the key.
+func TestUserApproveReadsTheBranchAndNoTag(t *testing.T) {
+	j := joinMachines(t)
+	j.join(j.b, "--name", "sam")
+	public := setupPublicKey(t, j.b)
+	shown := requestShown(j.request(j.b), j.author("refs/heads/"+joinBranch))
+	j.tagged()
+	// A store that took the tags in before ezc stopped fetching them.
+	j.x.git("fetch", "--quiet", "--tags", "origin")
+	if got := j.x.git("tag", "--list"); !strings.Contains(got, "origin/"+joinBranch) {
+		t.Fatalf("a's tags: %q", got)
+	}
+
+	accessWant(t, j.a, shown, "user", "requests")
+	head := j.x.git("rev-parse", "HEAD")
+	accessWant(t, j.a, shown+"✓ approve sam\n✓ pushed to "+j.x.bare+"\n✓ deleted the branch "+joinBranch+"\nTell sam to run ezc store pull.\n", "user", "approve", "sam", "--yes")
+	j.approved(head, "sam", public)
+	if got := j.remote("for-each-ref", "--format=%(refname)", "refs/heads/"); got != "refs/heads/hostile\nrefs/heads/main" {
+		t.Fatalf("branches %q", got)
+	}
+	if got := readFile(t, j.x.file("common.yaml")); got != "NAME: n\n" {
+		t.Fatalf("common.yaml is now %q", got)
+	}
+}
+
+// On a terminal approve asks, after showing the request and before changing anything.
+func TestUserApproveAsks(t *testing.T) {
+	j := joinMachines(t)
+	j.join(j.b, "--name", "sam")
+	public := setupPublicKey(t, j.b)
+	shown := requestShown(j.request(j.b), j.author(joinBranch))
+
+	// Without a terminal there is nobody to ask.
+	out, errOut, err := accessRun(j.a, "user", "approve", "sam")
+	wantUsage(t, err, "say --yes to approve without being asked")
+	if out != "" || errOut != "" {
+		t.Fatalf("stdout %q, stderr %q", out, errOut)
+	}
+
+	j.a.tty = true
+	for _, answer := range []string{"n\n", "\n", "", "yes please\n"} {
+		j.a.stdin = answer
+		head, before := j.x.git("rev-parse", "HEAD"), setupSnapshot(t, filepath.Join(j.x.store, ezcDir))
+		out, errOut, err := accessRun(j.a, "user", "approve", "sam")
+		wantExit(t, err, 1)
+		if out != shown+"Not approved.\n" || errOut != "Approve sam? [y/N] " {
+			t.Fatalf("answer %q: stdout %q, stderr %q", answer, out, errOut)
+		}
+		if j.x.git("rev-parse", "HEAD") != head || !mapsEqual(before, setupSnapshot(t, filepath.Join(j.x.store, ezcDir))) || !slices.Equal(j.branches(), []string{joinBranch, "main"}) {
+			t.Fatalf("answer %q changed the store or the branch", answer)
+		}
+		j.x.wantClean()
+	}
+
+	j.a.stdin = "Y\n"
+	head := j.x.git("rev-parse", "HEAD")
+	out, errOut, err = accessRun(j.a, "user", "approve", "sam")
+	if want := shown + "✓ approve sam\n✓ pushed to " + j.x.bare + "\n✓ deleted the branch " + joinBranch + "\nTell sam to run ezc store pull.\n"; err != nil || out != want || errOut != "Approve sam? [y/N] " {
+		t.Fatalf("%v\nstdout %q\nstderr %q", err, out, errOut)
+	}
+	j.approved(head, "sam", public)
+}
+
+// What was shown is what is added: a request pushed under the name while the approver reads is neither registered
+// nor deleted unread.
+func TestUserApproveWhileAnotherRequestArrives(t *testing.T) {
+	j := joinMachines(t)
+	j.join(j.b, "--name", "sam")
+	public := setupPublicKey(t, j.b)
+	shown := requestShown(j.request(j.b), j.author(joinBranch))
+	later := recipients.Request{Name: "sam", Key: requestHand, Kind: "user", Host: "elsewhere", Requested: "2026-10-11"}
+	arrived := "A new request named sam arrived in the meantime, so its branch " + joinBranch + " was left. ezc user requests shows it."
+
+	// The branch moves once a's fetch is done: when a commits.
+	moved := false
+	j.a.execHook = func(c proc.Command) {
+		if !moved && c.Name == "git" && slices.Contains(c.Args, "commit") {
+			moved = true
+			j.byHand(joinBranch, joinBranch, map[string]string{recipients.RequestPath("sam"): string(later.Marshal())})
+		}
+	}
+	head := j.x.git("rev-parse", "HEAD")
+	accessWant(t, j.a, shown+"✓ approve sam\n✓ pushed to "+j.x.bare+"\n! "+arrived+"\nTell sam to run ezc store pull.\n", "user", "approve", "sam", "--yes")
+	j.a.execHook = nil
+	j.approved(head, "sam", public)
+	if got := j.branches(); !slices.Equal(got, []string{joinBranch, "main"}) {
+		t.Fatalf("branches %q", got)
+	}
+	// The one that arrived is listed, and is another's request under a name that is now taken.
+	accessWant(t, j.a, requestShown(later, j.author(joinBranch)), "user", "requests")
+	accessUntouched(t, j.a, j.x, "sam is already a recipient.", "user", "approve", "sam")
+}
+
+// Many requests do not make the line long.
+func TestSomeNames(t *testing.T) {
+	if got := someNames([]string{"a", "b", "c", "d", "e"}); got != "a, b, c, d, e" {
+		t.Fatalf("got %q", got)
+	}
+	if got := someNames([]string{"a", "b", "c", "d", "e", "f", "g"}); got != "a, b, c, d, e and 2 more" {
+		t.Fatalf("got %q", got)
+	}
 }
