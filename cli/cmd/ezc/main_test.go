@@ -63,3 +63,46 @@ func TestExitCodes(t *testing.T) {
 		})
 	}
 }
+
+func TestEnvAndRunEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	ezc := filepath.Join(dir, ".ezc")
+	if err := os.MkdirAll(ezc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"manifest.yaml":  "schemaVersion: v1\nrequired:\n  NAME: {type: str, desc: who}\n  SIZE: {type: int, min: 1, max: 9, desc: how many}\n",
+		"env.local.yaml": "SIZE: 12\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(ezc, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(args ...string) (stdout, stderr string, code int) {
+		cmd := exec.Command(binary, args...)
+		cmd.Dir = dir
+		cmd.Env = []string{"HOME=" + t.TempDir(), "EZC_HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}
+		var out, errOut bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &errOut
+		var exit *exec.ExitError
+		if err := cmd.Run(); errors.As(err, &exit) {
+			code = exit.ExitCode()
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		return out.String(), errOut.String(), code
+	}
+
+	out, errOut, code := run("env")
+	if code != 1 || out != "" || !strings.Contains(errOut, "12 is above the maximum of 9") {
+		t.Fatalf("env: exit %d stdout %q stderr %q", code, out, errOut)
+	}
+	if _, _, code := run("run", "--", "sh", "-c", "exit 3"); code != 3 {
+		t.Fatalf("run exit: %d", code)
+	}
+	out, errOut, code = run("run", "--", "sh", "-c", `printf %s "$SIZE"`)
+	if code != 0 || out != "12" {
+		t.Fatalf("run printf: exit %d stdout %q stderr %q", code, out, errOut)
+	}
+}

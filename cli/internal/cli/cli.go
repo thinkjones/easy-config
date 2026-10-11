@@ -100,6 +100,8 @@ Config
 				return nil
 			},
 		},
+		newEnvCmd(sys),
+		newRunCmd(sys),
 	)
 	return root
 }

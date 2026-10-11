@@ -1,7 +1,7 @@
 // ezc is easy config: one store for secrets and variables, layered into every
 // repo. Every command is Go code in internal/cli:
 //
-//	ezc version | help [command]
+//	ezc env [export] | run | version | help [command]
 //
 // Data lives in EZC_HOME. bin/ezc in the source checkout builds this binary
 // on demand. main only wires the process into cli.Run.

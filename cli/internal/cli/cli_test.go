@@ -105,3 +105,311 @@ func TestHelpListsConfig(t *testing.T) {
 		}
 	}
 }
+
+const m1 = `schemaVersion: v1
+required:
+  NAME: {type: str, desc: who}
+  SIZE: {type: int, min: 1, max: 9, desc: how many}
+`
+
+const empty = "schemaVersion: v1\nrequired: {}\n"
+
+// repo writes files under the working directory's .ezc; store writes them under the store's.
+func repo(t *testing.T, f *fake, files map[string]string) {
+	t.Helper()
+	for name, content := range files {
+		write(t, filepath.Join(f.wd, ".ezc", name), content)
+	}
+}
+
+func store(t *testing.T, f *fake, files map[string]string) {
+	t.Helper()
+	for name, content := range files {
+		write(t, filepath.Join(f.env["EZC_HOME"], "store", ".ezc", name), content)
+	}
+}
+
+// good is a repo and store that pass m1.
+func good(t *testing.T, f *fake) {
+	t.Helper()
+	store(t, f, map[string]string{"common.yaml": "NAME: n\n"})
+	repo(t, f, map[string]string{"manifest.yaml": m1, "env.local.yaml": "SIZE: 3\n", "env.prod.yaml": "SIZE: 4\n"})
+}
+
+func wantUsage(t *testing.T, err error, sub string) {
+	t.Helper()
+	var u *UsageError
+	if !errors.As(err, &u) || !strings.Contains(err.Error(), sub) {
+		t.Fatalf("want UsageError containing %q, got %v", sub, err)
+	}
+}
+
+func wantExit(t *testing.T, err error, code int) {
+	t.Helper()
+	var e *ExitError
+	if !errors.As(err, &e) || e.Code != code {
+		t.Fatalf("want ExitError{%d}, got %v", code, err)
+	}
+}
+
+func TestEnvPasses(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	if err := f.run("env"); err != nil {
+		t.Fatal(err)
+	}
+	if f.out.Len() != 0 || f.errOut.String() != "environment local ✓ 2 vars from 2 files\n" {
+		t.Fatalf("stdout %q stderr %q", f.out.String(), f.errOut.String())
+	}
+}
+
+func TestEnvFailsListsEveryProblem(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"common.yaml": "OTHER: x\n"})
+	repo(t, f, map[string]string{"manifest.yaml": m1, "env.local.yaml": "SIZE: 12\n"})
+	wantExit(t, f.run("env"), 1)
+	for _, want := range []string{"NAME — who", "not set", "SIZE — how many", "12 is above the maximum of 9"} {
+		if !strings.Contains(f.errOut.String(), want) {
+			t.Errorf("stderr lacks %q:\n%s", want, f.errOut.String())
+		}
+	}
+	if f.out.Len() != 0 {
+		t.Errorf("stdout %q", f.out.String())
+	}
+}
+
+func TestEnvNamedEnvironmentAndTypo(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	if err := f.run("env", "prod"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(f.errOut.String(), "environment prod ✓") {
+		t.Fatalf("got %q", f.errOut.String())
+	}
+	err := f.run("env", "prd")
+	if err == nil || !strings.Contains(err.Error(), `no environment "prd"`) || !strings.Contains(err.Error(), "Valid: local, prod") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestEnvFromEZC_ENVThenAPP_ENV(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	f.env["APP_ENV"] = "prod"
+	if err := f.run("env"); err != nil || !strings.HasPrefix(f.errOut.String(), "environment prod") {
+		t.Fatalf("APP_ENV: %v %q", err, f.errOut.String())
+	}
+	f.errOut.Reset()
+	f.env["EZC_ENV"] = "local"
+	if err := f.run("env"); err != nil || !strings.HasPrefix(f.errOut.String(), "environment local") {
+		t.Fatalf("EZC_ENV: %v %q", err, f.errOut.String())
+	}
+	f.errOut.Reset()
+	if err := f.run("env", "prod"); err != nil || !strings.HasPrefix(f.errOut.String(), "environment prod") {
+		t.Fatalf("arg: %v %q", err, f.errOut.String())
+	}
+}
+
+func TestEnvFromSubdirectory(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	f.wd = filepath.Join(f.wd, "a", "b")
+	if err := os.MkdirAll(f.wd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.run("env"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnvOutsideARepo(t *testing.T) {
+	f := newFake(t)
+	err := f.run("env")
+	if err == nil || !strings.Contains(err.Error(), "not in an ezc repo") || !strings.Contains(err.Error(), "ezc repo init") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestEnvWarnsWhenNoStore(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{"manifest.yaml": empty, "env.local.yaml": "A: b\n"})
+	if err := f.run("env"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.errOut.String(), "! no store at ") || !strings.Contains(f.errOut.String(), "ezc setup") {
+		t.Fatalf("got %q", f.errOut.String())
+	}
+}
+
+func TestEnvWarnsWhenCommonOnly(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"common.yaml": "A: b\n"})
+	repo(t, f, map[string]string{"manifest.yaml": empty, "env.prod.yaml": "A: c\n"})
+	if err := f.run("env"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.errOut.String(), "! no environment named and no env.local.yaml") {
+		t.Fatalf("got %q", f.errOut.String())
+	}
+}
+
+func TestEnvVerboseShowsNoValues(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"common.yaml": "NAME: topsecretvalue\n"})
+	repo(t, f, map[string]string{"manifest.yaml": m1, "env.local.yaml": "SIZE: 3\n"})
+	if err := f.run("env", "--verbose"); err != nil {
+		t.Fatal(err)
+	}
+	got := f.errOut.String()
+	if !strings.Contains(got, "NAME") || !strings.Contains(got, "Where each value came from") || strings.Contains(got, "topsecretvalue") {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestEnvInvalidManifest(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{"manifest.yaml": "schemaVersion: v2\nrequired: {}\n"})
+	err := f.run("env")
+	if err == nil || !strings.Contains(err.Error(), "manifest.yaml is invalid:") || !strings.Contains(err.Error(), "this ezc understands") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestEnvManifestFlag(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"common.yaml": "NAME: n\n"})
+	repo(t, f, map[string]string{"manifest.yaml": m1, "env.local.yaml": "SIZE: 3\n"})
+	other := t.TempDir()
+	write(t, filepath.Join(other, ".ezc", "manifest.yaml"), m1)
+	write(t, filepath.Join(other, ".ezc", "env.local.yaml"), "SIZE: 12\n")
+	wantExit(t, f.run("env", "-m", filepath.Join(other, ".ezc", "manifest.yaml")), 1)
+	if !strings.Contains(f.errOut.String(), "12 is above the maximum of 9") {
+		t.Fatalf("got %q", f.errOut.String())
+	}
+}
+
+func TestExportShell(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	if err := f.run("env", "export"); err != nil {
+		t.Fatal(err)
+	}
+	if f.out.String() != "export NAME='n'\nexport SIZE='3'\n" || f.errOut.Len() != 0 {
+		t.Fatalf("stdout %q stderr %q", f.out.String(), f.errOut.String())
+	}
+}
+
+func TestExportFormats(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	if err := f.run("env", "export", "--format", "dotenv"); err != nil {
+		t.Fatal(err)
+	}
+	if f.out.String() != "NAME=\"n\"\nSIZE=\"3\"\n" {
+		t.Fatalf("dotenv %q", f.out.String())
+	}
+	f.out.Reset()
+	if err := f.run("env", "export", "--format", "json"); err != nil {
+		t.Fatal(err)
+	}
+	if f.out.String() != "{\n  \"NAME\": \"n\",\n  \"SIZE\": \"3\"\n}\n" {
+		t.Fatalf("json %q", f.out.String())
+	}
+	f.out.Reset()
+	wantUsage(t, f.run("env", "export", "--format", "xml"), `unknown format "xml"`)
+	if f.out.Len() != 0 {
+		t.Fatalf("stdout %q", f.out.String())
+	}
+}
+
+func TestExportIsSilentWithoutAStore(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{"manifest.yaml": empty, "env.local.yaml": "A: b\n"})
+	if err := f.run("env", "export"); err != nil {
+		t.Fatal(err)
+	}
+	if f.errOut.Len() != 0 || f.out.String() != "export A='b'\n" {
+		t.Fatalf("stdout %q stderr %q", f.out.String(), f.errOut.String())
+	}
+}
+
+func TestExportPrintsNothingOnFailure(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{"manifest.yaml": empty, "env.local.yaml": "B: ok\nA: $NOPE\n"})
+	if err := f.run("env", "export"); err == nil {
+		t.Fatal("want error")
+	}
+	if f.out.Len() != 0 {
+		t.Fatalf("stdout %q", f.out.String())
+	}
+}
+
+func TestExportOutsideARepoExportsTheStore(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"common.yaml": "NAME: n\n"})
+	if err := f.run("env", "export"); err != nil {
+		t.Fatal(err)
+	}
+	if f.out.String() != "export NAME='n'\n" {
+		t.Fatalf("got %q", f.out.String())
+	}
+}
+
+func TestExportHelpWarnsAboutDotenv(t *testing.T) {
+	f := newFake(t)
+	if err := f.run("help", "env", "export"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.out.String(), "must not be sourced") {
+		t.Fatalf("got %q", f.out.String())
+	}
+}
+
+func TestRunPassesEnvironment(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	f.env["PATH"] = "/bin"
+	f.env["NAME"] = "old"
+	if err := f.run("run", "prod", "--", "printenv", "NAME"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.children) != 1 {
+		t.Fatalf("children %v", f.children)
+	}
+	call := f.children[0]
+	if call[0] != "printenv" || call[1] != "NAME" || call[2] != "--env--" {
+		t.Fatalf("call %v", call)
+	}
+	env := call[3:]
+	count := map[string]int{}
+	for _, e := range env {
+		count[e]++
+	}
+	for _, want := range []string{"NAME=n", "SIZE=4", "EZC_ENV=prod", "APP_ENV=prod", "PATH=/bin"} {
+		if count[want] != 1 {
+			t.Errorf("env lacks %q: %v", want, env)
+		}
+	}
+	if count["NAME=old"] != 0 {
+		t.Errorf("stale NAME in %v", env)
+	}
+}
+
+func TestRunReturnsChildExitCode(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	f.childExit = 7
+	wantExit(t, f.run("run", "--", "false"), 7)
+}
+
+func TestRunNeedsACommand(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	wantUsage(t, f.run("run"), "give a command after --")
+	wantUsage(t, f.run("run", "--"), "give a command after --")
+	wantUsage(t, f.run("run", "a", "b", "--", "x"), "ezc run")
+	if len(f.children) != 0 {
+		t.Fatal("ran a child")
+	}
+}
