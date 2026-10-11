@@ -173,13 +173,28 @@ func TestEnvFailsListsEveryProblem(t *testing.T) {
 	store(t, f, map[string]string{"common.yaml": "OTHER: x\n"})
 	repo(t, f, map[string]string{"manifest.yaml": m1, "env.local.yaml": "SIZE: 12\n"})
 	wantExit(t, f.run("env"), 1)
-	for _, want := range []string{"NAME — who", "not set", "SIZE — how many", "12 is above the maximum of 9"} {
+	for _, want := range []string{"NAME — who", "not set", "SIZE — how many", "above the maximum of 9"} {
 		if !strings.Contains(f.errOut.String(), want) {
 			t.Errorf("stderr lacks %q:\n%s", want, f.errOut.String())
 		}
 	}
 	if f.out.Len() != 0 {
 		t.Errorf("stdout %q", f.out.String())
+	}
+}
+
+func TestEnvNeverPrintsAFailingValue(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{
+		"manifest.yaml":  "schemaVersion: v1\nrequired:\n  DB_URL: {type: url, desc: the database}\n",
+		"env.local.yaml": "DB_URL: postgres://admin:hunter2@db/x\n",
+	})
+	wantExit(t, f.run("env"), 1)
+	if !strings.Contains(f.errOut.String(), "not a URL (must start with http:// or https://)") {
+		t.Errorf("stderr %q", f.errOut.String())
+	}
+	if strings.Contains(f.out.String(), "hunter2") || strings.Contains(f.errOut.String(), "hunter2") {
+		t.Errorf("value leaked: stdout %q stderr %q", f.out.String(), f.errOut.String())
 	}
 }
 
@@ -289,7 +304,7 @@ func TestEnvManifestFlag(t *testing.T) {
 	write(t, filepath.Join(other, ".ezc", "manifest.yaml"), m1)
 	write(t, filepath.Join(other, ".ezc", "env.local.yaml"), "SIZE: 12\n")
 	wantExit(t, f.run("env", "-m", filepath.Join(other, ".ezc", "manifest.yaml")), 1)
-	if !strings.Contains(f.errOut.String(), "12 is above the maximum of 9") {
+	if !strings.Contains(f.errOut.String(), "above the maximum of 9") {
 		t.Fatalf("got %q", f.errOut.String())
 	}
 }

@@ -49,7 +49,7 @@ func TestRequiredEmpty(t *testing.T) {
 
 func TestPlaceholder(t *testing.T) {
 	m := mf(t, "required:\n  A: {type: str, desc: a}\n")
-	if p := one(t, m, map[string]string{"A": "Replace-Me"}); p.Why != `still the placeholder "Replace-Me"` {
+	if p := one(t, m, map[string]string{"A": "Replace-Me"}); p.Why != `still the placeholder "replace-me"` {
 		t.Errorf("got %+v", p)
 	}
 }
@@ -83,21 +83,21 @@ func TestRequiredWhenNotMet(t *testing.T) {
 
 func TestIntNotInteger(t *testing.T) {
 	m := mf(t, "required:\n  N: {type: int, desc: n}\n")
-	if p := one(t, m, map[string]string{"N": "x"}); p.Why != `not an integer: "x"` {
+	if p := one(t, m, map[string]string{"N": "x"}); p.Why != "not an integer" {
 		t.Errorf("got %+v", p)
 	}
 }
 
 func TestIntBelowMin(t *testing.T) {
 	m := mf(t, "required:\n  N: {type: int, desc: n, min: 1}\n")
-	if p := one(t, m, map[string]string{"N": "0"}); p.Why != "0 is below the minimum of 1" {
+	if p := one(t, m, map[string]string{"N": "0"}); p.Why != "below the minimum of 1" {
 		t.Errorf("got %+v", p)
 	}
 }
 
 func TestIntAboveMax(t *testing.T) {
 	m := mf(t, "required:\n  N: {type: int, desc: n, max: 100}\n")
-	if p := one(t, m, map[string]string{"N": "101"}); p.Why != "101 is above the maximum of 100" {
+	if p := one(t, m, map[string]string{"N": "101"}); p.Why != "above the maximum of 100" {
 		t.Errorf("got %+v", p)
 	}
 }
@@ -109,25 +109,51 @@ func TestBool(t *testing.T) {
 			t.Errorf("%q: got %v", ok, ps)
 		}
 	}
-	if p := one(t, m, map[string]string{"B": "maybe"}); p.Why != `not a boolean: "maybe"` {
+	if p := one(t, m, map[string]string{"B": "maybe"}); p.Why != "not a boolean (use 1, 0, true, false, yes or no)" {
 		t.Errorf("got %+v", p)
 	}
 }
 
 func TestEnum(t *testing.T) {
 	m := mf(t, "required:\n  E: {type: enum, desc: e, values: [file, s3]}\n")
-	if p := one(t, m, map[string]string{"E": "slack"}); p.Why != `"slack" is not one of: file, s3` {
+	if p := one(t, m, map[string]string{"E": "slack"}); p.Why != "not one of: file, s3" {
 		t.Errorf("got %+v", p)
 	}
 }
 
 func TestURL(t *testing.T) {
 	m := mf(t, "required:\n  U: {type: url, desc: u}\n")
-	if p := one(t, m, map[string]string{"U": "ftp://x"}); p.Why != `not a URL: "ftp://x"` {
+	if p := one(t, m, map[string]string{"U": "ftp://x"}); p.Why != "not a URL (must start with http:// or https://)" {
 		t.Errorf("got %+v", p)
 	}
 	if ps := Run(m, res(map[string]string{"U": "https://x"})); len(ps) != 0 {
 		t.Errorf("got %v", ps)
+	}
+}
+
+// A failing value never appears in a problem or in the report.
+func TestProblemsNeverContainTheValue(t *testing.T) {
+	cases := []struct{ name, decl, value string }{
+		{"int", "{type: int, desc: d}", "hunter2"},
+		{"below min", "{type: int, desc: d, min: 90000}", "73141"},
+		{"above max", "{type: int, desc: d, max: 5}", "73141"},
+		{"bool", "{type: bool, desc: d}", "hunter2"},
+		{"enum", "{type: enum, desc: d, values: [file, s3]}", "hunter2"},
+		{"url", "{type: url, desc: d}", "postgres://admin:hunter2@db/x"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := res(map[string]string{"V": c.value})
+			ps := Run(mf(t, "required:\n  V: "+c.decl+"\n"), r)
+			if len(ps) != 1 {
+				t.Fatalf("want 1 problem, got %v", ps)
+			}
+			for _, out := range []string{ps[0].String(), Report(ps, r)} {
+				if strings.Contains(out, c.value) || strings.Contains(out, "hunter2") {
+					t.Errorf("value leaked: %q", out)
+				}
+			}
+		})
 	}
 }
 

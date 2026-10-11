@@ -95,7 +95,7 @@ func TestEnvAndRunEndToEnd(t *testing.T) {
 	}
 
 	out, errOut, code := run("env")
-	if code != 1 || out != "" || !strings.Contains(errOut, "12 is above the maximum of 9") {
+	if code != 1 || out != "" || !strings.Contains(errOut, "above the maximum of 9") {
 		t.Fatalf("env: exit %d stdout %q stderr %q", code, out, errOut)
 	}
 	if _, _, code := run("run", "--", "sh", "-c", "exit 3"); code != 3 {

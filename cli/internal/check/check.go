@@ -108,31 +108,34 @@ func whyMissing(present bool, value string) string {
 	case value == "":
 		return "set but empty"
 	default:
-		return fmt.Sprintf("still the placeholder %q", value)
+		return fmt.Sprintf("still the placeholder %q", strings.ToLower(value))
 	}
 }
 
 // ValidateValue applies the type. Exported so anything that checks a value
 // applies the SAME rules — two implementations of
 // "is this a valid int" is precisely the drift this tool exists to prevent.
+//
+// The reason NEVER contains the value: it is printed by `ezc env`, whose
+// output lands in CI logs, and a failing value is as likely a credential as not.
 func ValidateValue(v manifest.Var, value string) string {
 	switch v.Type {
 	case manifest.TypeInt:
 		n, err := strconv.Atoi(value)
 		if err != nil {
-			return fmt.Sprintf("not an integer: %q", value)
+			return "not an integer"
 		}
 		if v.Min != nil && n < *v.Min {
-			return fmt.Sprintf("%d is below the minimum of %d", n, *v.Min)
+			return fmt.Sprintf("below the minimum of %d", *v.Min)
 		}
 		if v.Max != nil && n > *v.Max {
-			return fmt.Sprintf("%d is above the maximum of %d", n, *v.Max)
+			return fmt.Sprintf("above the maximum of %d", *v.Max)
 		}
 	case manifest.TypeBool:
 		switch strings.ToLower(value) {
 		case "1", "0", "true", "false", "yes", "no":
 		default:
-			return fmt.Sprintf("not a boolean: %q", value)
+			return "not a boolean (use 1, 0, true, false, yes or no)"
 		}
 	case manifest.TypeEnum:
 		for _, allowed := range v.Values {
@@ -140,10 +143,10 @@ func ValidateValue(v manifest.Var, value string) string {
 				return ""
 			}
 		}
-		return fmt.Sprintf("%q is not one of: %s", value, strings.Join(v.Values, ", "))
+		return "not one of: " + strings.Join(v.Values, ", ")
 	case manifest.TypeURL:
 		if !strings.HasPrefix(value, "http://") && !strings.HasPrefix(value, "https://") {
-			return fmt.Sprintf("not a URL: %q", value)
+			return "not a URL (must start with http:// or https://)"
 		}
 	}
 	return ""
