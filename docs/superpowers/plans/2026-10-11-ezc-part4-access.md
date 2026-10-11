@@ -270,3 +270,16 @@
 - [ ] **Step 3:** Version `0.4.0`. README: the command table gains every command of this part; "Known limits" loses the same-key-file limit and gains: repos are not re-wrapped after an access change until part 5; `--repo` is not checked against a registry until part 5. AGENTS.md map: `recipients` (requests, due, apply), `ghcli`, the new command files.
 - [ ] **Step 4:** Run the gate, the schema check and both greps from the constraints; all pass, both greps print nothing.
 - [ ] **Step 5:** Commit `feat: ezc 0.4.0 — access: join, users, bots and CI`.
+
+### Task 13: revamp the docs (added by the user during execution)
+
+**Files:**
+- Modify: `README.md`; Create or modify: files under `docs/` other than `docs/superpowers/` (which is history and stays as it is)
+
+Run after Task 12, by the controller in the main session (the skills below are session skills), before the whole-branch review.
+
+- [ ] **Step 1:** Invoke the `four-signals-design` skill and the beautiful-README skill (find its exact name in the session's skill list; if there is none by that name, say so to the user and use `four-signals-design` alone) and follow them for the README and the user docs.
+- [ ] **Step 2:** Revamp `README.md`: what ezc is and who it is for in the first screen, a quick start that works as written, the command table, then the reference sections that exist today. Every command, flag, file name and message quoted must be true of the code at that commit: check each against `ezc help` output and the tests, not against the old README.
+- [ ] **Step 3:** Keep what the repo's rules require: prose one line per paragraph; no value or key in any example except an obviously fake one; `ezc doctor` output never names the encryption tool; the name rule for `cli/` is unchanged. This is a public repo under its own name: the skill's design language is applied, but no other brand's name, logo or product is introduced into the docs unless the user asks for it.
+- [ ] **Step 4:** Run every command shown in the quick start by hand in a temporary home with the built binary; fix the docs or report the bug.
+- [ ] **Step 5:** Run the gate and both greps; commit `docs: revamp the README and user docs`.
