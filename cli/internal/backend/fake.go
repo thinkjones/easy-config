@@ -1,7 +1,9 @@
 package backend
 
 import (
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -220,6 +222,67 @@ func writeFake(path string, pairs []Pair) error {
 	_, werr := tmp.WriteString(sb.String())
 	if cerr := tmp.Close(); werr == nil {
 		werr = cerr
+	}
+	if werr != nil {
+		return fmt.Errorf("%s: %w", path, werr)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return nil
+}
+
+const (
+	fakePublicPrefix  = "fake1"
+	fakePrivatePrefix = "FAKE-KEY-"
+)
+
+func (f *Fake) NewKey() (string, []byte, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", nil, err
+	}
+	h := hex.EncodeToString(b)
+	return fakePublicPrefix + h, []byte(fakePrivatePrefix + h + "\n"), nil
+}
+
+func (f *Fake) PublicKey(keyFile string) (string, error) {
+	data, err := os.ReadFile(keyFile)
+	if err != nil {
+		return "", fmt.Errorf("%s: no key file: %w", keyFile, ErrNoKey)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if h, ok := strings.CutPrefix(strings.TrimSpace(line), fakePrivatePrefix); ok {
+			return fakePublicPrefix + h, nil
+		}
+	}
+	return "", fmt.Errorf("%s: holds no key: %w", keyFile, ErrNoKey)
+}
+
+func (f *Fake) WritePolicy(dir string, recipients []string) error {
+	if len(recipients) == 0 {
+		return fmt.Errorf("%s: no recipients to write a policy for", dir)
+	}
+	return writeFileAtomic(filepath.Join(dir, FakePolicy), []byte(strings.Join(recipients, "\n")+"\n"))
+}
+
+func (f *Fake) ToolHint(goos string) string { return "Install the fake tool." }
+
+func (f *Fake) BrewFormula() string { return "fake-tool" }
+
+// writeFileAtomic replaces the file through a temporary file in the same folder and a rename.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".fake-*")
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	defer os.Remove(tmp.Name())
+	_, werr := tmp.Write(data)
+	if cerr := tmp.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Chmod(tmp.Name(), 0o644)
 	}
 	if werr != nil {
 		return fmt.Errorf("%s: %w", path, werr)
