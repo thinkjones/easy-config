@@ -1591,3 +1591,28 @@ func TestUserRotateRefusals(t *testing.T) {
 	f.env["SOPS_AGE_KEY"] = "text"
 	accessUntouched(t, f, x, "The key file is set by SOPS_AGE_KEY; ezc cannot change it. Unset it, or rotate by hand.", "user", "rotate")
 }
+
+// A store that cannot be put back may hold files only the new key opens: the new key file stays, and the message names both.
+func TestUserRotateKeepsTheNewKeyWhenTheStoreCannotBePutBack(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	write(t, filepath.Join(x.store, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n")
+	if err := os.Chmod(filepath.Join(x.store, ".git", "hooks", "pre-commit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.gitFail = "reset"
+	_, errOut, err := accessRun(f, "user", "rotate")
+	var unchanged *unchangedError
+	fresh := rotateNew(f, "")
+	if err == nil || errors.As(err, &unchanged) || !strings.HasPrefix(err.Error(), "The store could not be put back. Your new key is in "+fresh+" and your old key in "+setupKeyFile(f)+"; keep both until ezc doctor is clean.") {
+		t.Fatalf("got %v", err)
+	}
+	info, statErr := os.Stat(fresh)
+	if statErr != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("new key file: %v %v", info, statErr)
+	}
+	private := strings.TrimSpace(readFile(t, fresh))
+	if strings.Contains(err.Error()+errOut+f.out.String(), private) {
+		t.Fatal("a key was printed")
+	}
+}

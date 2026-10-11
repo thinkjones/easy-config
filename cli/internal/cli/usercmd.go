@@ -516,11 +516,11 @@ Needs this machine's key file and a key that recipients.yaml names, as every cha
 	}
 }
 
+var datedKeyFile = regexp.MustCompile(`-\d{8}(-\d+)?$`)
+
 // freshKeyFile is the path of this machine's next key file: the old one's name without its extension, a dash and
 // today's date, and -2, -3… when that is taken. It lies beside the old file. The date and number a rotation added
 // are not stacked again: keys-20261011.txt rotates to keys-20261011-2.txt.
-var datedKeyFile = regexp.MustCompile(`-\d{8}(-\d+)?$`)
-
 func freshKeyFile(old string, today string) (string, error) {
 	ext := filepath.Ext(old)
 	base := datedKeyFile.ReplaceAllString(strings.TrimSuffix(old, ext), "") + "-" + today
@@ -567,6 +567,9 @@ Needs this machine's key file, as every change to who can read the store does, a
 				return err
 			}
 			old, _ := keyFileInUse(sys)
+			if old == "" {
+				return errors.New("An access change needs a key file, and this machine uses none. Run this on a machine that keeps its key in a file.")
+			}
 			p, err := paths.Resolve(sys.Getenv, sys.GOOS)
 			if err != nil {
 				return err
@@ -597,10 +600,15 @@ Needs this machine's key file, as every change to who can read the store does, a
 			saved := false
 			giveUp := func(err error) error {
 				if saved {
+					var rerr error
 					if had {
-						os.WriteFile(cfgPath, prev, 0o644)
-					} else {
-						os.Remove(cfgPath)
+						rerr = os.WriteFile(cfgPath, prev, 0o644)
+					} else if rerr = os.Remove(cfgPath); errors.Is(rerr, fs.ErrNotExist) {
+						rerr = nil
+					}
+					if rerr != nil {
+						// config.toml may still name the new file, so it stays.
+						return fmt.Errorf("%s. %s could not be put back; it may name %s, which was kept.", strings.TrimSuffix(err.Error(), "."), cfgPath, fresh)
 					}
 				}
 				os.Remove(fresh)
@@ -636,8 +644,15 @@ Needs this machine's key file, as every change to who can read the store does, a
 			}
 			err = a.apply(c)
 			var unpushed *unpushedError
-			if err != nil && !errors.As(err, &unpushed) {
+			var unchanged *unchangedError
+			switch {
+			case err == nil || errors.As(err, &unpushed):
+			case errors.As(err, &unchanged):
+				// The store is proven back as it was.
 				return giveUp(err)
+			default:
+				// The store may hold files only the new key opens: both keys stay.
+				return fmt.Errorf("The store could not be put back. Your new key is in %s and your old key in %s; keep both until ezc doctor is clean. %w", fresh, old, err)
 			}
 			// A commit that was not pushed is made all the same: the registry here holds the new key.
 			sayDue(sys.Stdout, was, list)
