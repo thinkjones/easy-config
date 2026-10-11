@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
+	"github.com/thinkjones/easy-config/cli/internal/manifest"
 )
 
 // DefaultEnv applies when no environment is named. It must be the inert one:
@@ -114,20 +115,6 @@ func Envs(dirs ...string) ([]string, error) {
 	return names, nil
 }
 
-// isVarName reports whether name is a shell identifier. Emitters write names
-// unquoted, so nothing else may reach them.
-func isVarName(name string) bool {
-	if name == "" {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		if !isRefChar(name[i], i == 0) {
-			return false
-		}
-	}
-	return true
-}
-
 func isDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
@@ -209,7 +196,8 @@ func Load(o Options) (Result, error) {
 		// therefore flows one direction only, which is what makes a cycle
 		// impossible to write rather than something to detect.
 		for _, pair := range pairs {
-			if !isVarName(pair.Name) {
+			// Emitters write names unquoted, so nothing else may reach them.
+			if !manifest.ValidName(pair.Name) {
 				return res, fmt.Errorf("%s: %q is not a valid variable name; use letters, digits and underscores, and do not start with a digit.", s.Path, pair.Name)
 			}
 			if slices.Contains(SelectorVars, pair.Name) {

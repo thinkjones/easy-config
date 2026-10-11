@@ -129,7 +129,7 @@
       },
       "description": "variables whose absence turns a feature off; never defaulted",
       "propertyNames": {
-        "pattern": "^[A-Z][A-Z0-9_]*$"
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
       },
       "type": "object"
     },
@@ -254,7 +254,7 @@
       },
       "description": "variables that must be set and non-empty; ezc env fails without them",
       "propertyNames": {
-        "pattern": "^[A-Z][A-Z0-9_]*$"
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
       },
       "type": "object"
     },

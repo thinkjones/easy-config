@@ -24,6 +24,12 @@ import (
 // dozen lines. Adding a package to read environment variables is not a trade
 // most repos want forced on them.
 func Python(m manifest.Manifest, manifestPath string) ([]byte, error) {
+	for _, e := range m.All() {
+		if pythonKeywords[e.Name] {
+			return nil, fmt.Errorf("cannot generate Python: %s is a Python keyword", e.Name)
+		}
+	}
+
 	var b bytes.Buffer
 
 	p := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -217,6 +223,25 @@ func pyType(v manifest.Var) string {
 	}
 }
 
+// pythonKeywords are Python 3's reserved words, none of which can name a field.
+// The soft keywords (match, case, type, _) can, so they are not here.
+var pythonKeywords = map[string]bool{
+	"False": true, "None": true, "True": true, "and": true, "as": true, "assert": true,
+	"async": true, "await": true, "break": true, "class": true, "continue": true,
+	"def": true, "del": true, "elif": true, "else": true, "except": true, "finally": true,
+	"for": true, "from": true, "global": true, "if": true, "import": true, "in": true,
+	"is": true, "lambda": true, "nonlocal": true, "not": true, "or": true, "pass": true,
+	"raise": true, "return": true, "try": true, "while": true, "with": true, "yield": true,
+}
+
+// escapeDoc makes s safe between triple quotes, where it still reads as s: a
+// backslash is doubled, a """ cannot close the docstring, and a final " cannot
+// join the closing quotes.
 func escapeDoc(s string) string {
-	return strings.ReplaceAll(s, `"""`, `\"\"\"`)
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"""`, `\"\"\"`)
+	if strings.HasSuffix(s, `"`) {
+		s = s[:len(s)-1] + `\"`
+	}
+	return s
 }

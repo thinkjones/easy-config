@@ -35,6 +35,11 @@ func (m Manifest) Validate() []error {
 
 	for _, e := range m.All() {
 		v := e.Var
+		// The name is written unquoted into shell and generated code, and a
+		// values file can only supply a name that passes the same rule.
+		if !ValidName(e.Name) {
+			errs = append(errs, fmt.Errorf("%q: not a valid variable name; use letters, digits and underscores, and do not start with a digit", e.Name))
+		}
 		// 2. Belt and braces with the schema, so `ezc manifest validate` is useful
 		//    on its own for anyone whose editor is not schema-aware.
 		if !slices.Contains(AllTypes(), v.Type) {

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -229,4 +231,62 @@ func TestUnknownType(t *testing.T) {
 
 func TestMissingType(t *testing.T) {
 	expectErr(t, "schemaVersion: v1\nrequired:\n  A: {desc: d}\n", `A: unknown type "" — use str, int, bool, secret, url, path or enum`)
+}
+
+func TestValidName(t *testing.T) {
+	for _, ok := range []string{"A", "_A", "a_b9", "class", "API_URL"} {
+		if !ValidName(ok) {
+			t.Errorf("%q should be valid", ok)
+		}
+	}
+	for _, bad := range []string{"", "9A", "my-var", "A B", "A\nB", "É", "A="} {
+		if ValidName(bad) {
+			t.Errorf("%q should be invalid", bad)
+		}
+	}
+}
+
+func TestNamePatternAgreesWithValidName(t *testing.T) {
+	re := regexp.MustCompile(NamePattern)
+	for _, s := range []string{"A", "_A", "a_b9", "", "9A", "my-var", "A B", "É", "A=", "class"} {
+		if re.MatchString(s) != ValidName(s) {
+			t.Errorf("%q: pattern says %v, ValidName says %v", s, re.MatchString(s), ValidName(s))
+		}
+	}
+}
+
+func TestInvalidNames(t *testing.T) {
+	const why = ": not a valid variable name; use letters, digits and underscores, and do not start with a digit"
+	for _, name := range []string{"my-var", "X: int = 1\n    Y", "", "1ABC"} {
+		for _, table := range []string{"required", "optional"} {
+			text := "schemaVersion: v1\nrequired: {}\n" + table + ":\n  " + strconv.Quote(name) + ": {type: str, desc: d}\n"
+			if table == "required" {
+				text = "schemaVersion: v1\nrequired:\n  " + strconv.Quote(name) + ": {type: str, desc: d}\n"
+			}
+			expectErr(t, text, strconv.Quote(name)+why)
+		}
+	}
+	if got := validate(t, "schemaVersion: v1\nrequired:\n  class: {type: str, desc: d}\n  _ok: {type: str, desc: d}\n"); got != "" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestJSONSchemaNamePattern(t *testing.T) {
+	b, err := JSONSchema("https://example/s.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s struct {
+		Properties map[string]struct {
+			PropertyNames struct{ Pattern string }
+		}
+	}
+	if err := json.Unmarshal(b, &s); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"required", "optional"} {
+		if got := s.Properties[table].PropertyNames.Pattern; got != NamePattern {
+			t.Errorf("%s: pattern %q, want %q", table, got, NamePattern)
+		}
+	}
 }

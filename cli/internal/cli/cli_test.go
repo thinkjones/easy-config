@@ -553,6 +553,37 @@ func TestCodegenRefusesInvalidManifest(t *testing.T) {
 	}
 }
 
+func TestInvalidNameRefusedByValidateAndCodegen(t *testing.T) {
+	for _, args := range [][]string{{"manifest", "validate"}, {"codegen", "python"}, {"env"}} {
+		f := newFake(t)
+		repo(t, f, map[string]string{"manifest.yaml": "schemaVersion: v1\nrequired:\n  my-var: {type: str, desc: d}\n  \"X: int = 1\\n    Y\": {type: str, desc: d}\n"})
+		err := f.run(args...)
+		if err == nil || !strings.Contains(err.Error(), `"my-var": not a valid variable name`) || !strings.Contains(err.Error(), `"X: int = 1\n    Y": not a valid variable name`) {
+			t.Errorf("%v: got %v", args, err)
+		}
+		if f.out.Len() != 0 {
+			t.Errorf("%v: stdout %q", args, f.out.String())
+		}
+	}
+}
+
+func TestPythonKeywordPassesValidateAndFailsCodegen(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{"manifest.yaml": "schemaVersion: v1\nrequired:\n  class: {type: str, desc: d}\n"})
+	if err := f.run("manifest", "validate"); err != nil {
+		t.Fatal(err)
+	}
+	f.out.Reset()
+	out := filepath.Join(t.TempDir(), "cfg.py")
+	err := f.run("codegen", "python", "-o", out)
+	if err == nil || err.Error() != "cannot generate Python: class is a Python keyword" {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Stat(out); err == nil || f.out.Len() != 0 {
+		t.Fatalf("something was generated: stdout %q", f.out.String())
+	}
+}
+
 func TestCodegenUnknownLanguage(t *testing.T) {
 	f := newFake(t)
 	wantUsage(t, f.run("codegen", "rust"), `unknown action "rust"`)

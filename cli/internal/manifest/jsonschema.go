@@ -63,12 +63,12 @@ func JSONSchema(schemaID string) ([]byte, error) {
 		},
 	}
 
-	// Variable names are shell identifiers, upper snake case by convention.
+	// Variable names are shell identifiers; Validate applies the same rule.
 	varMap := func(desc string) obj {
 		return obj{
 			"type":                 "object",
 			"description":          desc,
-			"propertyNames":        obj{"pattern": "^[A-Z][A-Z0-9_]*$"},
+			"propertyNames":        obj{"pattern": NamePattern},
 			"additionalProperties": varSchema,
 		}
 	}

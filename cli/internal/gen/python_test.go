@@ -2,6 +2,7 @@ package gen
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"os"
 	"os/exec"
@@ -89,5 +90,76 @@ func TestGoldenIsValidPython(t *testing.T) {
 	out, err := exec.Command(py, "-c", "import ast,sys; ast.parse(open(sys.argv[1]).read())", path).CombinedOutput()
 	if err != nil {
 		t.Errorf("golden is not valid Python: %v\n%s", err, out)
+	}
+}
+
+func TestPythonKeywordNameIsAnError(t *testing.T) {
+	for _, name := range []string{"class", "def", "None", "async", "lambda"} {
+		m := manifest.Manifest{SchemaVersion: "v1", Required: map[string]manifest.Var{name: {Type: manifest.TypeStr, Desc: "d"}}}
+		out, err := Python(m, ".ezc/manifest.yaml")
+		if err == nil || err.Error() != "cannot generate Python: "+name+" is a Python keyword" {
+			t.Errorf("%s: got %v", name, err)
+		}
+		if out != nil {
+			t.Errorf("%s: generated %d bytes", name, len(out))
+		}
+	}
+	// Soft keywords are ordinary names in an annotation.
+	m := manifest.Manifest{SchemaVersion: "v1", Optional: map[string]manifest.Var{"match": {Type: manifest.TypeStr, Desc: "d"}, "type": {Type: manifest.TypeStr, Desc: "d"}}}
+	if _, err := Python(m, ".ezc/manifest.yaml"); err != nil {
+		t.Errorf("soft keywords: %v", err)
+	}
+}
+
+// A description is free text; whatever it holds, the docstring must hold the same text and the file must parse.
+func TestDescriptionsAreSafeInDocstrings(t *testing.T) {
+	py, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not on PATH")
+	}
+	descs := map[string]string{
+		"A": `ends with "`,
+		"B": `ends with \`,
+		"C": `has """ inside`,
+		"D": `ends with \"`,
+		"E": `ends with ""`,
+		"F": `a \n that is not a newline, and """"`,
+	}
+	m := manifest.Manifest{SchemaVersion: "v1", Required: map[string]manifest.Var{}}
+	for name, desc := range descs {
+		m.Required[name] = manifest.Var{Type: manifest.TypeStr, Desc: desc}
+	}
+	src, err := Python(m, ".ezc/manifest.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Prints the docstring after each field of class Env, as JSON.
+	const script = `
+import ast, json, sys
+tree = ast.parse(sys.stdin.read())
+env = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Env")
+docs, last = {}, None
+for n in env.body:
+    if isinstance(n, ast.AnnAssign):
+        last = n.target.id
+    elif isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and last:
+        docs[last] = n.value.value
+        last = None
+json.dump(docs, sys.stdout)
+`
+	cmd := exec.Command(py, "-c", script)
+	cmd.Stdin = bytes.NewReader(src)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("generated code is not valid Python: %v\n%s", err, out)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	for name, desc := range descs {
+		if got[name] != desc {
+			t.Errorf("%s: docstring %q, want %q", name, got[name], desc)
+		}
 	}
 }

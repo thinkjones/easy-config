@@ -15,6 +15,27 @@ import "fmt"
 // validator treats absent optional fields as unset.
 const SchemaVersion = "v1"
 
+// NamePattern is the one rule for a variable's name, in the manifest and in a
+// values file: a shell identifier. ValidName applies it.
+const NamePattern = "^[A-Za-z_][A-Za-z0-9_]*$"
+
+// ValidName reports whether s matches NamePattern.
+func ValidName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c == '_':
+		case c >= '0' && c <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 type VarType string
 
 const (
