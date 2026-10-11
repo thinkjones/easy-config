@@ -97,6 +97,24 @@ func storePathsLoose(sys System) (p paths.Paths, explicit bool, err error) {
 	return p, sys.Getenv("EZC_STORE") != "", err
 }
 
+// encryptedFiles are the names of the encrypted values files in a .ezc folder, sorted; none when the folder is not there.
+func encryptedFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s: cannot read this folder.", dir)
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() && resolve.IsEncrypted(e.Name()) {
+			names = append(names, e.Name())
+		}
+	}
+	return names, nil
+}
+
 // policyFiles are the names of the backend's policy file, which doctor recognises in a .ezc folder.
 func policyFiles(sys System) []string {
 	if sys.Backend != nil {

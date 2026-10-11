@@ -128,6 +128,7 @@ Config
 		newUnsetCmd(sys),
 		newEditCmd(sys),
 		newStoreCmd(sys),
+		newUserCmd(sys),
 		newDoctorCmd(sys),
 		newSetupCmd(sys),
 		newRepoCmd(sys),

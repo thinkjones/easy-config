@@ -96,8 +96,8 @@ func storeCmdStatus(store, remote, state, fetched, requests string) string {
 
 func TestStoreVerbs(t *testing.T) {
 	f := newFake(t)
-	wantUsage(t, f.run("store"), "say status, pull, push or audit")
-	wantUsage(t, f.run("store", "sync"), "use status, pull, push or audit")
+	wantUsage(t, f.run("store"), "say status, pull, push, rewrap or audit")
+	wantUsage(t, f.run("store", "sync"), "use status, pull, push, rewrap or audit")
 	for _, verb := range []string{"status", "pull", "push"} {
 		wantUsage(t, f.run("store", verb, "extra"), "")
 	}

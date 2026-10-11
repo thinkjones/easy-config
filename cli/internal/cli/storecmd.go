@@ -32,8 +32,8 @@ func newStoreCmd(sys System) *cobra.Command {
 	cmd := verbs(&cobra.Command{
 		Use:   "store",
 		Short: "work on the global store as a whole",
-	}, "status, pull, push or audit")
-	cmd.AddCommand(newStoreStatusCmd(sys), newStorePullCmd(sys), newStorePushCmd(sys), newStoreAuditCmd(sys))
+	}, "status, pull, push, rewrap or audit")
+	cmd.AddCommand(newStoreStatusCmd(sys), newStorePullCmd(sys), newStorePushCmd(sys), newStoreRewrapCmd(sys), newStoreAuditCmd(sys))
 	return cmd
 }
 
@@ -309,6 +309,28 @@ Refused while the store is behind its remote or has diverged from it (run ` + "`
 			}
 			fmt.Fprintf(sys.Stdout, "pushed %s to origin\n", count(pushed, "commit"))
 			return nil
+		},
+	}
+}
+
+func newStoreRewrapCmd(sys System) *cobra.Command {
+	return &cobra.Command{
+		Use:   "rewrap",
+		Short: "encrypt every file of the store for the people recipients.yaml names",
+		Long: `Write the store's encryption policy from recipients.yaml and re-wrap every encrypted file for exactly the keys it names, in one commit, then push. It is the fix when ` + "`ezc user list`" + ` says a file's recipients differ from the registry.
+
+Needs this machine's key file, and the key must be one recipients.yaml names. Refused while the store is behind its remote or holds uncommitted changes to the files it rewrites. A failure puts the store back as it was. No value is read or printed.`,
+		Args: noArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			a, err := openAccess(sys, true)
+			if err != nil {
+				return err
+			}
+			changed, err := a.run(change{next: a.reg, message: "rewrap"})
+			if err == nil && !changed {
+				fmt.Fprintln(sys.Stdout, "✓ every file is encrypted for the registry")
+			}
+			return err
 		},
 	}
 }

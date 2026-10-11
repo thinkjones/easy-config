@@ -33,11 +33,11 @@ ezc store push                     # after you change the store
 ezc store pull                     # to bring in changes made elsewhere
 ```
 
-Each step is described below: [Set up](#set-up), [Writing to the store](#writing-to-the-store), [How a repo loads its environment](#how-a-repo-loads-its-environment) and [Syncing the store](#syncing-the-store). When something does not work, run `ezc doctor`.
+Each step is described below: [Set up](#set-up), [Writing to the store](#writing-to-the-store), [How a repo loads its environment](#how-a-repo-loads-its-environment), [Syncing the store](#syncing-the-store) and [Access](#access). When something does not work, run `ezc doctor`.
 
 ## Not there yet
 
-This is `ezc` 0.3: one person, on one machine or several. Adding a second person to a store (`ezc join`), bots, and setup for CI arrive in the next part. Until then a second machine needs the same key file: copy `~/.config/sops/age/keys.txt` from the first machine to the same path on the second, then run `ezc setup --store owner/repo` there. Setup uses a key file that is already there and never replaces it.
+This is `ezc` 0.3. A second person, or a second machine with a key of its own, is added with `ezc user add` once you have their public key (see [Access](#access)). Asking for access from the new machine (`ezc join`), removing someone, bots, and setup for CI are not there yet. A second machine can also share the first one's key file: copy `~/.config/sops/age/keys.txt` from the first machine to the same path on the second, then run `ezc setup --store owner/repo` there. Setup uses a key file that is already there and never replaces it.
 
 Two things are done by hand for now: a repo that keeps secrets of its own needs the store's encryption policy copied into its `.ezc/` (see [Encryption](#encryption)), and two machines that declare a new name at the same time must resolve the conflict with git (see [Syncing the store](#syncing-the-store)). The registry and the TUI come later.
 
@@ -55,7 +55,7 @@ Each line it prints is something that was already there (`✓`) or something it 
 
 A new store starts with an empty manifest, `recipients.yaml` naming you and your public key, the encryption policy written from it, and one commit. Your name is `--name`, else the `user` of `config.toml`, else your login name (`$USER`) in lower case; it is lower case letters, digits and `-`, starting with a letter or a digit. When none of these gives one, setup stops and asks for `--name`.
 
-`--store a/b` always means the GitHub repo `a/b`; for a folder of that shape write `./a/b`. After `--store`, when your key is not one the store's `recipients.yaml` names, setup says so and prints your public key: give it to someone who has access (the command they add it with is [not there yet](#not-there-yet)). The machine is set up either way, and `ezc doctor` reports the missing access as a problem until it is given. To use the key of another machine of yours, put its key file in place before you run setup.
+`--store a/b` always means the GitHub repo `a/b`; for a folder of that shape write `./a/b`. After `--store`, when your key is not one the store's `recipients.yaml` names, setup says so and prints your public key: give it to someone who has access, who adds it with `ezc user add` (see [Access](#access)). The machine is set up either way, and `ezc doctor` reports the missing access as a problem until it is given. To use the key of another machine of yours, put its key file in place before you run setup.
 
 Run again, setup changes only what is missing. A key file, a store or a value in `config.toml` that is already there is never overwritten, and a store with no remote is published by `--new-github`. Asking for a different store than the one in place is refused: move the store away first. Setup manages the store in ezc's home, so it refuses to run while `EZC_STORE` is set.
 
@@ -79,6 +79,9 @@ A store made by hand, a folder with a `.ezc/` that is already at the store's pat
 | `ezc store status` | Fetch from the store's remote, then print where the store is, its remote, how it stands against the remote (in sync, ahead, behind, diverged, uncommitted changes), when the remote was last reached and the pending access requests. Exits 0 in every state it can read. |
 | `ezc store pull` | Bring the remote's commits into the store, replaying the commits made here on top of them. An encrypted file changed on both sides keeps the remote's version: the names to set again are listed and the command exits 1. Prints names and files, never a value. |
 | `ezc store push` | Send the commits made here to the store's remote. Refused while the store is behind the remote or has diverged from it, holds uncommitted changes, or has no remote. |
+| `ezc store rewrap` | Write the store's encryption policy from `recipients.yaml` and re-wrap every encrypted file for exactly the keys it names, in one commit, then push. The fix when `ezc user list` names a file. See [Access](#access). |
+| `ezc user list` | List who can read the store, from `recipients.yaml`: name, kind, owner, when added and by whom, with this machine's row marked. Then name every encrypted file whose recipients are not the registry's, and exit 1 when there is one. Needs no key. |
+| `ezc user add <name> <key> [--kind user\|machine] [--owner USER]` | Add a public key to `recipients.yaml`, write the policy from it and re-wrap every encrypted file of the store, in one commit, then push. `--kind machine --owner USER` adds a second key of a user who is already a recipient. See [Access](#access). |
 | `ezc store audit` | Check the store's values files against its manifest: every value declared, every `required` name set in at least one file, secrets in encrypted files and nothing else there, no value still a placeholder or the wrong shape, and no value in an encrypted file left unencrypted. Prints names, files and the fix for each, never a value; exits 1 when there is anything to fix. |
 | `ezc doctor [ENV] [--only machine\|store\|repo]` | Report the health of the machine (ezc, the encryption tool, the key), the store (location, manifest, audit, policy, unrecognised files) and the repo (manifest, `env.sh` shim version, environments, whether the environment resolves and passes the manifest). Each line is a check (`✓`), a warning (`!`) or a problem (`✗`), with what to do about it. Prints names, counts and paths, never a value; exits 1 when anything is broken, and warnings alone exit 0. Works without a key and outside a repo. |
 | `ezc repo init` | Create `.ezc/` in the working directory with `manifest.yaml`, `env.local.yaml` and the `env.sh` shim. Existing files are kept; an `env.sh` from an older shim is updated, and one written by a newer `ezc` is kept as it is. Prints how to load the environment. |
@@ -161,6 +164,52 @@ store: 1 access request pending: sam
 
 A store with uncommitted changes that is also ahead, behind or diverged says both: `store: uncommitted changes in <store>; 1 commit behind origin`. Pending access requests are added to the end of the line when it already says something else. A store that is in sync prints nothing. When git cannot say how the store stands, the line is `store: cannot tell how the store stands in <store> (<why>)` and nothing else. To keep these commands fast they contact the remote at most once every 10 minutes and wait at most 3 seconds for it; in between, and when the remote cannot be reached, the line is what was last known, and a fetch that just failed adds `store: origin could not be reached; last checked 2 hours ago`. The command then carries on. `ezc env export` never contacts the remote and never prints the line, so loading a shell's environment is not slowed down or made noisy. `ezc store status`, `pull` and `push` always contact the remote and do not print the line: their own output is the answer.
 
+## Access
+
+Who can read the store's secrets is written in one place, `recipients.yaml` in the store's `.ezc/`. Each entry is a name and a public key, with a kind (`user`, `machine` for a second key of a user, or `bot`), the machine's owner, the day it was added and who added it. The encryption policy is written from that file, and every encrypted file of the store is encrypted for exactly the keys it names. `ezc setup` writes the first entry: you.
+
+```sh
+ezc user list                                             # who can read the store
+ezc user add sam age1…                                    # let sam read it
+ezc user add sam-laptop age1… --kind machine --owner sam  # a second key of sam's
+ezc store rewrap                                          # make the files match recipients.yaml again
+```
+
+`ezc user list` prints the registry as a table and marks the row whose key is this machine's. It then reads, from each encrypted file, the keys the file is really encrypted for, which needs no key, and compares them with the registry. A file that differs is named, with the recipients it lacks and the keys it has that the registry does not, and the command exits 1:
+
+```
+✗ env.prod.enc.yaml: not encrypted for sam; encrypted for age1… who are not in the registry
+Run ezc store rewrap.
+```
+
+`ezc user add <name> <key>` takes a public key, which is safe to pass around: `ezc setup --store owner/repo` prints it on a machine whose key cannot read the store yet. A private key is never given to a command. The name is lower case letters, digits and `-`. The command adds the entry, writes the policy, re-wraps every encrypted file of the store for the new list, checks that each file now lists exactly the registry's keys, commits those files as `add <name>` and pushes. The new person then runs `ezc setup --store owner/repo` (or `ezc store pull`) and can read the secrets.
+
+`ezc store rewrap` runs the same steps with the registry as it is, in a commit named `rewrap`. When every file already matches it says `✓ every file is encrypted for the registry` and commits nothing.
+
+Every change to access follows the same rules:
+
+- It contacts the remote first, and is refused while the store is behind it (`The store is behind its remote. Run ezc store pull, then run this again.`), while git cannot say how the store stands, and while `recipients.yaml`, the policy file, `rotation-due.yaml` or an encrypted file has uncommitted changes.
+- It needs this machine's key in a key file, and that key must be one `recipients.yaml` names: only someone who can read the store can re-wrap it.
+- If any step fails, every file is put back as it was and nothing is committed; the error ends with `Nothing was changed.`
+- It pushes, because a change to access that stays on one machine has changed nothing for anyone else. The push sends every commit the store is ahead by. When the push fails the commit stays, the command exits 1 with `Committed, but the push failed (<why>). Run ezc store push.`, and `ezc store push` sends it later. A store with no remote is committed and not pushed; a store that is not a git repo is changed with no commit.
+
+Re-wrapping changes who can open the files from now on. It does not change the values, and it reads and prints none.
+
+### A store made by hand
+
+A store whose encryption policy you wrote yourself has no `recipients.yaml`, so `ezc` does not know who can read it, and `ezc user list`, `ezc user add` and `ezc store rewrap` say so. To hand it over, write `.ezc/recipients.yaml` with one entry for each key your policy lists, this machine's among them:
+
+```yaml
+recipients:
+  gene:
+    key: age1…
+    kind: user
+    added: "2026-10-11"
+    addedBy: gene
+```
+
+A name is lower case letters, digits and `-`; `kind` is `user`, `machine` (then add `owner: <a user's name>`) or `bot`; no two entries share a key. Commit the file with git, then run `ezc store rewrap`: it replaces your policy with one written from the file and re-wraps the encrypted files. From then on, change access with `ezc user add`, never by editing the policy.
+
 ## How a repo loads its environment
 
 The environment is named by the argument, else `EZC_ENV`, else `APP_ENV`; with none of them, `local` applies when it exists. There are three ways in:
@@ -183,7 +232,7 @@ A repo's `.ezc/` folder and the global store use the same layout. Every values f
 | `common.enc.yaml` | Encrypted values for all environments. |
 | `env.<name>.enc.yaml` | Encrypted values for one environment. |
 | `.sops.yaml` | The encryption policy: which files are encrypted, and for which keys. Needed before a secret can be stored in the folder. `ezc setup` writes the store's; see [Encryption](#encryption). |
-| `recipients.yaml` | In the store only: who can decrypt it, by name and public key. `ezc setup` writes the first entry. |
+| `recipients.yaml` | In the store only: who can decrypt it, by name and public key. `ezc setup` writes the first entry and `ezc user add` the next ones; see [Access](#access). |
 | `env.sh` | The shim mise or direnv sources. Written by `ezc repo init`; do not edit. |
 
 On a machine, ezc's home holds the store (`store/`, a git repo whose values are in its `.ezc/`), `config.toml` (your name in the store, the key file, and the store's remote) and `state.json` (when the store's remote was last reached). `ezc setup` writes the first two.
