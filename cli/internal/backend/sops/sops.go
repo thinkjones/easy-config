@@ -27,6 +27,9 @@ const (
 	envKeyFile = "SOPS_AGE_KEY_FILE"
 	envEditor  = "SOPS_EDITOR" // wins over EDITOR and VISUAL; split on spaces
 
+	// keyTextVar is the variable Options.Key is read from, for the message that says where the key comes from.
+	keyTextVar = "EZC_AGE_KEY"
+
 	// editUnchanged is the status `sops edit` exits with when the file was saved unchanged, which is not a failure.
 	editUnchanged = 200
 
@@ -50,6 +53,9 @@ type Options struct {
 	LookPath func(string) (string, error)
 	Environ  []string // the process environment, K=V; the whole environment sops gets (nil gives it only the key file)
 	KeyFile  string   // used unless Environ already sets SOPS_AGE_KEY or SOPS_AGE_KEY_FILE; "" is none
+	// Key is the key's own text, as EZC_AGE_KEY holds it: one secret line or a whole key file's text. It is used
+	// alone, in place of KeyFile and of whatever Environ says about a key, and it reaches sops as SOPS_AGE_KEY.
+	Key string
 }
 
 // New returns the sops backend.
@@ -320,7 +326,7 @@ func indexOf(name string) string {
 	return string(b)
 }
 
-// run runs sops with the key file in its environment. With no sops installed it runs nothing and fails with ErrNoTool.
+// run runs sops with the key in its environment. With no sops installed it runs nothing and fails with ErrNoTool.
 func (b *sopsBackend) run(c proc.Command) (stdout, stderr []byte, err error) {
 	if err := b.requireTool(); err != nil {
 		return nil, nil, err
@@ -330,7 +336,8 @@ func (b *sopsBackend) run(c proc.Command) (stdout, stderr []byte, err error) {
 	return b.o.Run(c)
 }
 
-// env is the environment plus the key file, unless the environment already says where the key is.
+// env is the environment plus the key file, unless the environment already says where the key is. With the
+// key's text (Options.Key) it is the environment without what it says about a key, plus the text.
 // extra entries replace any entry of the same name.
 func (b *sopsBackend) env(extra ...string) []string {
 	var env []string
@@ -341,12 +348,18 @@ func (b *sopsBackend) env(extra ...string) []string {
 		if kv == envKey+"=" || kv == envKeyFile+"=" { // sops ignores an empty value; so does the check below
 			continue
 		}
+		if b.o.Key != "" && (strings.HasPrefix(kv, envKey+"=") || strings.HasPrefix(kv, envKeyFile+"=")) {
+			continue
+		}
 		env = append(env, kv)
 	}
 	if b.o.Environ != nil && env == nil {
 		env = []string{}
 	}
-	if b.keyFromEnv() == "" && b.o.KeyFile != "" {
+	switch {
+	case b.o.Key != "":
+		env = append(env, envKey+"="+b.o.Key)
+	case b.keyFromEnv() == "" && b.o.KeyFile != "":
 		env = append(env, envKeyFile+"="+b.o.KeyFile)
 	}
 	return append(env, extra...)
@@ -354,6 +367,9 @@ func (b *sopsBackend) env(extra ...string) []string {
 
 // keyFromEnv names the variable the environment supplies the key through, or "" when it supplies none.
 func (b *sopsBackend) keyFromEnv() string {
+	if b.o.Key != "" {
+		return keyTextVar
+	}
 	found := ""
 	for _, kv := range b.o.Environ {
 		switch {

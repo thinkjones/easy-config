@@ -37,7 +37,7 @@ Each step is described below: [Set up](#set-up), [Writing to the store](#writing
 
 ## Not there yet
 
-This is `ezc` 0.3. A second person, or a second machine with a key of its own, asks for access with `ezc join`, is let in with `ezc user approve` (or with `ezc user add` once you have their public key), and removed with `ezc user remove` (see [Access](#access)). A bot gets a key of its own with `ezc bot add` (see [Bots and CI](#bots-and-ci)); the setup that reads the store in a CI job with it is not there yet. A second machine can also share the first one's key file: copy `~/.config/sops/age/keys.txt` from the first machine to the same path on the second, then run `ezc setup --store owner/repo` there. Setup uses a key file that is already there and never replaces it.
+This is `ezc` 0.3. A second person, or a second machine with a key of its own, asks for access with `ezc join`, is let in with `ezc user approve` (or with `ezc user add` once you have their public key), and removed with `ezc user remove` (see [Access](#access)). A bot gets a key of its own with `ezc bot add`, and a CI job reads the store with it after `ezc setup --ci` (see [Bots and CI](#bots-and-ci)). A second machine can also share the first one's key file: copy `~/.config/sops/age/keys.txt` from the first machine to the same path on the second, then run `ezc setup --store owner/repo` there. Setup uses a key file that is already there and never replaces it.
 
 Two things are done by hand for now: a repo that keeps secrets of its own needs the store's encryption policy copied into its `.ezc/` (see [Encryption](#encryption)), and two machines that declare a new name at the same time must resolve the conflict with git (see [Syncing the store](#syncing-the-store)). The registry and the TUI come later.
 
@@ -47,6 +47,7 @@ Two things are done by hand for now: a repo that keeps secrets of its own needs 
 ezc setup --new-local                 # a new store on this machine
 ezc setup --new-github owner/repo     # a new store, and a private GitHub repo for it (needs gh)
 ezc setup --store owner/repo          # an existing store: owner/repo (needs gh), a URL or a path
+ezc setup --ci --store owner/repo     # in a CI job: see "Bots and CI"
 ```
 
 `ezc setup` takes a machine from nothing to a working store. It checks that `git` and `sops` are installed (and offers to install `sops` with Homebrew when `brew` is there; otherwise it says how to install it and stops, with nothing made), creates your key, creates or clones the store, and writes `config.toml` in ezc's home (`$EZC_HOME` when set, else `~/Library/ezc` on macOS and `~/.local/share/ezc` on Linux). The store is a git repo at `store` in that folder. On a terminal, setup asks for what no flag says: your name, where the store comes from, and whether to install with brew; `--name` and `--yes` answer in advance. Without a terminal it needs one of the three flags above.
@@ -68,6 +69,7 @@ A store made by hand, a folder with a `.ezc/` that is already at the store's pat
 | `ezc version` | Print ezc's version. |
 | `ezc help [command]` | Help for ezc, or for one command. |
 | `ezc setup [--new-local \| --new-github owner/repo \| --store REPO] [--name NAME] [--yes]` | Set the machine up: check the tools, create your key, create or clone the store, write the config. Changes only what is missing; see [Set up](#set-up). |
+| `ezc setup --ci --store owner/repo` | Set a CI job up to read the store: clone its latest commit with the token in `EZC_STORE_TOKEN` (or `GH_TOKEN`) and write the config. The key stays in `EZC_AGE_KEY`; no key file is made and nothing is asked. See [Bots and CI](#bots-and-ci). |
 | `ezc join <owner/repo \| URL \| path> [--name NAME] [--kind user\|machine] [--owner USER]` | Ask for access to an existing store from this machine: clone it, create your key when there is none, write the config, and push a request holding your public key on the branch `ezc/join-NAME`, with a pull request when `gh` is installed and the store is on GitHub. Changes nothing on the store's main branch. See [Joining a store](#joining-a-store). |
 | `ezc join --print [--name NAME] [--kind user\|machine] [--owner USER]` | Print the `ezc user add` line for this machine's key, creating the key when there is none. Takes no repo, needs no store and pushes nothing. |
 | `ezc env [ENV] [-m FILE] [--verbose]` | Check an environment against the manifest. Reports on stderr, prints no values, exits 1 on problems. With `-m FILE` the values come from that manifest's folder, not this repo. |
@@ -226,7 +228,7 @@ Then run ezc store pull.
 
 Your name is `--name`, else the `user` of `config.toml`, else it is asked for on a terminal; with none of these the command stops and asks for `--name`. A machine (`--kind machine --owner <user>`) needs a name of its own and an owner who is already a user in `recipients.yaml`; its `config.toml` gets the owner as `user`.
 
-Only the public key leaves the machine: it is in the request and may be printed. The private key stays in the key file and is in no output, no argument and no commit. Like `ezc setup`, `ezc join` refuses to run while `EZC_STORE` is set or while the environment holds the key itself (`SOPS_AGE_KEY`); `SOPS_AGE_KEY_FILE` names the key file to use.
+Only the public key leaves the machine: it is in the request and may be printed. The private key stays in the key file and is in no output, no argument and no commit. Like `ezc setup`, `ezc join` refuses to run while `EZC_STORE` is set or while the environment holds the key itself (`EZC_AGE_KEY` or `SOPS_AGE_KEY`); `SOPS_AGE_KEY_FILE` names the key file to use.
 
 Run again, `ezc join` changes only what is missing and pushes nothing twice: a request of yours that is already on the remote is reported as `✓ your request is waiting: ezc/join-<name>`. When your key is already one `recipients.yaml` names, it says `✓ <name> can already read this store.` and files nothing. When the name belongs to a recipient with another key, or somebody else's request under that name is waiting, it stops with `The store already has a recipient named <name>. Pick another name with --name.`
 
@@ -319,7 +321,7 @@ A bot is a recipient with a key of its own, so that a CI job reads the store wit
 | Secret | What it is | Who makes it |
 | --- | --- | --- |
 | `EZC_AGE_KEY` | The bot's private key, which decrypts the store's secrets. | `ezc bot add` |
-| `EZC_STORE_TOKEN` | A credential that can read the store's repo, to clone it. | You: `ezc` cannot create it. |
+| `EZC_STORE_TOKEN` | A token that can read the store's repo, to clone it over HTTPS. | You: `ezc` cannot create it. |
 
 `ezc bot add <name> --repo owner/repo` creates the key in memory, adds its public half to `recipients.yaml` with kind `bot` and the repos it was given, writes the policy and re-wraps every encrypted file. Then, before anything is committed, it checks that the new private key opens every encrypted file and saves it as the `EZC_AGE_KEY` Actions secret of each repo with `gh secret set`, which reads it on stdin. Only then does it commit, as `add bot <name>`, and push:
 
@@ -342,7 +344,29 @@ The store credential is the part you do by hand, once for each repo whose jobs r
 3. Under Repository permissions set Contents to "Read-only" and leave everything else as it is.
 4. Save it as the secret: run `gh secret set EZC_STORE_TOKEN --repo owner/app` and paste the token at the prompt, which does not show it. Do not put it on the command line.
 
-A read-only deploy key on the store's repo (Settings, Deploy keys, without write access) serves a job that sets up SSH itself. Using the two secrets in a job, to clone the store and load a repo's environment there, is the CI setup that is not there yet.
+`EZC_STORE_TOKEN` holds a token, and nothing else works there. A deploy key is an SSH key, not a token: `ezc setup --ci` does not support one, and saving one as `EZC_STORE_TOKEN` makes the clone fail. The note `ezc bot add` prints mentions a deploy key; for `ezc setup --ci` use the fine-grained token above.
+
+In a job, pass the two secrets as environment variables of the same names, run `ezc setup --ci --store owner/store` once, then run commands with `ezc run`:
+
+```yaml
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      EZC_AGE_KEY: ${{ secrets.EZC_AGE_KEY }}
+      EZC_STORE_TOKEN: ${{ secrets.EZC_STORE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      # install git, sops and ezc here, then:
+      - run: ezc setup --ci --store owner/store
+      - run: ezc run prod -- ./deploy.sh
+```
+
+`ezc setup --ci --store owner/repo` clones `https://github.com/owner/repo.git` into ezc's home with git itself, not `gh`, as a shallow clone of the latest commit, and writes `config.toml` with the backend and the store's remote and with no `user` and no `key_file`. It prints `✓ git`, `✓ sops`, `✓ the key: EZC_AGE_KEY`, `+ cloned the store: <path>` and `+ wrote <config>`, and no `Next:` line; run again where the store is in place, every line is a `✓`. It never asks a question and never installs anything. `--store` is required and takes `owner/repo`, or the absolute path of a local repo; `--new-local`, `--new-github` and `--name` cannot be used with `--ci`. It stops before it makes anything when a variable is missing: `ezc setup --ci: EZC_AGE_KEY is not set. Save the bot's key as that secret; ezc bot add does it.` or `ezc setup --ci: set EZC_STORE_TOKEN (or GH_TOKEN) to a token that can read owner/repo.` `GH_TOKEN` is read when `EZC_STORE_TOKEN` is not set, which serves a store the job's own token can read.
+
+Neither secret is written anywhere. The token is never in an argument, a URL or the clone's `.git/config`: git is given a credential helper whose text names the variable, and reads the token from its own environment. The key is never written to a file: every command that decrypts passes the text of `EZC_AGE_KEY` to `sops` as `SOPS_AGE_KEY`, in the environment `ezc` was given it in. `EZC_AGE_KEY` holds the one secret line `ezc bot add` saves; the whole text of a key file works too. It wins over `SOPS_AGE_KEY`, `SOPS_AGE_KEY_FILE` and every key file.
+
+This is not only for `ezc setup --ci`. On any machine, while `EZC_AGE_KEY` is set every command reads with that key, and while `EZC_STORE_TOKEN` or `GH_TOKEN` is set every clone, fetch and push of the store is made with that token in place of git's own credential helpers. Unset them on a machine that has a key file and credentials of its own. A machine that has the key only as text cannot change who reads the store: `ezc user add`, `ezc user remove`, `ezc bot add` and the rest stop with `An access change needs a key file, and this machine uses none. Run this on a machine that keeps its key in a file.`, and `ezc setup` without `--ci`, `ezc join` and `ezc user rotate` refuse to run.
 
 `ezc bot rotate <name>` creates a new key and puts it in the bot's entry in place of the old one, in one commit named `rotate bot <name>`; from that commit on the old key opens no file. The new key is delivered as `ezc bot add` delivers one, to the repos the entry names, before the commit and with the same failure, which here matters more: a repo that took the new key before the failure has lost the old one, so its jobs cannot read the store until `ezc bot rotate <name>` is run again, as the message says. When the commit is made and only the push fails, the repos hold the new key while the remote still names the old one: run `ezc store push`, which is what makes their jobs work again. A bot that was added with `--print-private` alone has no repos, and needs `--print-private` here too. A routine rotation records nothing: the old key never left its repos' secrets. When it may have leaked, pass `--compromised`: every secret the old key could read is written to `rotation-due.yaml` as readable by `<name> (old key)` and listed, exactly as a removal does, because the old key still opens every older commit of the store.
 
@@ -411,7 +435,7 @@ Secrets need [`sops`](https://github.com/getsops/sops) installed: `brew install 
 
 A variable the manifest declares `secret` is stored encrypted, in `common.enc.yaml` or `env.<name>.enc.yaml`, and `ezc set` writes it there. A folder needs its encryption policy, `.ezc/.sops.yaml`, before a secret can be stored in it. `ezc setup` writes the store's from `recipients.yaml`, so `ezc set -g` works as soon as setup has run; do not edit that file. A repo that keeps secrets of its own needs the same file in its `.ezc/`: copy the store's. A policy whose `path_regex` matches no file name stores nothing, and `ezc set` says so.
 
-The key file is the `key_file` of `$EZC_HOME/config.toml` when that file names one, else `~/.config/sops/age/keys.txt`; `ezc setup` creates it when it is not there. It is passed to `sops` as `SOPS_AGE_KEY_FILE`; when `SOPS_AGE_KEY` or `SOPS_AGE_KEY_FILE` is already set in the environment, that wins. `ezc setup` follows the same rule: with `SOPS_AGE_KEY_FILE` set it uses that file as your key file (creating it when it is not there) and records it as `key_file`; the path must be absolute. With `SOPS_AGE_KEY` set it stops and asks you to unset it, because that key would be used instead of the one setup registers.
+The key file is the `key_file` of `$EZC_HOME/config.toml` when that file names one, else `~/.config/sops/age/keys.txt`; `ezc setup` creates it when it is not there. It is passed to `sops` as `SOPS_AGE_KEY_FILE`; when `SOPS_AGE_KEY` or `SOPS_AGE_KEY_FILE` is already set in the environment, that wins. `EZC_AGE_KEY`, the key's own text as a CI job has it, wins over all of them (see [Bots and CI](#bots-and-ci)). `ezc setup` follows the same rule: with `SOPS_AGE_KEY_FILE` set it uses that file as your key file (creating it when it is not there) and records it as `key_file`; the path must be absolute. With `SOPS_AGE_KEY` or `EZC_AGE_KEY` set it stops and asks you to unset it, because that key would be used instead of the one setup registers; `ezc setup --ci` is the setup that takes the key from `EZC_AGE_KEY`.
 
 A secret is typed at a hidden prompt or piped on stdin, never passed as an argument, and reaches `sops` on its stdin only. A value cannot move across the secret boundary: `ezc set` refuses a name that is already in the other file of the pair, so remove it with `ezc unset`, which clears both files of the pair, first.
 

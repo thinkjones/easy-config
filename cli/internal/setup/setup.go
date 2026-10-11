@@ -357,16 +357,32 @@ func Publish(e Env, slug string) (remote string, err error) {
 // CloneStore clones source into the store's path; it returns the remote's URL.
 // A clone that is not a store is removed again.
 func CloneStore(e Env, source string) (remote string, err error) {
+	return e.cloneStore(source, func(store string) error {
+		if IsSlug(source) {
+			return e.gh("repo", "clone", source, store)
+		}
+		return e.Git.Clone(source, store)
+	})
+}
+
+// CloneShallowStore is CloneStore for a machine that only reads the store, a CI job: the clone holds the latest
+// commit alone, and git makes it itself, with the token e.Git names, so owner/repo is cloned from GitHub over HTTPS.
+func CloneShallowStore(e Env, source string) (remote string, err error) {
+	if IsSlug(source) {
+		source = "https://github.com/" + source + ".git"
+	}
+	return e.cloneStore(source, func(store string) error { return e.Git.CloneShallow(source, store) })
+}
+
+// cloneStore runs clone, which clones source into the folder it is given, the store's path, and returns the
+// remote's URL. A clone that fails or is not a store is removed again.
+func (e Env) cloneStore(source string, clone func(store string) error) (remote string, err error) {
 	store := e.Paths.Store()
 	existed := exists(store)
 	if err := InTheWay(e); err != nil {
 		return "", err
 	}
-	if IsSlug(source) {
-		err = e.gh("repo", "clone", source, store)
-	} else {
-		err = e.Git.Clone(source, store)
-	}
+	err = clone(store)
 	if err == nil && !exists(filepath.Join(e.Paths.StoreEzc(), manifestName)) {
 		err = fmt.Errorf("%s is not an ezc store (it has no %s/%s).", gitstore.ShowURL(source), ezcDir, manifestName)
 	}

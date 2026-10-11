@@ -37,9 +37,20 @@ type storeSync struct {
 	Due      int       // how many entries rotation-due.yaml holds
 }
 
-// storeGit is git as this machine runs it.
+// storeGit is git as this machine runs it, reading the remote with the token the environment holds, when it holds one.
 func storeGit(sys System) gitstore.Git {
-	return gitstore.Git{Run: sys.Exec, Environ: sys.Environ()}
+	return gitstore.Git{Run: sys.Exec, Environ: sys.Environ(), TokenVar: tokenVar(sys)}
+}
+
+// tokenVar names the variable that holds a token for the store's remote: the store's own, else GitHub's; "" when
+// neither is set. Only the name goes to git, which reads the value from its environment.
+func tokenVar(sys System) string {
+	for _, name := range []string{storeTokenSecret, "GH_TOKEN"} {
+		if sys.Getenv(name) != "" {
+			return name
+		}
+	}
+	return ""
 }
 
 // loadConfig is the machine's config; the zero Config when there is none.

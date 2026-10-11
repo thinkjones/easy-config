@@ -124,7 +124,8 @@ func policyFiles(sys System) []string {
 }
 
 // keySource says where the default backend finds the key, for display, and whether a key is there: the key
-// in the environment, else the key file the environment names, else the config's, else the default key file (shown with ~).
+// a CI job is given, else the key in the environment, else the key file the environment names, else the config's,
+// else the default key file (shown with ~).
 // With a backend set (tests) there is no real key: the key is found unless the backend is a locked Fake.
 func keySource(sys System) (note string, found bool) {
 	if sys.Backend != nil {
@@ -133,6 +134,9 @@ func keySource(sys System) (note string, found bool) {
 			locked = f.Locked
 		}
 		return "test key", !locked
+	}
+	if sys.Getenv(botSecret) != "" {
+		return botSecret, true
 	}
 	if sys.Getenv("SOPS_AGE_KEY") != "" {
 		return "SOPS_AGE_KEY", true
@@ -154,8 +158,12 @@ func keySource(sys System) (note string, found bool) {
 }
 
 // keyInEnvironment says what key the environment supplies to the default backend: the variable that holds it,
-// "" when there is none, and the key file it names, "" when the variable holds the key's text.
+// "" when there is none, and the key file it names, "" when the variable holds the key's text. The key a CI job
+// is given (EZC_AGE_KEY) is text, and it is used whatever else is set.
 func keyInEnvironment(sys System) (variable, file string) {
+	if sys.Getenv(botSecret) != "" {
+		return botSecret, ""
+	}
 	if sys.Getenv("SOPS_AGE_KEY") != "" {
 		return "SOPS_AGE_KEY", ""
 	}
@@ -165,7 +173,8 @@ func keyInEnvironment(sys System) (variable, file string) {
 	return "", ""
 }
 
-// backendFor is sys.Backend, else the sops backend for this machine.
+// backendFor is sys.Backend, else the sops backend for this machine. The key a CI job is given goes to it as text:
+// it is the one private key ezc puts in the environment of a program it runs, and it was in ezc's own already.
 func backendFor(sys System) backend.Backend {
 	if sys.Backend != nil {
 		return sys.Backend
@@ -175,6 +184,7 @@ func backendFor(sys System) backend.Backend {
 		LookPath: sys.LookPath,
 		Environ:  sys.Environ(),
 		KeyFile:  keyFile(sys),
+		Key:      sys.Getenv(botSecret),
 	})
 }
 
@@ -195,7 +205,7 @@ func keyFile(sys System) string {
 // environment as text, or there is no home to look in. The public half of the key is read from this file.
 func keyFileInUse(sys System) (string, bool) {
 	if sys.Backend == nil {
-		if sys.Getenv("SOPS_AGE_KEY") != "" {
+		if sys.Getenv(botSecret) != "" || sys.Getenv("SOPS_AGE_KEY") != "" {
 			return "", false
 		}
 		if file := sys.Getenv("SOPS_AGE_KEY_FILE"); file != "" {

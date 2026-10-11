@@ -26,6 +26,7 @@ type setupFlags struct {
 	newGithub, store string
 	name             string
 	yes              bool
+	ci               bool
 }
 
 // storePlan is what setup does about the store.
@@ -46,7 +47,9 @@ func newSetupCmd(sys System) *cobra.Command {
 		Short: "set this machine up: the tools, your key, the store and the config",
 		Long: `Take this machine from nothing to a working store: check the tools, create your key, create or clone the store (a git repo of encrypted values) and write ezc's config.
 
-Say where the store comes from with --new-local, --new-github owner/repo or --store <owner/repo | URL | path>; on a terminal, setup asks for what no flag says. Run again, it changes only what is missing: a key, a store or a config that is there is never overwritten.`,
+Say where the store comes from with --new-local, --new-github owner/repo or --store <owner/repo | URL | path>; on a terminal, setup asks for what no flag says. Run again, it changes only what is missing: a key, a store or a config that is there is never overwritten.
+
+In a CI job, --ci --store owner/repo sets up a machine that only reads the store: the bot's key is in ` + botSecret + ` and a token that can read the store's repo is in ` + storeTokenSecret + ` (or GH_TOKEN). It clones the latest commit with the token and writes the config. It makes no key file, asks nothing, and git is told the name of the token's variable, never the token.`,
 		Args: noArgs,
 		RunE: func(*cobra.Command, []string) error { return runSetup(sys, o) },
 	}
@@ -55,6 +58,7 @@ Say where the store comes from with --new-local, --new-github owner/repo or --st
 	cmd.Flags().StringVar(&o.store, "store", "", "clone an existing store from `repo`: owner/repo, a URL or a path")
 	cmd.Flags().StringVar(&o.name, "name", "", "your name in the store ("+nameRule+")")
 	cmd.Flags().BoolVar(&o.yes, "yes", false, "answer yes to the questions setup asks")
+	cmd.Flags().BoolVar(&o.ci, "ci", false, "set up a CI job, with --store: the key and the token come from the environment")
 	return cmd
 }
 
@@ -84,6 +88,9 @@ func runSetup(sys System, o setupFlags) error {
 	}
 	if sys.Getenv("EZC_STORE") != "" {
 		return usagef("ezc setup: unset EZC_STORE. Setup manages the store in %s.", p.Store())
+	}
+	if o.ci {
+		return runSetupCI(sys, p, o)
 	}
 	chosen := 0
 	for _, set := range []bool{o.newLocal, o.newGithub != "", o.store != ""} {
@@ -138,13 +145,7 @@ func runSetup(sys System, o setupFlags) error {
 			err = be.Check()
 		}
 		if errors.Is(err, backend.ErrNoTool) {
-			// One thing to do, said once: the backend's own text also sends the user elsewhere.
-			fmt.Fprintf(sys.Stderr, "✗ %s is not installed.\n", be.Name())
-			if hint := be.ToolHint(sys.GOOS); hint != "" {
-				fmt.Fprintln(sys.Stderr, hint)
-			}
-			fmt.Fprintln(sys.Stderr, "Then run ezc setup again.")
-			return &ExitError{1}
+			return toolMissing(sys, be)
 		}
 		if err != nil {
 			return err
@@ -330,6 +331,94 @@ func runSetup(sys System, o setupFlags) error {
 	case made && hasPolicy:
 		fmt.Fprint(sys.Stdout, "\nNext: ezc set -g NAME --type secret --desc \"what it is\"\n")
 	}
+	return nil
+}
+
+// toolMissing says that the backend's tool is not installed and how to get it, and ends setup.
+// One thing to do, said once: the backend's own text also sends the user elsewhere.
+func toolMissing(sys System, be backend.Backend) error {
+	fmt.Fprintf(sys.Stderr, "✗ %s is not installed.\n", be.Name())
+	if hint := be.ToolHint(sys.GOOS); hint != "" {
+		fmt.Fprintln(sys.Stderr, hint)
+	}
+	fmt.Fprintln(sys.Stderr, "Then run ezc setup again.")
+	return &ExitError{1}
+}
+
+// runSetupCI sets up a CI job's machine, which only reads the store: a shallow clone made with the token the
+// environment holds, and the config. The key stays in the environment, so no key file is made, nothing is
+// registered and nothing is asked. A store that is in place and came from the same repo is kept.
+func runSetupCI(sys System, p paths.Paths, o setupFlags) error {
+	if o.newLocal || o.newGithub != "" || o.name != "" {
+		return usagef("ezc setup: --ci cannot be used with --new-local, --new-github or --name.")
+	}
+	if o.store == "" {
+		return usagef("ezc setup --ci: say --store owner/repo.")
+	}
+	// What was given is not repeated: a URL can hold a password.
+	if !setup.IsSlug(o.store) && !filepath.IsAbs(o.store) {
+		return usagef("ezc setup --ci: --store takes owner/repo, or the absolute path of a local repo.")
+	}
+	if sys.Getenv(botSecret) == "" {
+		return fmt.Errorf("ezc setup --ci: %s is not set. Save the bot's key as that secret; ezc bot add does it.", botSecret)
+	}
+	if tokenVar(sys) == "" {
+		return fmt.Errorf("ezc setup --ci: set %s (or GH_TOKEN) to a token that can read %s.", storeTokenSecret, o.store)
+	}
+	cfg, found, err := config.Load(p.Config())
+	if err != nil {
+		return err
+	}
+	be := backendFor(sys)
+	e := setup.Env{Git: storeGit(sys), Backend: be, Run: sys.Exec, LookPath: sys.LookPath, Now: sys.Now, Paths: p, GOOS: sys.GOOS}
+
+	if _, err := sys.LookPath("git"); err != nil {
+		return errors.New("git is not installed. Install it and run ezc setup again.")
+	}
+	fmt.Fprintln(sys.Stdout, "✓ git")
+	if err := be.Check(); err != nil {
+		if errors.Is(err, backend.ErrNoTool) {
+			return toolMissing(sys, be)
+		}
+		return err
+	}
+	fmt.Fprintln(sys.Stdout, "✓", be.Name())
+	fmt.Fprintf(sys.Stdout, "✓ the key: %s\n", botSecret)
+
+	remote := ""
+	if setup.HasStore(e) {
+		if repo, _ := e.Git.IsRepo(p.Store()); repo {
+			if remote, err = e.Git.Remote(p.Store()); err != nil {
+				return err
+			}
+		}
+		if !sameRemote(remote, o.store) {
+			return fmt.Errorf("a store is already set up at %s (%s). Move it away to set up another.", p.Store(), remoteNote(remote))
+		}
+		fmt.Fprintf(sys.Stdout, "✓ the store: %s\n", p.Store())
+	} else {
+		if remote, err = setup.CloneShallowStore(e, o.store); err != nil {
+			return err
+		}
+		fmt.Fprintf(sys.Stdout, "+ cloned the store: %s\n", p.Store())
+	}
+
+	// Config: no user and no key file, because this machine has neither.
+	filled := cfg
+	if filled.Backend == "" {
+		filled.Backend = be.Name()
+	}
+	if filled.Store.Remote == "" {
+		filled.Store.Remote = gitstore.ShowURL(remote)
+	}
+	if found && filled.Backend == cfg.Backend && filled.Store == cfg.Store {
+		fmt.Fprintf(sys.Stdout, "✓ the config: %s\n", p.Config())
+		return nil
+	}
+	if err := config.Save(p.Config(), filled); err != nil {
+		return err
+	}
+	fmt.Fprintf(sys.Stdout, "+ wrote %s\n", p.Config())
 	return nil
 }
 

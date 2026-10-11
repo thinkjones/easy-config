@@ -1013,3 +1013,108 @@ func TestRewrapWithAKeyThatCannotOpenTheFileIsNoKey(t *testing.T) {
 		t.Error("the error holds a value")
 	}
 }
+
+func TestKeyTextIsPassedInTheEnvironmentOnly(t *testing.T) {
+	const key = "AGE-SECRET-KEY-1FROMTHEENVIRONMENT"
+	r := &recorder{}
+	b := New(Options{
+		Run:      r.run,
+		LookPath: func(string) (string, error) { return "/bin/sops", nil },
+		Environ:  []string{"HOME=/h", "SOPS_AGE_KEY=AGE-SECRET-KEY-1OTHER", "SOPS_AGE_KEY_FILE=/other"},
+		KeyFile:  "/keys/keys.txt",
+		Key:      key,
+	})
+	file := filepath.Join(t.TempDir(), "common.enc.yaml")
+	os.WriteFile(file, []byte("x"), 0o644)
+	if err := b.Set(file, "A", "v"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Decrypt(file); err == nil {
+		t.Fatal("Decrypt read the recorder's empty output")
+	}
+	if err := b.Edit(file, "vi"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Check(); err == nil {
+		t.Fatal("Check accepted the recorder's empty output")
+	}
+	if len(r.cmds) != 4 {
+		t.Fatalf("ran %d commands, want 4", len(r.cmds))
+	}
+	for _, c := range r.cmds {
+		var got []string
+		for _, kv := range c.Env {
+			if strings.HasPrefix(kv, "SOPS_AGE_") {
+				got = append(got, kv)
+			}
+		}
+		if want := []string{"SOPS_AGE_KEY=" + key}; !reflect.DeepEqual(got, want) {
+			t.Errorf("%v: the key variables are %v, want %v", c.Args, got, want)
+		}
+		if !slicesContains(c.Env, "HOME=/h") {
+			t.Errorf("%v: Env = %v lost the environment", c.Args, c.Env)
+		}
+		if strings.Contains(strings.Join(c.Args, " "), key) || bytes.Contains(c.Stdin, []byte(key)) {
+			t.Errorf("%v: the key is in the arguments or on stdin", c.Args)
+		}
+	}
+}
+
+func TestNoKeyErrorNamesTheKeyVariable(t *testing.T) {
+	const key = "AGE-SECRET-KEY-1FROMTHEENVIRONMENT"
+	r := &recorder{err: errors.New("exit status 128"), stderr: "Failed to get the data key required to decrypt the SOPS file.\n  - | age: no identity matched any of the\n      | recipients."}
+	b := New(Options{Run: r.run, LookPath: func(string) (string, error) { return "/bin/sops", nil }, KeyFile: "/keys/keys.txt", Key: key})
+	file := filepath.Join(t.TempDir(), "common.enc.yaml")
+	os.WriteFile(file, []byte("x"), 0o644)
+	_, err := b.Decrypt(file)
+	if !errors.Is(err, backend.ErrNoKey) || !strings.HasSuffix(err.Error(), "is one of its recipients. The key comes from EZC_AGE_KEY.") {
+		t.Fatalf("error = %v", err)
+	}
+	if strings.Contains(err.Error(), key) {
+		t.Fatal("the error holds the key")
+	}
+}
+
+// The key's text is what a CI job has: the secret line alone, as ezc bot add delivers it, or a whole key file's text.
+func TestKeyTextDecryptsWithNoKeyFile(t *testing.T) {
+	r := newReal(t)
+	file := filepath.Join(r.dir, "common.enc.yaml")
+	if err := New(r.opts).Set(file, "TOKEN", "t0k"); err != nil {
+		t.Fatal(err)
+	}
+	private, err := os.ReadFile(r.keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(r.keyFile); err != nil {
+		t.Fatal(err)
+	}
+	line := string(backend.SecretLine(private))
+	for name, text := range map[string]string{
+		"the secret line": line,
+		"a key file":      "# created: 2026-10-11T12:00:00Z\n# public key: age1example\n" + line + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			o := r.opts
+			o.Environ = []string{"HOME=" + t.TempDir()}
+			o.KeyFile, o.Key = "", text
+			got, err := New(o).Decrypt(file)
+			if err != nil {
+				t.Fatalf("Decrypt: %v", err)
+			}
+			if want := []backend.Pair{{Name: "TOKEN", Value: "t0k"}}; !reflect.DeepEqual(got, want) {
+				t.Errorf("Decrypt = %v, want %v", got, want)
+			}
+		})
+	}
+	o := r.opts
+	o.KeyFile, o.Key = "", line
+	if err := New(o).Set(file, "OTHER", "v"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	// Without the text there is no key at all: the file was opened by it and by nothing else.
+	o.Key = ""
+	if _, err := New(o).Decrypt(file); !errors.Is(err, backend.ErrNoKey) {
+		t.Fatalf("with no key: %v", err)
+	}
+}
