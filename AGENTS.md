@@ -2,7 +2,7 @@
 
 Router for agents working in this repo: the source code of `ezc` ("easy config"), a Go CLI that composes a repo's environment from a global store of secrets and variables and the repo's own `.ezc/`, validates it against a manifest, and exports it or runs a command with it. Read the linked file for detail; this page is only where things are.
 
-The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-10-ezc-design.md); parts 1 (core), 2 (secrets) and 3 (`ezc setup`, the store as a git repo, and its sync) are built. Part 4 (access) is being built: `ezc user list`, `ezc user add` and `ezc store rewrap` are there; `ezc join`, removal, bots and CI setup are not yet.
+The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-10-ezc-design.md); parts 1 (core), 2 (secrets) and 3 (`ezc setup`, the store as a git repo, and its sync) are built. Part 4 (access) is being built: `ezc user list`, `add` and `remove`, the rotation-due list and `ezc store rewrap` are there; `ezc join`, bots and CI setup are not yet.
 
 ## Where things are
 
@@ -21,7 +21,7 @@ The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-
 | `cli/internal/cli/sync.go` | What a command learns about the store before it uses it: the fetch every 10 minutes recorded in `$EZC_HOME/state.json`, the `store:` line on stderr, the refusal to write while behind or while the store's state cannot be read, and the commit after a write. |
 | `cli/internal/cli/storecmd.go` | `ezc store status`, `pull`, `push`, `rewrap` and `audit`. Pull turns the files `gitstore` replaced into the `ezc set -g` lines to run again, from `valuefile.ChangedNames`: names only. |
 | `cli/internal/cli/access.go` | The one path every change to who can decrypt the store takes: `openAccess` (the store, its registry, this machine's key, and every refusal before a write) and `access.apply` (the sequence, one commit, the push, and the restore when a step fails). |
-| `cli/internal/cli/usercmd.go` | `ezc user list` and `add`. `ezc store rewrap` is in `storecmd.go`. |
+| `cli/internal/cli/usercmd.go` | `ezc user list`, `add` and `remove` (and `dueFor`, what a removal leaves to rotate). `ezc store rewrap` is in `storecmd.go`. |
 | `cli/internal/setup` | What `ezc setup` does to a machine: creates the key file, creates the store as a git repo (manifest, `recipients.yaml`, policy, one commit) or clones it, adopts one made by hand (`Adopt`: a git repo, a manifest, and a registry and a policy where they are missing and the store holds no encrypted values yet), and publishes it to GitHub through `gh`. Flags, prompts and printing are in `cli/internal/cli/setupcmd.go`. It leaves alone whatever is already there. |
 | `cli/internal/doctor` | Reports the health of the machine, the store and the repo (`ezc doctor`): checks, warnings and problems with their fixes, and the files in a `.ezc/` that ezc does not read. Never a value. |
 | `bin/ezc` | Shim that builds `cli/bin/ezc` when a Go source changes and runs it; `direnv allow` puts `bin/` on PATH. |

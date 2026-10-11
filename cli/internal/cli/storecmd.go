@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/gitstore"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
 	"github.com/thinkjones/easy-config/cli/internal/paths"
+	"github.com/thinkjones/easy-config/cli/internal/recipients"
 	"github.com/thinkjones/easy-config/cli/internal/resolve"
 	"github.com/thinkjones/easy-config/cli/internal/storeaudit"
 	"github.com/thinkjones/easy-config/cli/internal/valuefile"
@@ -87,23 +89,42 @@ func storeDirty(dir, then string) error {
 }
 
 func newStoreStatusCmd(sys System) *cobra.Command {
-	return &cobra.Command{
+	var due bool
+	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "say how the store stands against its remote",
 		Long: `Fetch from the store's remote, then print where the store is, its remote, whether it is in sync, ahead, behind, diverged or holds uncommitted changes, when the remote was last reached, and the names of pending access requests.
 
-Exits 0 in every state it can read. A store that is not a git repo is not synced, and is said to be.`,
+Exits 0 in every state it can read. A store that is not a git repo is not synced, and is said to be.
+
+With --due, print instead the secrets that need a new value because somebody who could read them was removed, one per line, and nothing else. Names and dates only.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			p, err := storeFolder(sys)
 			if err != nil {
 				return err
 			}
+			if due {
+				d, err := recipients.LoadDue(p.StoreEzc())
+				if err != nil {
+					return err
+				}
+				for _, k := range slices.Sorted(maps.Keys(d)) {
+					fmt.Fprintf(sys.Stdout, "%s  readable by removed %s since %s\n", recipients.Printable(k), recipients.Printable(d[k].Removed), recipients.Printable(d[k].On))
+				}
+				return nil
+			}
+			owing := func(n int) {
+				if n > 0 {
+					fmt.Fprintf(sys.Stdout, "rotation due: %d secrets (ezc store status --due lists them)\n", n)
+				}
+			}
 			row := func(label, value string) { fmt.Fprintf(sys.Stdout, "%-10s%s\n", label, value) }
 			s := syncStore(sys, 0, storeFetchTimeout)
 			if !s.Git {
 				row("store", p.Store())
 				row("state", "not a git repo, so it is not synced")
+				owing(len(dueEntries(p.StoreEzc())))
 				return nil
 			}
 			if s.Err != nil {
@@ -145,9 +166,12 @@ Exits 0 in every state it can read. A store that is not a git repo is not synced
 			row("state", state)
 			row("fetched", fetched)
 			row("requests", requests)
+			owing(s.Due)
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&due, "due", false, "list the secrets that need a new value after somebody was removed")
+	return cmd
 }
 
 func newStorePullCmd(sys System) *cobra.Command {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -15,9 +16,9 @@ import (
 func newUserCmd(sys System) *cobra.Command {
 	cmd := verbs(&cobra.Command{
 		Use:   "user",
-		Short: "say who can read the store, and add someone",
-	}, "list or add")
-	cmd.AddCommand(newUserListCmd(sys), newUserAddCmd(sys))
+		Short: "say who can read the store, add someone or remove them",
+	}, "list, add or remove")
+	cmd.AddCommand(newUserListCmd(sys), newUserAddCmd(sys), newUserRemoveCmd(sys))
 	return cmd
 }
 
@@ -127,4 +128,110 @@ Needs this machine's key file, and the key must be one recipients.yaml names. Re
 	cmd.Flags().StringVar(&kind, "kind", recipients.KindUser, "user, or machine for a second key of a user")
 	cmd.Flags().StringVar(&owner, "owner", "", "the user a machine belongs to")
 	return cmd
+}
+
+func newUserRemoveCmd(sys System) *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove <name>",
+		Short: "stop a person or one of their machines reading the store",
+		Long: `Remove name from recipients.yaml, write the encryption policy from it and re-wrap every encrypted file for the new list, in one commit, then push. Then list the secrets the removed key could read, which need new values: they are recorded in rotation-due.yaml, and ` + "`ezc set -g`" + ` or ` + "`ezc unset -g`" + ` of one clears its entry.
+
+Re-wrapping does not un-leak anything: the removed key still opens every older commit of the store, so only a new value protects a secret.
+
+Refused for a bot (` + "`ezc bot remove`" + `), for the last recipient, for a user who owns machines (remove those first), and for the key of this machine when no other entry of the same person could read the store. Needs this machine's key file; a failure puts the store back as it was.`,
+		Args: exactArgs(1, "a name"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			if !recipients.ValidName(name) {
+				return usagef("%s: the name is lower case letters, digits and -, starting with a letter or a digit. Try `%s`.", cmd.CommandPath(), helpFor(cmd))
+			}
+			a, err := openAccess(sys, true)
+			if err != nil {
+				return err
+			}
+			rec, ok := a.reg.Recipients[name]
+			switch {
+			case !ok:
+				return fmt.Errorf("%s is not a recipient.", name)
+			case rec.Kind == recipients.KindBot:
+				return errors.New("remove a bot with ezc bot remove.")
+			}
+			next, err := a.reg.Without(name)
+			var owns *recipients.OwnsError
+			switch {
+			case errors.Is(err, recipients.ErrLast):
+				return fmt.Errorf("%s is the last recipient and cannot be removed.", name)
+			case errors.As(err, &owns):
+				return fmt.Errorf("this user owns machines: %s.", strings.Join(owns.Machines, ", "))
+			case err != nil:
+				return fmt.Errorf("%w.", err)
+			}
+			if name == a.myName && !a.otherWayIn(name) {
+				return fmt.Errorf("%s is this machine's key and your only one. Removing it would lock you out.", name)
+			}
+			due, list, err := dueFor(a, name)
+			if err != nil {
+				return err
+			}
+			err = a.apply(change{next: next, message: "remove " + name, due: due})
+			var unpushed *unpushedError
+			if err != nil && !errors.As(err, &unpushed) {
+				return err
+			}
+			// A commit that was not pushed is made all the same.
+			if len(list) > 0 {
+				fmt.Fprintf(sys.Stdout, "%d secrets were readable by %s and need new values:\n", len(list), name)
+				for _, entry := range list {
+					fmt.Fprintf(sys.Stdout, "  %s\n", entry)
+				}
+				fmt.Fprintln(sys.Stdout, "Give each a new value with ezc set -g NAME.")
+			}
+			return err
+		},
+	}
+}
+
+// otherWayIn is whether a recipient other than name is the same person: a user of that name, or a machine of that user.
+// A bot is nobody's.
+func (a *access) otherWayIn(name string) bool {
+	person := func(n string) string {
+		switch r := a.reg.Recipients[n]; r.Kind {
+		case recipients.KindUser:
+			return n
+		case recipients.KindMachine:
+			return r.Owner
+		}
+		return ""
+	}
+	who := person(name)
+	for n := range a.reg.Recipients {
+		if n != name && who != "" && person(n) == who {
+			return true
+		}
+	}
+	return false
+}
+
+// dueFor is what removing a recipient leaves to rotate: for every name in every encrypted file of the store, an entry
+// for removed dated today, and the "<file>/<NAME>" list to print. The names come from the files, which need no key.
+func dueFor(a *access, removed string) (func(recipients.Due), []string, error) {
+	today := a.sys.Now().Format("2006-01-02")
+	type held struct{ file, name string }
+	var all []held
+	var list []string
+	for _, file := range a.enc {
+		names, _, err := a.b.Inspect(filepath.Join(a.dir, file))
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: cannot read the names in this file.", file)
+		}
+		for _, name := range names {
+			all = append(all, held{file, name})
+			list = append(list, recipients.Printable(file+"/"+name))
+		}
+	}
+	return func(d recipients.Due) {
+		for _, h := range all {
+			d.Add(h.file, h.name, removed, today)
+		}
+	}, list, nil
 }

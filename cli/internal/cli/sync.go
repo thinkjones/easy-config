@@ -35,6 +35,7 @@ type storeSync struct {
 	Fetched  time.Time // the last fetch that worked; zero when never
 	Offline  bool      // a fetch was tried just now and failed
 	Requests []string  // names in the store's requests folder, sorted
+	Due      int       // how many entries rotation-due.yaml holds
 }
 
 // storeGit is git as this machine runs it.
@@ -86,7 +87,17 @@ func syncStore(sys System, maxAge, timeout time.Duration) storeSync {
 	}
 	s.Status, s.Err = g.Status(dir)
 	s.Requests = requests(p.StoreEzc())
+	s.Due = len(dueEntries(p.StoreEzc()))
 	return s
+}
+
+// dueEntries is rotation-due.yaml in a store's .ezc folder; an unreadable file holds none, which is for the commands that read it to say.
+func dueEntries(storeEzc string) recipients.Due {
+	due, err := recipients.LoadDue(storeEzc)
+	if err != nil {
+		return nil
+	}
+	return due
 }
 
 // requests are the names of the access requests in a store's .ezc folder: its requests/*.yaml, sorted.

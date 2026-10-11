@@ -242,8 +242,8 @@ func TestUserAddUsage(t *testing.T) {
 			t.Errorf("%v: stdout %q, git ran %d times", c.args, out, len(f.gits))
 		}
 	}
-	wantUsage(t, f.run("user"), "say list or add")
-	wantUsage(t, f.run("user", "ad"), "use list or add")
+	wantUsage(t, f.run("user"), "say list, add or remove")
+	wantUsage(t, f.run("user", "ad"), "use list, add or remove")
 	if x.git("rev-parse", "HEAD") != head {
 		t.Fatal("a commit was made")
 	}

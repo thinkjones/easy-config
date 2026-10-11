@@ -16,6 +16,7 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/check"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
+	"github.com/thinkjones/easy-config/cli/internal/recipients"
 	"github.com/thinkjones/easy-config/cli/internal/resolve"
 	"github.com/thinkjones/easy-config/cli/internal/valuefile"
 )
@@ -77,6 +78,25 @@ func (s scope) commit(sys System, st storeSync, what string, names []string, bef
 		return nil
 	}
 	return commitStore(sys, st, what+" ("+strings.Join(files, ", ")+")", files...)
+}
+
+// pendingRotation is rotation-due.yaml, and whether it holds an entry for name in file. Only the store has one.
+func (s scope) pendingRotation(file, name string) (recipients.Due, bool, error) {
+	if !s.store {
+		return nil, false, nil
+	}
+	due, err := recipients.LoadDue(s.dir)
+	if err != nil {
+		return nil, false, err
+	}
+	_, found := due[file+"/"+name]
+	return due, found, nil
+}
+
+// clearRotation drops the entry for name in file from due and saves the file (it is removed with its last entry).
+func (s scope) clearRotation(due recipients.Due, file, name string) error {
+	due.Clear(file, name)
+	return due.Save(s.dir)
 }
 
 // valuesBase is "common", or "env.<env>" when an environment is named.
@@ -232,6 +252,17 @@ A name the scope's manifest does not declare is declared by this command, as req
 			if !declared {
 				watched = []string{manifestName, file}
 			}
+			// A secret that is due for a new value stops being due when it gets one, in the same commit.
+			var due recipients.Due
+			cleared := false
+			if v.IsSecret() {
+				if due, cleared, err = sc.pendingRotation(file, name); err != nil {
+					return err
+				}
+				if cleared {
+					watched = append(watched, recipients.DueFile)
+				}
+			}
 			st, err := sc.guard(sys, watched...)
 			if err != nil {
 				return err
@@ -307,6 +338,11 @@ A name the scope's manifest does not declare is declared by this command, as req
 						return fmt.Errorf("%w\n       %s could not be put back as it was; fix %s there with `ezc edit`", err, path, name)
 					}
 					return undeclare(fmt.Errorf("%w\n       Nothing was changed", err))
+				}
+			}
+			if cleared {
+				if err := sc.clearRotation(due, file, name); err != nil {
+					return undeclare(err)
 				}
 			}
 			fmt.Fprintf(sys.Stdout, "set %s in %s\n", name, sc.show(file))
@@ -477,6 +513,14 @@ func newUnsetCmd(sys System) *cobra.Command {
 			if undeclare {
 				watched = append([]string{manifestName}, files...)
 			}
+			encrypted := files[1]
+			due, cleared, err := sc.pendingRotation(encrypted, name)
+			if err != nil {
+				return err
+			}
+			if cleared {
+				watched = append(watched, recipients.DueFile)
+			}
 			st, err := sc.guard(sys, watched...)
 			if err != nil {
 				return err
@@ -503,6 +547,11 @@ func newUnsetCmd(sys System) *cobra.Command {
 					}
 					removed++
 					fmt.Fprintf(sys.Stdout, "unset %s from %s\n", name, sc.show(file))
+					if cleared && file == encrypted {
+						if err := sc.clearRotation(due, file, name); err != nil {
+							return err
+						}
+					}
 				}
 				if removed == 0 && !(undeclare && declared) {
 					return fmt.Errorf("%s is not set in %s or %s.", name, sc.show(files[0]), sc.show(files[1]))

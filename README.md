@@ -37,7 +37,7 @@ Each step is described below: [Set up](#set-up), [Writing to the store](#writing
 
 ## Not there yet
 
-This is `ezc` 0.3. A second person, or a second machine with a key of its own, is added with `ezc user add` once you have their public key (see [Access](#access)). Asking for access from the new machine (`ezc join`), removing someone, bots, and setup for CI are not there yet. A second machine can also share the first one's key file: copy `~/.config/sops/age/keys.txt` from the first machine to the same path on the second, then run `ezc setup --store owner/repo` there. Setup uses a key file that is already there and never replaces it.
+This is `ezc` 0.3. A second person, or a second machine with a key of its own, is added with `ezc user add` once you have their public key, and removed with `ezc user remove` (see [Access](#access)). Asking for access from the new machine (`ezc join`), bots, and setup for CI are not there yet. A second machine can also share the first one's key file: copy `~/.config/sops/age/keys.txt` from the first machine to the same path on the second, then run `ezc setup --store owner/repo` there. Setup uses a key file that is already there and never replaces it.
 
 Two things are done by hand for now: a repo that keeps secrets of its own needs the store's encryption policy copied into its `.ezc/` (see [Encryption](#encryption)), and two machines that declare a new name at the same time must resolve the conflict with git (see [Syncing the store](#syncing-the-store)). The registry and the TUI come later.
 
@@ -81,6 +81,7 @@ A store made by hand, a folder with a `.ezc/` that is already at the store's pat
 | `ezc store push` | Send the commits made here to the store's remote. Refused while the store is behind the remote or has diverged from it, holds uncommitted changes, or has no remote. |
 | `ezc store rewrap` | Write the store's encryption policy from `recipients.yaml` and re-wrap every encrypted file for exactly the keys it names, in one commit, then push. The fix when `ezc user list` names a file. See [Access](#access). |
 | `ezc user list` | List who can read the store, from `recipients.yaml`: name, kind, owner, when added and by whom, with this machine's row marked. Then name every encrypted file whose recipients are not the registry's, and exit 1 when there is one. Needs no key. |
+| `ezc user remove <name>` | Remove a person or one machine from `recipients.yaml` and re-wrap every encrypted file without their key, in one commit named `remove <name>`, then push; then list the secrets they could read, which need new values. See [Access](#access). |
 | `ezc user add <name> <key> [--kind user\|machine] [--owner USER]` | Add a public key to `recipients.yaml`, write the policy from it and re-wrap every encrypted file of the store, in one commit, then push. `--kind machine --owner USER` adds a second key of a user who is already a recipient. See [Access](#access). |
 | `ezc store audit` | Check the store's values files against its manifest: every value declared, every `required` name set in at least one file, secrets in encrypted files and nothing else there, no value still a placeholder or the wrong shape, and no value in an encrypted file left unencrypted. Prints names, files and the fix for each, never a value; exits 1 when there is anything to fix. |
 | `ezc doctor [ENV] [--only machine\|store\|repo]` | Report the health of the machine (ezc, the encryption tool, the key), the store (location, manifest, audit, policy, unrecognised files) and the repo (manifest, `env.sh` shim version, environments, whether the environment resolves and passes the manifest). Each line is a check (`✓`), a warning (`!`) or a problem (`✗`), with what to do about it. Prints names, counts and paths, never a value; exits 1 when anything is broken, and warnings alone exit 0. Works without a key and outside a repo. |
@@ -172,6 +173,8 @@ Who can read the store's secrets is written in one place, `recipients.yaml` in t
 ezc user list                                             # who can read the store
 ezc user add sam age1…                                    # let sam read it
 ezc user add sam-laptop age1… --kind machine --owner sam  # a second key of sam's
+ezc user remove sam                                       # sam can no longer read it
+ezc store status --due                                    # the secrets that need new values
 ezc store rewrap                                          # make the files match recipients.yaml again
 ```
 
@@ -183,6 +186,21 @@ Run ezc store rewrap.
 ```
 
 `ezc user add <name> <key>` takes a public key, which is safe to pass around: `ezc setup --store owner/repo` prints it on a machine whose key cannot read the store yet. A private key is never given to a command. The name is lower case letters, digits and `-`. The command adds the entry, writes the policy, re-wraps every encrypted file of the store for the new list, checks that each file now lists exactly the registry's keys, commits those files as `add <name>` and pushes. The new person then runs `ezc setup --store owner/repo` (or `ezc store pull`) and can read the secrets.
+
+### Removing someone
+
+`ezc user remove <name>` takes the entry out, re-wraps every encrypted file without that key and commits as `remove <name>`, the same way `user add` does, and pushes. Re-wrapping does not un-leak anything: the removed key opened every value in the store while it was a recipient, and it still opens every older commit, which is still in the store's history and in every clone and backup of it. Only a new value protects a secret, so the command writes each secret the key could read to `rotation-due.yaml` (the file and the name, with who was removed and the date) and prints them:
+
+```
+2 secrets were readable by sam and need new values:
+  common.enc.yaml/TOKEN
+  env.prod.enc.yaml/TOKEN
+Give each a new value with ezc set -g NAME.
+```
+
+Change the secret itself, at the service that issued it, then give ezc the new value with `ezc set -g NAME` (add `--env` for an environment's file). Setting the secret, or removing it with `ezc unset -g NAME`, clears its entry in the same commit; the file goes with its last entry. `ezc store status` shows `rotation due: <n> secrets`, and `ezc store status --due` lists them, one `<file>/<NAME>  readable by removed <who> since <date>` line each. Nothing here prints a value. Whoever is removed is not told, and nothing here takes the values back from them.
+
+The command refuses a bot (`ezc bot remove`), the last recipient, a user who still owns machines (remove the machines first), and this machine's own key when no other entry of the same person could read the store: `<name> is this machine's key and your only one. Removing it would lock you out.`
 
 `ezc store rewrap` runs the same steps with the registry as it is, in a commit named `rewrap`. When every file already matches it says `✓ every file is encrypted for the registry` and commits nothing.
 
@@ -197,7 +215,7 @@ Re-wrapping changes who can open the files from now on. It does not change the v
 
 ### A store made by hand
 
-A store whose encryption policy you wrote yourself has no `recipients.yaml`, so `ezc` does not know who can read it, and `ezc user list`, `ezc user add` and `ezc store rewrap` say so. To hand it over, write `.ezc/recipients.yaml` with one entry for each key your policy lists, this machine's among them:
+A store whose encryption policy you wrote yourself has no `recipients.yaml`, so `ezc` does not know who can read it, and `ezc user list`, `ezc user add`, `ezc user remove` and `ezc store rewrap` say so. To hand it over, write `.ezc/recipients.yaml` with one entry for each key your policy lists, this machine's among them:
 
 ```yaml
 recipients:
