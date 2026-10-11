@@ -413,3 +413,25 @@ func TestPolicyInFolderWithGlobCharacters(t *testing.T) {
 		t.Fatalf("%+v", it)
 	}
 }
+
+func TestStoreAuditWithAnUnencryptedValueIsBrokenNotAborted(t *testing.T) {
+	o := healthy(t)
+	put(t, filepath.Join(o.StoreDir, backend.FakePolicy), "")
+	put(t, filepath.Join(o.StoreDir, "common.enc.yaml"), "NAME: FAKE[bg==]\nLEAKED: plain-canary\n")
+	var states []State
+	var details []string
+	for _, s := range Collect(o).Sections {
+		for _, it := range s.Items {
+			if s.Name == "store" && it.Label == "audit" {
+				states, details = append(states, it.State), append(details, it.Detail)
+			}
+			if strings.Contains(it.Detail+it.Fix, "plain-canary") {
+				t.Errorf("%s prints the value", it.Label)
+			}
+		}
+	}
+	want := []string{"3 to fix — run `ezc store audit`", "damaged: value checks skipped for common.enc.yaml"}
+	if !reflect.DeepEqual(details, want) || !reflect.DeepEqual(states, []State{Broken, Warn}) {
+		t.Fatalf("got %v %v", states, details)
+	}
+}

@@ -19,7 +19,8 @@ const (
 
 // Fake is a Backend that needs no tool. It keeps each file on disk in a form that is not plaintext: one
 // `NAME: FAKE[<base64 of the value>]` line per name, in insertion order. A line `NAME: plain` is a name
-// whose value is not encrypted.
+// whose value is not encrypted: Inspect reports it, and everything that reads the file refuses the whole
+// file, as a tool that authenticates the file does once a line has been added by hand.
 type Fake struct {
 	Locked     bool                      // Decrypt, Set, Unset and Edit fail with ErrNoKey
 	Missing    bool                      // Check fails with ErrNoTool
@@ -180,8 +181,7 @@ func decodeFake(path string, lines []fakeLine) ([]Pair, error) {
 	pairs := []Pair{}
 	for _, l := range lines {
 		if !l.enc {
-			pairs = append(pairs, Pair{Name: l.name, Value: l.raw})
-			continue
+			return nil, fmt.Errorf("%s: holds a value that is not encrypted, so the file cannot be read", path)
 		}
 		b, err := base64.StdEncoding.DecodeString(l.raw[len(fakePrefix) : len(l.raw)-len(fakeSuffix)])
 		if err != nil {

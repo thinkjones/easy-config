@@ -197,6 +197,9 @@ func auditItems(o Options) []Item {
 	if len(res.KeylessSkipped) > 0 {
 		items = append(items, Item{Warn, "audit", "no key: value checks skipped for " + strings.Join(res.KeylessSkipped, ", "), ""})
 	}
+	if len(res.Unreadable) > 0 {
+		items = append(items, Item{Warn, "audit", "damaged: value checks skipped for " + strings.Join(res.Unreadable, ", "), ""})
+	}
 	return items
 }
 

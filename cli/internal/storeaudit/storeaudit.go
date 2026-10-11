@@ -60,6 +60,9 @@ type Result struct {
 	Findings []Finding // sorted by Name, then File
 	// KeylessSkipped is the encrypted files whose values could not be checked for want of a key.
 	KeylessSkipped []string
+	// Unreadable is the encrypted files holding a value that is not encrypted: the backend cannot read
+	// such a file, so their values were not checked.
+	Unreadable []string
 }
 
 func (r Result) OK() bool { return len(r.Findings) == 0 }
@@ -77,6 +80,9 @@ func (r Result) Report() string {
 	if len(r.KeylessSkipped) > 0 {
 		fmt.Fprintf(&b, "! no key: value checks skipped for %s\n", strings.Join(r.KeylessSkipped, ", "))
 	}
+	if len(r.Unreadable) > 0 {
+		fmt.Fprintf(&b, "! damaged: value checks skipped for %s\n", strings.Join(r.Unreadable, ", "))
+	}
 	return b.String()
 }
 
@@ -91,7 +97,7 @@ type occurrence struct {
 
 // Audit checks the store in dir (a .ezc folder) against its manifest. It returns an error only when
 // the audit could not run: no manifest or an invalid one, a values file that cannot be read, or a
-// backend failure other than a missing key. Everything else is a Finding. It never returns early on
+// backend failure other than a missing key on a file whose values are all encrypted. Everything else is a Finding. It never returns early on
 // a finding: a store that has drifted should produce one list to work through.
 func Audit(dir string, b backend.Backend) (Result, error) {
 	res := Result{Dir: dir}
@@ -209,22 +215,28 @@ func plainOccurrences(path, file, env string) (map[string]occurrence, []string, 
 // and the boundary rule are checkable without one, and this is the only way to catch a value written
 // back unencrypted, which is how a fail-open encryption rule leaks. Decrypting then makes the value
 // checks possible; with no key that is skipped, and said so, rather than reported as a clean run.
+// A file holding an unencrypted value is not decrypted at all: the backend refuses the whole file,
+// and that refusal must not cost the finding.
 func encryptedOccurrences(path, file, env string, b backend.Backend, res *Result) (map[string]occurrence, []string, error) {
 	names, unencrypted, err := b.Inspect(path)
 	if err != nil {
 		return nil, nil, err
 	}
 	values := map[string]string{}
-	pairs, err := b.Decrypt(path)
-	switch {
-	case errors.Is(err, backend.ErrNoKey):
-		res.KeylessSkipped = append(res.KeylessSkipped, file)
-		pairs = nil
-	case err != nil:
-		return nil, nil, err
-	}
-	for _, p := range pairs {
-		values[p.Name] = p.Value
+	if len(unencrypted) > 0 {
+		res.Unreadable = append(res.Unreadable, file)
+	} else {
+		pairs, err := b.Decrypt(path)
+		switch {
+		case errors.Is(err, backend.ErrNoKey):
+			res.KeylessSkipped = append(res.KeylessSkipped, file)
+			pairs = nil
+		case err != nil:
+			return nil, nil, err
+		}
+		for _, p := range pairs {
+			values[p.Name] = p.Value
+		}
 	}
 	occs := map[string]occurrence{}
 	for _, n := range names {
@@ -251,7 +263,7 @@ func judge(m manifest.Manifest, name string, o occurrence) []Finding {
 
 	if o.unencoded {
 		add("is in an encrypted file but its value is not encrypted",
-			fmt.Sprintf("Set it again with `ezc set -g %s%s` and treat the old value as leaked.", name, fl))
+			fmt.Sprintf("The file was changed by hand and can no longer be decrypted. Restore %s from git, then set the value with `ezc set -g %s%s`; treat the value as leaked.", o.file, name, fl))
 	}
 	if slices.Contains(resolve.SelectorVars, name) {
 		add("names the environment and cannot be stored", "")

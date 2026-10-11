@@ -150,13 +150,57 @@ func TestPlaintextInSecrets(t *testing.T) {
 	}
 }
 
+// noDecrypt fails the test when a file is decrypted.
+type noDecrypt struct {
+	*backend.Fake
+	t *testing.T
+}
+
+func (b noDecrypt) Decrypt(path string) ([]backend.Pair, error) {
+	b.t.Errorf("Decrypt(%s) was called", path)
+	return b.Fake.Decrypt(path)
+}
+
+const damagedFix = "The file was changed by hand and can no longer be decrypted. Restore common.enc.yaml from git, then set the value with `ezc set -g LEAKED`; treat the value as leaked."
+
 func TestUnencryptedValueInEncryptedFile(t *testing.T) {
-	dir, b := build(t, decls, map[string]string{"common.yaml": "A: x\n", "common.enc.yaml": "TOKEN: plain\n"}, nil)
+	for _, locked := range []bool{false, true} {
+		dir, b := build(t, decls, map[string]string{"common.yaml": "A: x\n"}, tok("s3"))
+		f, err := os.OpenFile(filepath.Join(dir, "common.enc.yaml"), os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.WriteString("LEAKED: plain-canary\n")
+		f.Close()
+		b.Locked = locked
+		// The backend refuses the whole file, as the real one does, so the audit must not ask it to.
+		if _, err := b.Decrypt(filepath.Join(dir, "common.enc.yaml")); err == nil {
+			t.Fatal("the fake decrypted a file with an unencrypted line")
+		}
+		res := audit(t, dir, noDecrypt{b, t})
+		want := []Finding{
+			{Name: "LEAKED", File: "common.enc.yaml", Why: "is in an encrypted file but its value is not encrypted", Fix: damagedFix},
+			{Name: "LEAKED", File: "common.enc.yaml", Why: "not declared in manifest.yaml", Fix: "Declare it with a type and a desc, or remove it with `ezc unset -g LEAKED`."},
+		}
+		if !reflect.DeepEqual(res.Findings, want) {
+			t.Fatalf("locked %v: got %+v", locked, res.Findings)
+		}
+		if !reflect.DeepEqual(res.Unreadable, []string{"common.enc.yaml"}) || len(res.KeylessSkipped) != 0 {
+			t.Fatalf("locked %v: unreadable %v, keyless %v", locked, res.Unreadable, res.KeylessSkipped)
+		}
+		report := res.Report()
+		if !strings.Contains(report, "! damaged: value checks skipped for common.enc.yaml\n") || strings.Contains(report, "plain-canary") || strings.Contains(report, "s3") {
+			t.Fatalf("locked %v: got %q", locked, report)
+		}
+	}
+}
+
+func TestUnencryptedValueFixNamesTheEnvironment(t *testing.T) {
+	dir, b := build(t, decls, map[string]string{"common.yaml": "A: x\n", "env.prod.enc.yaml": "TOKEN: plain\n"}, nil)
 	f := only(t, audit(t, dir, b))
-	want := Finding{Name: "TOKEN", File: "common.enc.yaml", Why: "is in an encrypted file but its value is not encrypted",
-		Fix: "Set it again with `ezc set -g TOKEN` and treat the old value as leaked."}
-	if f != want {
-		t.Fatalf("got %+v", f)
+	want := "The file was changed by hand and can no longer be decrypted. Restore env.prod.enc.yaml from git, then set the value with `ezc set -g TOKEN --env prod`; treat the value as leaked."
+	if f.Fix != want {
+		t.Fatalf("got %q", f.Fix)
 	}
 }
 

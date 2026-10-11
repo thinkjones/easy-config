@@ -295,3 +295,51 @@ func TestPolicyThatMatchesNothingEndToEnd(t *testing.T) {
 		t.Fatalf("the manifest changed (%v)", err)
 	}
 }
+
+func TestHandAddedPlaintextLineEndToEnd(t *testing.T) {
+	e := newE2E(t)
+	store := filepath.Join(e.ezcHome, "store", ".ezc")
+	e.writePolicy(store, e.pub)
+	if err := os.WriteFile(filepath.Join(store, "manifest.yaml"), []byte("schemaVersion: v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.mustRun(e.repo, e2eSecret, "set", "-g", "API_TOKEN", "--type", "secret", "--desc", "token")
+	enc := filepath.Join(store, "common.enc.yaml")
+	data, err := os.ReadFile(enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(enc, append([]byte("LEAKED: leaked-plain-value\n"), data...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The key is present, and sops refuses the whole file; the audit must still name the leak.
+	stdout, stderr, code := e.run(e.repo, "", "store", "audit")
+	all := stdout + stderr
+	for _, want := range []string{
+		"LEAKED (common.enc.yaml) — is in an encrypted file but its value is not encrypted",
+		"Restore common.enc.yaml from git, then set the value with `ezc set -g LEAKED`",
+		"! damaged: value checks skipped for common.enc.yaml",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("audit: no %q", want)
+		}
+	}
+	if code != 1 || strings.Contains(all, "leaked-plain-value") || strings.Contains(all, e2eSecret) {
+		t.Fatalf("audit: exit %d\n%s", code, all)
+	}
+
+	stdout, stderr, code = e.run(e.repo, "", "doctor")
+	all = stdout + stderr
+	if code != 1 || !strings.Contains(stdout, "to fix — run `ezc store audit`") || !strings.Contains(stdout, "\nrepo\n") {
+		t.Fatalf("doctor: exit %d\n%s", code, all)
+	}
+	if strings.Contains(all, "leaked-plain-value") || strings.Contains(all, e2eSecret) {
+		t.Fatalf("doctor printed a value:\n%s", all)
+	}
+
+	// Commands that load the file keep failing, with the backend's fixed sentence.
+	if stdout, stderr, code := e.run(e.repo, "", "env", "export"); code != 1 || stdout != "" || !strings.Contains(stderr, "could not read this file") || strings.Contains(stderr, "leaked-plain-value") {
+		t.Fatalf("env export: exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+}

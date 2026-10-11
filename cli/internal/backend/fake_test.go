@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
@@ -111,5 +112,33 @@ func TestFakeEditCreatesAMissingFile(t *testing.T) {
 	f.Locked = true
 	if err := f.Edit(file, "ed"); !errors.Is(err, backend.ErrNoKey) {
 		t.Errorf("locked: got %v", err)
+	}
+}
+
+func TestFakeRefusesAFileWithAnUnencryptedLine(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, backend.FakePolicy), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "common.enc.yaml")
+	content := []byte("A: plain\nB: FAKE[dg==]\n")
+	if err := os.WriteFile(file, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := &backend.Fake{EditFunc: func(p []backend.Pair) []backend.Pair { return p }}
+	ops := map[string]func() error{
+		"Decrypt": func() error { _, err := f.Decrypt(file); return err },
+		"Set":     func() error { return f.Set(file, "B", "v") },
+		"Unset":   func() error { return f.Unset(file, "A") },
+		"Edit":    func() error { return f.Edit(file, "ed") },
+	}
+	for name, op := range ops {
+		err := op()
+		if err == nil || errors.Is(err, backend.ErrNoKey) || !strings.Contains(err.Error(), file) || strings.Contains(err.Error(), "plain") {
+			t.Errorf("%s: error = %v", name, err)
+		}
+	}
+	if got, _ := os.ReadFile(file); string(got) != string(content) {
+		t.Errorf("the file changed: %q", got)
 	}
 }
