@@ -8,13 +8,32 @@
 go install github.com/thinkjones/easy-config/cli/cmd/ezc@latest
 ```
 
+## Set up
+
+```sh
+ezc setup --new-local                 # a new store on this machine
+ezc setup --new-github owner/repo     # a new store, and a private GitHub repo for it (needs gh)
+ezc setup --store owner/repo          # an existing store: owner/repo (needs gh), a URL or a path
+```
+
+`ezc setup` takes a machine from nothing to a working store. It checks that `git` and `sops` are installed (and offers to install `sops` with Homebrew when `brew` is there), creates your key, creates or clones the store, and writes `config.toml` in ezc's home (`$EZC_HOME` when set, else `~/Library/ezc` on macOS and `~/.local/share/ezc` on Linux). The store is a git repo at `store` in that folder. On a terminal, setup asks for what no flag says: your name, where the store comes from, and whether to install with brew; `--name` and `--yes` answer in advance. Without a terminal it needs one of the three flags above.
+
+Each line it prints is something that was already there (`✓`) or something it made (`+`). A new key is written to `~/.config/sops/age/keys.txt` (or the `key_file` of `config.toml`), readable only by you. Back that file up when setup says so: without it your secrets cannot be read, and it cannot be recovered. Setup never prints the private key.
+
+A new store starts with an empty manifest, `recipients.yaml` naming you and your public key, the encryption policy written from it, and one commit. Your name is `--name`, else the `user` of `config.toml`, else your login name in lower case; it is lower case letters, digits and `-`.
+
+After `--store`, when your key is not one the store's `recipients.yaml` names, setup says so and prints your public key: give it to someone who has access. The machine is set up either way.
+
+Run again, setup changes only what is missing. A key file, a store or a value in `config.toml` that is already there is never overwritten, and a store with no remote is published by `--new-github`. Asking for a different store than the one in place is refused: move the store away first. Setup manages the store in ezc's home, so it refuses to run while `EZC_STORE` is set.
+
 ## Status
 
-Parts 1 and 2 of 7 are built: the environment commands, and secrets: encrypted values files read and written through `sops`, `ezc set`, `unset` and `edit`, `ezc store audit` and `ezc doctor`. Still to come: `ezc setup`, store sync, users and bots, the registry and the TUI.
+Parts 1 and 2 of 7 are built: the environment commands, and secrets: encrypted values files read and written through `sops`, `ezc set`, `unset` and `edit`, `ezc store audit` and `ezc doctor`. Still to come: store sync, users and bots, the registry and the TUI.
 
 ## Quick start
 
 ```sh
+ezc setup --new-local              # once per machine: your key and the store
 ezc repo init                      # creates .ezc/ in this folder
 $EDITOR .ezc/manifest.yaml         # declare what the repo needs under `required`
 $EDITOR .ezc/env.local.yaml        # give it values: NAME: value
@@ -28,6 +47,7 @@ ezc run -- <command>               # run a command with it
 | --- | --- |
 | `ezc version` | Print ezc's version. |
 | `ezc help [command]` | Help for ezc, or for one command. |
+| `ezc setup [--new-local \| --new-github owner/repo \| --store REPO] [--name NAME] [--yes]` | Set the machine up: check the tools, create your key, create or clone the store, write the config. Changes only what is missing; see [Set up](#set-up). |
 | `ezc env [ENV] [-m FILE] [--verbose]` | Check an environment against the manifest. Reports on stderr, prints no values, exits 1 on problems. With `-m FILE` the values come from that manifest's folder, not this repo. |
 | `ezc env export [ENV] [--format shell\|json]` | Print the environment's variables on stdout. `shell` is for `eval`; `json` is one object of names to values, for any other tool. Outside a repo it exports the store alone. |
 | `ezc run [ENV] -- <command> [args…]` | Run a command with the environment added to its own. On Unix `ezc` replaces itself with the command, so signals sent to it reach the command and the exit status is the command's. Exits 127 when the command is not found, 126 when it cannot be run. |
@@ -64,7 +84,8 @@ A repo's `.ezc/` folder and the global store use the same layout. Every values f
 | `env.<name>.yaml` | Plaintext values for one environment. |
 | `common.enc.yaml` | Encrypted values for all environments. |
 | `env.<name>.enc.yaml` | Encrypted values for one environment. |
-| `.sops.yaml` | The encryption policy: which files are encrypted, and for which keys. Needed before a secret can be stored in the folder; see [Encryption](#encryption). |
+| `.sops.yaml` | The encryption policy: which files are encrypted, and for which keys. Needed before a secret can be stored in the folder. `ezc setup` writes the store's; see [Encryption](#encryption). |
+| `recipients.yaml` | In the store only: who can decrypt it, by name and public key. `ezc setup` writes the first entry. |
 | `env.sh` | The shim mise or direnv sources. Written by `ezc repo init`; do not edit. |
 
 A values file is one flat YAML mapping of `NAME: value` lines. Values are read as raw text, so no type is inferred: `08540` stays `08540`.
@@ -84,19 +105,11 @@ A variable name, in the manifest and in a values file, is letters, digits and un
 
 ## Encryption
 
-Secrets need [`sops`](https://github.com/getsops/sops) and [`age`](https://github.com/FiloSottile/age) installed: `brew install sops age`, or the release pages of each. `ezc doctor` says when `sops` is missing or too old, and every command that needs it names it. Storing a secret in a new file works on macOS and Linux only.
+Secrets need [`sops`](https://github.com/getsops/sops) installed: `brew install sops`, or its release page; `ezc setup` offers to install it. `ezc doctor` says when `sops` is missing or too old, and every command that needs it names it. Storing a secret in a new file works on macOS and Linux only.
 
-A variable the manifest declares `secret` is stored encrypted, in `common.enc.yaml` or `env.<name>.enc.yaml`, and `ezc set` writes it there. Until `ezc setup` does this for you in a later version, a folder needs its encryption policy written by hand before a secret can be stored in it: create `.ezc/.sops.yaml` with
+A variable the manifest declares `secret` is stored encrypted, in `common.enc.yaml` or `env.<name>.enc.yaml`, and `ezc set` writes it there. A folder needs its encryption policy, `.ezc/.sops.yaml`, before a secret can be stored in it. `ezc setup` writes the store's from `recipients.yaml`, so `ezc set -g` works as soon as setup has run; do not edit that file. A repo that keeps secrets of its own needs the same file in its `.ezc/`: copy the store's. A policy whose `path_regex` matches no file name stores nothing, and `ezc set` says so.
 
-```yaml
-creation_rules:
-  - path_regex: \.enc\.yaml$
-    age: age1...your public key...
-```
-
-The key file is the `key_file` of `$EZC_HOME/config.toml` when that file names one, else `~/.config/sops/age/keys.txt`. It is passed to `sops` as `SOPS_AGE_KEY_FILE`; when `SOPS_AGE_KEY` or `SOPS_AGE_KEY_FILE` is already set in the environment, that wins. Make a key with `mkdir -p ~/.config/sops/age && age-keygen -o ~/.config/sops/age/keys.txt`; its public key is printed, and goes after `age:` above. A policy whose `path_regex` matches no file name stores nothing, and `ezc set` says so.
-
-The store is made by hand too, until `ezc setup` exists: create the folder `store/.ezc` in ezc's home (`$EZC_HOME` when set, else `~/Library/ezc` on macOS and `~/.local/share/ezc` on Linux; with no store, `ezc env` names the place it looked), then a `manifest.yaml` there holding `schemaVersion: v1`, and the same `.sops.yaml`. `ezc set -g` then declares and stores values in it.
+The key file is the `key_file` of `$EZC_HOME/config.toml` when that file names one, else `~/.config/sops/age/keys.txt`; `ezc setup` creates it when it is not there. It is passed to `sops` as `SOPS_AGE_KEY_FILE`; when `SOPS_AGE_KEY` or `SOPS_AGE_KEY_FILE` is already set in the environment, that wins, so unset them before `ezc setup` unless they name the same key.
 
 A secret is typed at a hidden prompt or piped on stdin, never passed as an argument, and reaches `sops` on its stdin only. A value cannot move across the secret boundary: `ezc set` refuses a name that is already in the other file of the pair, so remove it with `ezc unset`, which clears both files of the pair, first.
 
