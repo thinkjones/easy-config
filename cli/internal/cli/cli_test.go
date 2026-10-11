@@ -355,6 +355,47 @@ func TestExportIsSilentWithoutAStore(t *testing.T) {
 	}
 }
 
+func TestStoreThatIsAFileIsAnError(t *testing.T) {
+	for _, args := range [][]string{{"env", "export"}, {"env"}, {"run", "--", "true"}, {"list"}, {"get", "A"}} {
+		f := newFake(t)
+		repo(t, f, map[string]string{"manifest.yaml": empty, "env.local.yaml": "A: b\n"})
+		write(t, filepath.Join(f.env["EZC_HOME"], "store"), "not a folder")
+		err := f.run(args...)
+		if err == nil || !strings.Contains(err.Error(), ": the store is not a folder") {
+			t.Errorf("%v: got %v", args, err)
+		}
+		if f.out.Len() != 0 || len(f.children) != 0 {
+			t.Errorf("%v: stdout %q, children %v", args, f.out.String(), f.children)
+		}
+	}
+}
+
+func TestEZC_STOREThatDoesNotExistIsAnError(t *testing.T) {
+	for _, args := range [][]string{{"env", "export"}, {"env"}, {"run", "--", "true"}, {"list"}, {"list", "-g"}, {"get", "A"}} {
+		f := newFake(t)
+		repo(t, f, map[string]string{"manifest.yaml": empty, "env.local.yaml": "A: b\n"})
+		nowhere := filepath.Join(t.TempDir(), "typo")
+		f.env["EZC_STORE"] = nowhere
+		err := f.run(args...)
+		if err == nil || err.Error() != "EZC_STORE is set to "+nowhere+", which does not exist." {
+			t.Errorf("%v: got %v", args, err)
+		}
+		if f.out.Len() != 0 || len(f.children) != 0 {
+			t.Errorf("%v: stdout %q, children %v", args, f.out.String(), f.children)
+		}
+	}
+}
+
+// EZC_STORE naming a folder that exists, with no .ezc in it yet, is a store with nothing in it.
+func TestEZC_STOREThatExistsButIsEmpty(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{"manifest.yaml": empty, "env.local.yaml": "A: b\n"})
+	f.env["EZC_STORE"] = t.TempDir()
+	if err := f.run("env", "export"); err != nil || f.out.String() != "export A='b'\n" || f.errOut.Len() != 0 {
+		t.Fatalf("got %v, stdout %q stderr %q", err, f.out.String(), f.errOut.String())
+	}
+}
+
 func TestExportPrintsNothingOnFailure(t *testing.T) {
 	f := newFake(t)
 	repo(t, f, map[string]string{"manifest.yaml": empty, "env.local.yaml": "B: ok\nA: $NOPE\n"})

@@ -13,7 +13,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
-	"github.com/thinkjones/easy-config/cli/internal/paths"
 	"github.com/thinkjones/easy-config/cli/internal/resolve"
 )
 
@@ -28,7 +27,7 @@ func manifestIfPresent(path string) (m manifest.Manifest, found bool, err error)
 
 // storeManifest is the store's manifest; found is false when it has none.
 func storeManifest(sys System) (manifest.Manifest, bool, error) {
-	p, err := paths.Resolve(sys.Getenv, sys.GOOS)
+	p, err := storePaths(sys)
 	if err != nil {
 		return manifest.Manifest{}, false, err
 	}
@@ -50,16 +49,17 @@ func newListCmd(sys System) *cobra.Command {
 					return err
 				}
 			}
+			// Resolve first: what is wrong with the store is said once, by the resolver.
+			res, err := load(sys, repo, envName(sys, firstArg(args)))
+			if err != nil {
+				return err
+			}
 			var m manifest.Manifest
 			if global {
 				m, _, err = storeManifest(sys)
 			} else {
 				m, _, err = manifestIfPresent(filepath.Join(repo, manifestName))
 			}
-			if err != nil {
-				return err
-			}
-			res, err := load(sys, repo, envName(sys, firstArg(args)))
 			if err != nil {
 				return err
 			}
@@ -172,6 +172,11 @@ func newGetCmd(sys System) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Resolve first: what is wrong with the store is said once, by the resolver.
+			res, err := load(sys, repo, envName(sys, firstArg(args[1:])))
+			if err != nil {
+				return err
+			}
 			var ms []manifest.Manifest
 			if repo != "" {
 				m, found, err := manifestIfPresent(filepath.Join(repo, manifestName))
@@ -188,10 +193,6 @@ func newGetCmd(sys System) *cobra.Command {
 			}
 			if found {
 				ms = append(ms, sm)
-			}
-			res, err := load(sys, repo, envName(sys, firstArg(args[1:])))
-			if err != nil {
-				return err
 			}
 			value, ok := res.Env[name]
 			if !ok {

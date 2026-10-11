@@ -73,9 +73,24 @@ func envName(sys System, arg string) string {
 	return ""
 }
 
+// storePaths is where ezc keeps things. The default store may be absent, but
+// a store named with EZC_STORE that does not exist is an error: it is a typo.
+func storePaths(sys System) (paths.Paths, error) {
+	p, err := paths.Resolve(sys.Getenv, sys.GOOS)
+	if err != nil {
+		return p, err
+	}
+	if sys.Getenv("EZC_STORE") != "" {
+		if _, err := os.Stat(p.Store()); errors.Is(err, fs.ErrNotExist) {
+			return p, fmt.Errorf("EZC_STORE is set to %s, which does not exist.", p.Store())
+		}
+	}
+	return p, nil
+}
+
 // load resolves the environment for repo (a .ezc directory, or "" for the store alone).
 func load(sys System, repo, env string) (resolve.Result, error) {
-	p, err := paths.Resolve(sys.Getenv, sys.GOOS)
+	p, err := storePaths(sys)
 	if err != nil {
 		return resolve.Result{}, err
 	}

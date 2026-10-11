@@ -6,12 +6,15 @@
 package resolve
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
@@ -30,8 +33,8 @@ const ShellOrigin = "shell"
 
 // Options says where to look and what was asked for.
 type Options struct {
-	StoreDir string // the store's .ezc directory; "" or a directory that does not exist means no store
-	RepoDir  string // the repo's .ezc directory; "" means none (the store alone)
+	StoreDir string // the store's .ezc directory; "" or one that does not exist means no store
+	RepoDir  string // the repo's .ezc directory; "" or one that does not exist means none (the store alone)
 	Env      string // the environment named; "" when none was
 	Home     string // the user's home, for ~ and $HOME; "" when there is none
 	// Decrypt reads an *.enc.yaml. nil means this build cannot.
@@ -115,9 +118,23 @@ func Envs(dirs ...string) ([]string, error) {
 	return names, nil
 }
 
-func isDir(path string) bool {
+// isDir reports whether path is a directory. One that does not exist is not;
+// one that is something else, or cannot be looked at, is an error, so that a
+// layer which is there is never skipped as if it were absent. what names it.
+func isDir(path, what string) (bool, error) {
+	if path == "" {
+		return false, nil
+	}
 	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case errors.Is(err, syscall.ENOTDIR), err == nil && !info.IsDir():
+		return false, fmt.Errorf("%s: %s is not a folder", path, what)
+	case err != nil:
+		return false, err // an *fs.PathError, which names the path
+	}
+	return true, nil
 }
 
 // Load composes the environment named in o.
@@ -140,12 +157,18 @@ func Load(o Options) (Result, error) {
 
 	type layer struct{ name, dir string }
 	var layers []layer
-	if isDir(o.StoreDir) {
+	ok, err := isDir(o.StoreDir, "the store")
+	if err != nil {
+		return res, err
+	}
+	if ok {
 		layers = append(layers, layer{"store", o.StoreDir})
 	} else {
 		res.StoreMissing = true
 	}
-	if o.RepoDir != "" {
+	if ok, err = isDir(o.RepoDir, "the repo's .ezc"); err != nil {
+		return res, err
+	} else if ok {
 		layers = append(layers, layer{"repo", o.RepoDir})
 	}
 	dirs := make([]string, len(layers))

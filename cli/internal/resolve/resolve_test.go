@@ -297,3 +297,65 @@ func TestNULInAValueIsAnError(t *testing.T) {
 		t.Errorf("decrypted: got %v, want %s", err, want)
 	}
 }
+
+// A store that is there but is not a readable folder is an error, never "no store".
+func TestStoreThatIsNotAFolder(t *testing.T) {
+	_, repo := tree(t, map[string]string{"repo/env.local.yaml": "A: 1\n"})
+	root := t.TempDir()
+
+	// The store's .ezc is a file.
+	asFile := filepath.Join(root, "a", ".ezc")
+	if err := os.MkdirAll(filepath.Dir(asFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(asFile, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The store's root is a file.
+	underFile := filepath.Join(root, "b", ".ezc")
+	if err := os.WriteFile(filepath.Dir(underFile), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, store := range []string{asFile, underFile} {
+		_, err := Load(Options{StoreDir: store, RepoDir: repo})
+		if err == nil || err.Error() != store+": the store is not a folder" {
+			t.Errorf("got %v", err)
+		}
+	}
+}
+
+func TestStoreThatCannotBeRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads everything")
+	}
+	_, repo := tree(t, map[string]string{"repo/env.local.yaml": "A: 1\n"})
+	root := filepath.Join(t.TempDir(), "store")
+	store := filepath.Join(root, ".ezc")
+	if err := os.MkdirAll(store, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(root, 0o755) })
+	_, err := Load(Options{StoreDir: store, RepoDir: repo})
+	if err == nil || !strings.Contains(err.Error(), store) || !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestRepoDirThatIsNotAFolder(t *testing.T) {
+	file := filepath.Join(t.TempDir(), ".ezc")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(Options{RepoDir: file})
+	if err == nil || err.Error() != file+": the repo's .ezc is not a folder" {
+		t.Errorf("got %v", err)
+	}
+	// One that does not exist supplies nothing, as before.
+	r := mustResolve(t, Options{RepoDir: filepath.Join(t.TempDir(), "absent", ".ezc")})
+	if len(r.Env) != 0 || len(r.Sources) != 0 {
+		t.Errorf("got %v, %v", r.Env, r.Sources)
+	}
+}
