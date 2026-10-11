@@ -311,7 +311,7 @@ func TestEditGlobalNoChangeNoCommit(t *testing.T) {
 	}
 }
 
-// A file saved but not valid is left as saved, uncommitted, and is then a file with uncommitted changes like any other.
+// A file saved but not valid is left as saved, uncommitted, for `ezc edit` to fix; the edit that fixes it is the commit.
 func TestEditGlobalInvalidResultIsNotCommitted(t *testing.T) {
 	f := newFake(t)
 	x := storeWriteStore(t, f)
@@ -320,10 +320,68 @@ func TestEditGlobalInvalidResultIsNotCommitted(t *testing.T) {
 	if got := x.subjects(); got != nil {
 		t.Fatalf("commits %q", got)
 	}
-	f.execs = nil
-	if err := f.run("edit", "-g"); err == nil || err.Error() != storeWriteDirty("common.yaml", x) || len(f.execs) != 0 {
-		t.Fatalf("got %v, editor ran %d times", err, len(f.execs))
+	if got := x.git("status", "--porcelain"); got != " M .ezc/common.yaml" {
+		t.Fatalf("left behind:\n%s", got)
 	}
+	storeWriteEditor(f, "NAME: fixed\n")
+	if got, want := stderrOf(t, f, "edit", "-g"), "store: uncommitted changes in "+x.store+"\n"; got != want {
+		t.Fatalf("stderr %q, want %q", got, want)
+	}
+	x.wantCommit("edit common.yaml", "common.yaml")
+	if readFile(t, x.file("common.yaml")) != "NAME: fixed\n" {
+		t.Fatal("the fix was not kept")
+	}
+}
+
+// `edit <file>` is a true name for what was changed in that file by hand, so edit opens it and commits it; set does not.
+func TestEditGlobalTakesAHandEdit(t *testing.T) {
+	for _, content := range []string{"", "NAME: edited\n"} { // the editor saves nothing, or something
+		f := newFake(t)
+		x := storeWriteStore(t, f)
+		write(t, x.file("common.yaml"), "NAME: by hand\n")
+		write(t, x.file("env.loose.yaml"), "A: b\n")
+		if err := f.run("set", "-g", "NAME", "v2"); err == nil || err.Error() != storeWriteDirty("common.yaml", x) {
+			t.Fatalf("set: got %v", err)
+		}
+		storeWriteEditor(f, content)
+		stderrOf(t, f, "edit", "-g")
+		if len(f.execs) != 1 {
+			t.Fatalf("the editor ran %d times", len(f.execs))
+		}
+		if got := x.subjects(); !slices.Equal(got, []string{"edit common.yaml"}) {
+			t.Fatalf("commits %q", got)
+		}
+		if got := x.git("show", "--name-only", "--format=", "HEAD"); got != ".ezc/common.yaml" {
+			t.Fatalf("the commit holds %q", got)
+		}
+		if got := x.git("status", "--porcelain", "--untracked-files=all"); got != "?? .ezc/env.loose.yaml" {
+			t.Fatalf("left behind:\n%s", got)
+		}
+		want := content
+		if want == "" {
+			want = "NAME: by hand\n"
+		}
+		if got := x.git("show", "HEAD:.ezc/common.yaml") + "\n"; got != want {
+			t.Fatalf("committed %q, want %q", got, want)
+		}
+	}
+
+	// A file git has never seen, and the encrypted file through the backend.
+	f := newFake(t)
+	x := storeWriteStore(t, f)
+	write(t, x.file("env.new.yaml"), "NAME: by hand\n")
+	storeWriteEditor(f, "")
+	stderrOf(t, f, "edit", "-g", "--env", "new")
+	x.wantCommit("edit env.new.yaml", "env.new.yaml")
+
+	f = newFake(t)
+	x = storeWriteStore(t, f)
+	x.secret(f, "common.enc.yaml", "TOKEN", "t1")
+	x.push(x.store)
+	secretIn(t, f, "store", "common.enc.yaml", "BYHAND", "h")
+	storeWriteEditor(f, "")
+	stderrOf(t, f, "edit", "-g", "--secrets")
+	x.wantCommit("edit common.enc.yaml", "common.enc.yaml")
 }
 
 // storeWriteDirty is the refusal of a write to a file that has uncommitted changes.
@@ -346,9 +404,6 @@ func TestWriteRefusedOverAHandEdit(t *testing.T) {
 		{"common.yaml", []string{"unset", "-g", "TOKEN"}},
 		{"common.enc.yaml", []string{"unset", "-g", "NAME"}},
 		{"manifest.yaml", []string{"unset", "-g", "NAME", "--undeclare"}},
-		{"common.yaml", []string{"edit", "-g"}},
-		{"common.enc.yaml", []string{"edit", "-g", "--secrets"}},
-		{"env.prod.yaml", []string{"edit", "-g", "--env", "prod"}},
 	} {
 		f := newFake(t)
 		x := storeWriteStore(t, f)
@@ -388,7 +443,7 @@ func TestWriteRefusedOverAnUntrackedOrStagedFile(t *testing.T) {
 	x := storeWriteStore(t, f)
 	write(t, x.file("env.new.yaml"), "NAME: by hand\n")
 	storeWriteEditor(f, "NAME: edited\n")
-	for _, args := range [][]string{{"set", "-g", "NAME", "v2", "--env", "new"}, {"unset", "-g", "NAME", "--env", "new"}, {"edit", "-g", "--env", "new"}} {
+	for _, args := range [][]string{{"set", "-g", "NAME", "v2", "--env", "new"}, {"unset", "-g", "NAME", "--env", "new"}} {
 		if err := f.run(args...); err == nil || err.Error() != storeWriteDirty("env.new.yaml", x) {
 			t.Errorf("%v: got %v", args, err)
 		}

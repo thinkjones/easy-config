@@ -102,11 +102,12 @@ The editor must wait until you finish: for example nano, vim, or "code --wait". 
 			if err != nil {
 				return err
 			}
-			st, err := sc.guard(sys, file)
+			// The file itself may hold uncommitted changes: "edit <file>" is a true name for them too,
+			// and a result that was saved but is not valid has to be opened again.
+			st, err := sc.guard(sys)
 			if err != nil {
 				return err
 			}
-			before := fileStates(sc.dir, []string{file})
 			if secrets {
 				err = editSecrets(sys, sc, env, path, editor)
 			} else {
@@ -116,9 +117,6 @@ The editor must wait until you finish: for example nano, vim, or "code --wait". 
 				return err
 			}
 			fmt.Fprintf(sys.Stdout, "edited %s\n", sc.show(file))
-			if len(changedFiles(sc.dir, []string{file}, before)) == 0 {
-				return nil
-			}
 			return commitStore(sys, st, "edit "+file, file)
 		},
 	}
