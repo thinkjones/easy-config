@@ -105,6 +105,9 @@ func execCommand(c proc.Command) ([]byte, []byte, error) {
 		defer cancel()
 	}
 	cmd := exec.CommandContext(ctx, c.Name, c.Args...)
+	if c.Timeout > 0 {
+		cmd.WaitDelay = time.Second // a grandchild holding the pipes must not outlast the timeout
+	}
 	cmd.Dir = c.Dir
 	cmd.Env = c.Env
 	if c.Interactive {

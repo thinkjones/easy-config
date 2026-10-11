@@ -82,3 +82,14 @@ func TestExecCommandNoTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestExecCommandTimeoutWithGrandchildHoldingPipes(t *testing.T) {
+	start := time.Now()
+	_, _, err := execCommand(proc.Command{Name: "sh", Args: []string{"-c", "sleep 5 & wait"}, Timeout: 200 * time.Millisecond})
+	if !errors.Is(err, proc.ErrTimeout) {
+		t.Fatalf("err = %v, want proc.ErrTimeout", err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("took %v", d)
+	}
+}
