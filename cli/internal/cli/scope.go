@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
 	"github.com/thinkjones/easy-config/cli/internal/paths"
@@ -25,7 +28,7 @@ func homeDir(sys System) string {
 }
 
 // repoDir is the .ezc directory of the nearest ancestor of the working directory that has
-// one with a manifest.yaml; "" when there is none.
+// one; "" when there is none. It need not hold a manifest.
 func repoDir(sys System) (string, error) {
 	dir, err := sys.Getwd()
 	if err != nil {
@@ -33,8 +36,12 @@ func repoDir(sys System) (string, error) {
 	}
 	for {
 		candidate := filepath.Join(dir, ezcDir)
-		if info, err := os.Stat(filepath.Join(candidate, manifestName)); err == nil && !info.IsDir() {
+		info, err := os.Stat(candidate)
+		if err == nil && info.IsDir() {
 			return candidate, nil
+		}
+		if err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+			return "", err
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -51,7 +58,7 @@ func requireRepoDir(sys System) (string, error) {
 		return "", err
 	}
 	if dir == "" {
-		return "", fmt.Errorf("not in an ezc repo: no %s/%s here or in any parent folder. Run `ezc repo init` to create one.", ezcDir, manifestName)
+		return "", fmt.Errorf("not in an ezc repo: no %s folder here or in any parent folder. Run `ezc repo init` to create one.", ezcDir)
 	}
 	return dir, nil
 }
@@ -82,6 +89,9 @@ func load(sys System, repo, env string) (resolve.Result, error) {
 
 // loadManifest reads and validates a manifest; an invalid one is an error listing every problem.
 func loadManifest(path string) (manifest.Manifest, error) {
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return manifest.Manifest{}, fmt.Errorf("%s has no %s. Run `ezc repo init` to create one.", filepath.Dir(path), manifestName)
+	}
 	m, err := manifest.Load(path)
 	if err != nil {
 		return m, err

@@ -26,6 +26,6 @@ Part 1 of 7 is built; encrypted files arrive in part 2.
 
 The environment is named by the argument, else `EZC_ENV`, else `APP_ENV`; with none of them, `local` applies when it exists. There are three ways in:
 
-- `eval "$(ezc env export)"` loads the variables into the current shell.
-- `ezc run -- <command>` runs one command with the variables, leaving the shell alone.
-- `ezc env export --format dotenv > .env` writes a file for tools that read dotenv files; never `source` it.
+- mise: in `mise.toml`, `[env]` then `_.source = ".ezc/env.sh"`. `ezc repo init` writes that file.
+- direnv: `eval "$(ezc env export)"` in `.envrc`.
+- neither: `ezc run -- <command>` runs one command with the variables and leaves the shell alone.

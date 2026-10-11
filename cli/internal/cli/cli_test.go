@@ -226,7 +226,7 @@ func TestEnvFromSubdirectory(t *testing.T) {
 func TestEnvOutsideARepo(t *testing.T) {
 	f := newFake(t)
 	err := f.run("env")
-	if err == nil || !strings.Contains(err.Error(), "not in an ezc repo") || !strings.Contains(err.Error(), "ezc repo init") {
+	if err == nil || !strings.Contains(err.Error(), "not in an ezc repo: no .ezc folder here or in any parent folder") || !strings.Contains(err.Error(), "ezc repo init") {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -337,8 +337,8 @@ func TestExportIsSilentWithoutAStore(t *testing.T) {
 func TestExportPrintsNothingOnFailure(t *testing.T) {
 	f := newFake(t)
 	repo(t, f, map[string]string{"manifest.yaml": empty, "env.local.yaml": "B: ok\nA: $NOPE\n"})
-	if err := f.run("env", "export"); err == nil {
-		t.Fatal("want error")
+	if err := f.run("env", "export"); err == nil || !strings.Contains(err.Error(), "NOPE") {
+		t.Fatalf("want an error naming NOPE, got %v", err)
 	}
 	if f.out.Len() != 0 {
 		t.Fatalf("stdout %q", f.out.String())
@@ -408,8 +408,26 @@ func TestRunNeedsACommand(t *testing.T) {
 	good(t, f)
 	wantUsage(t, f.run("run"), "give a command after --")
 	wantUsage(t, f.run("run", "--"), "give a command after --")
-	wantUsage(t, f.run("run", "a", "b", "--", "x"), "ezc run")
+	wantUsage(t, f.run("run", "a", "b", "--", "x"), "at most one environment name")
 	if len(f.children) != 0 {
 		t.Fatal("ran a child")
+	}
+}
+
+func TestExportFromARepoWithoutAManifest(t *testing.T) {
+	f := newFake(t)
+	// a parent repo whose values must not appear
+	repo(t, f, map[string]string{"manifest.yaml": empty, "env.local.yaml": "PARENT: p\n"})
+	f.wd = filepath.Join(f.wd, "child")
+	repo(t, f, map[string]string{"env.local.yaml": "CHILD: c\n"})
+	if err := f.run("env", "export"); err != nil {
+		t.Fatal(err)
+	}
+	if f.out.String() != "export CHILD='c'\n" {
+		t.Fatalf("got %q", f.out.String())
+	}
+	err := f.run("env")
+	if err == nil || !strings.Contains(err.Error(), ".ezc has no manifest.yaml. Run `ezc repo init`") {
+		t.Fatalf("got %v", err)
 	}
 }
