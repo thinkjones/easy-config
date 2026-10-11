@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,7 +28,8 @@ const (
 
 // storeSync is what a command learns about the store before it uses it.
 type storeSync struct {
-	Git      bool // the store is a git repo
+	Git      bool   // the store is a git repo
+	Dir      string // the store's folder, when it is one
 	Status   gitstore.Status
 	Fetched  time.Time // the last fetch that worked; zero when never
 	Offline  bool      // a fetch was tried just now and failed
@@ -60,7 +62,7 @@ func syncStore(sys System, maxAge, timeout time.Duration) storeSync {
 	if !g.IsRepo(dir) {
 		return storeSync{}
 	}
-	s := storeSync{Git: true}
+	s := storeSync{Git: true, Dir: dir}
 	state := readState(p.State())
 	s.Fetched = stateTime(state, "fetched")
 	if remote, err := g.Remote(dir); err == nil && remote != "" {
@@ -170,10 +172,7 @@ func indicate(sys System, s storeSync) {
 	case gitstore.Diverged:
 		line = fmt.Sprintf("diverged from origin (%d ahead, %d behind) — run ezc store pull", st.Ahead, st.Behind)
 	case gitstore.Uncommitted:
-		line = "uncommitted changes"
-		if p, err := paths.Resolve(sys.Getenv, sys.GOOS); err == nil {
-			line += " in " + p.Store()
-		}
+		line = "uncommitted changes in " + s.Dir
 	}
 	if n := len(s.Requests); n > 0 {
 		pending := count(n, "access request") + " pending: " + strings.Join(s.Requests, ", ")
@@ -221,4 +220,65 @@ func touchStore(sys System) storeSync {
 	s := syncStore(sys, syncMaxAge, syncTimeout)
 	indicate(sys, s)
 	return s
+}
+
+// guardStoreWrite runs touchStore and refuses the write when the store is behind or diverged.
+func guardStoreWrite(sys System) (storeSync, error) {
+	s := touchStore(sys)
+	const pull = "Run `ezc store pull` first: a change made now could not be merged."
+	// The counts, not the state: uncommitted changes do not make a store less behind.
+	switch st := s.Status; {
+	case st.Behind > 0 && st.Ahead > 0:
+		return s, fmt.Errorf("the store has diverged from origin. %s", pull)
+	case st.Behind > 0:
+		return s, fmt.Errorf("the store is %s behind origin. %s", count(st.Behind, "commit"), pull)
+	}
+	return s, nil
+}
+
+// commitStore commits the named files of the store's .ezc (base names) with message. It does nothing for a store that is not a git repo.
+// Only those files are committed: whatever else was changed in the store by hand stays uncommitted.
+func commitStore(sys System, s storeSync, message string, files ...string) error {
+	if !s.Git {
+		return nil
+	}
+	author := gitstore.Author{Name: "ezc"}
+	if c, err := loadConfig(sys); err == nil && c.User != "" {
+		author.Name = c.User
+	}
+	paths := make([]string, len(files))
+	for i, file := range files {
+		paths[i] = ezcDir + "/" + file
+	}
+	if _, err := storeGit(sys).Commit(s.Dir, message, author, paths...); err != nil {
+		return fmt.Errorf("the change was written but could not be committed: %s. Commit it in %s with git.", strings.TrimPrefix(err.Error(), "git: "), s.Dir)
+	}
+	return nil
+}
+
+// fileState is a file's bytes, and whether it was there.
+type fileState struct {
+	found bool
+	data  []byte
+}
+
+// fileStates is each of the named files in dir as it is now.
+func fileStates(dir string, names []string) []fileState {
+	states := make([]fileState, len(names))
+	for i, name := range names {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		states[i] = fileState{err == nil, data}
+	}
+	return states
+}
+
+// changedFiles are those of names whose file in dir is not as before says, in the order given.
+func changedFiles(dir string, names []string, before []fileState) []string {
+	var changed []string
+	for i, now := range fileStates(dir, names) {
+		if now.found != before[i].found || !bytes.Equal(now.data, before[i].data) {
+			changed = append(changed, names[i])
+		}
+	}
+	return changed
 }

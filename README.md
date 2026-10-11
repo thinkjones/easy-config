@@ -63,6 +63,22 @@ ezc run -- <command>               # run a command with it
 | `ezc manifest schema [-o FILE]` | Print the manifest's JSON Schema, or write it to FILE. |
 | `ezc codegen python [-m FILE] [-o FILE]` | Validate the manifest, then generate a pydantic config module. An invalid manifest generates nothing, and neither does one with a variable named after a Python keyword such as `class` or one whose name starts with `_`. |
 
+## Writing to the store
+
+The store is a git repo, and every write to it is one commit: `ezc set -g`, `ezc unset -g` and `ezc edit -g`, or the same commands without `-g` run inside the store. The commit holds only the files the command changed and its message names them, never a value: `set NAME (common.enc.yaml)`, `set NAME (manifest.yaml, common.yaml)` for a name declared in the same step, `unset NAME (common.yaml, common.enc.yaml)`, `edit env.prod.yaml`. A command that changes nothing, or that fails and puts the files back, makes no commit. The author is git's own identity, else the `user` of `config.toml`, else `ezc`.
+
+Anything else you changed in the store by hand is left alone: it is never swept into a commit named after something else, and commands say `store: uncommitted changes in <store>` until you commit or discard it with git. An `ezc edit -g` whose result is not valid is saved but not committed; the edit that fixes it is.
+
+A write is refused while the store is behind its remote or has diverged from it, before anything is written:
+
+```
+the store is 2 commits behind origin. Run `ezc store pull` first: a change made now could not be merged.
+```
+
+A store that is ahead or has no remote takes the write; when the remote cannot be reached, what was last known of it decides. When the write worked and the commit did not, the command says so and where to commit it with git.
+
+A store that is not a git repo (an `EZC_STORE` pointing at a plain folder) is written as before, with no commit. A write to any other repo never touches git.
+
 ## How a repo loads its environment
 
 The environment is named by the argument, else `EZC_ENV`, else `APP_ENV`; with none of them, `local` applies when it exists. There are three ways in:

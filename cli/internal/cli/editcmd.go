@@ -102,6 +102,11 @@ The editor must wait until you finish: for example nano, vim, or "code --wait". 
 			if err != nil {
 				return err
 			}
+			st, err := sc.guard(sys)
+			if err != nil {
+				return err
+			}
+			before := fileStates(sc.dir, []string{file})
 			if secrets {
 				err = editSecrets(sys, sc, env, path, editor)
 			} else {
@@ -111,7 +116,10 @@ The editor must wait until you finish: for example nano, vim, or "code --wait". 
 				return err
 			}
 			fmt.Fprintf(sys.Stdout, "edited %s\n", sc.show(file))
-			return nil
+			if len(changedFiles(sc.dir, []string{file}, before)) == 0 {
+				return nil
+			}
+			return commitStore(sys, st, "edit "+file, file)
 		},
 	}
 	cmd.Flags().BoolVarP(&global, "global", "g", false, "edit the global store's file")
