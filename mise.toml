@@ -14,3 +14,18 @@ run = [
   "go vet ./...",
   "go test ./...",
 ]
+
+[tasks."schema:build"]
+description = "Regenerate the committed manifest JSON Schema from the Go types"
+depends = ["cli:build"]
+run = "./cli/bin/ezc manifest schema -o cli/schema/v1/manifest.schema.json"
+
+[tasks."schema:check"]
+description = "Fail when the committed manifest JSON Schema is stale"
+depends = ["cli:build"]
+run = '''
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+./cli/bin/ezc manifest schema -o "$tmp" 2>/dev/null
+diff -u cli/schema/v1/manifest.schema.json "$tmp" || { echo "cli/schema/v1/manifest.schema.json is stale — run: mise run schema:build" >&2; exit 1; }
+'''

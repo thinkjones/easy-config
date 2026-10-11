@@ -87,9 +87,31 @@ func load(sys System, repo, env string) (resolve.Result, error) {
 	})
 }
 
+// manifestTarget is the repo (a .ezc directory) and manifest path a command works on: the
+// repo's own manifest, or the file named by -m, resolved against the working directory.
+func manifestTarget(sys System, flag string) (repo, path string, explicit bool, err error) {
+	if flag == "" {
+		repo, err = requireRepoDir(sys)
+		return repo, filepath.Join(repo, manifestName), false, err
+	}
+	path = flag
+	if !filepath.IsAbs(path) {
+		wd, err := sys.Getwd()
+		if err != nil {
+			return "", "", true, err
+		}
+		path = filepath.Join(wd, path)
+	}
+	return filepath.Dir(path), path, true, nil
+}
+
 // loadManifest reads and validates a manifest; an invalid one is an error listing every problem.
-func loadManifest(path string) (manifest.Manifest, error) {
+// explicit says the path came from -m rather than being the repo's own manifest.
+func loadManifest(path string, explicit bool) (manifest.Manifest, error) {
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		if explicit {
+			return manifest.Manifest{}, fmt.Errorf("%s: no such file.", path)
+		}
 		return manifest.Manifest{}, fmt.Errorf("%s has no %s. Run `ezc repo init` to create one.", filepath.Dir(path), manifestName)
 	}
 	m, err := manifest.Load(path)

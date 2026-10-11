@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"io"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -44,24 +43,11 @@ func firstArg(args []string) string {
 
 // envCheck is `ezc env`: resolve, then validate against the manifest.
 func envCheck(sys System, arg, manifestPath string, verbose bool) error {
-	var repo string
-	if manifestPath == "" {
-		dir, err := requireRepoDir(sys)
-		if err != nil {
-			return err
-		}
-		repo, manifestPath = dir, filepath.Join(dir, manifestName)
-	} else {
-		if !filepath.IsAbs(manifestPath) {
-			wd, err := sys.Getwd()
-			if err != nil {
-				return err
-			}
-			manifestPath = filepath.Join(wd, manifestPath)
-		}
-		repo = filepath.Dir(manifestPath)
+	repo, manifestPath, explicit, err := manifestTarget(sys, manifestPath)
+	if err != nil {
+		return err
 	}
-	m, err := loadManifest(manifestPath)
+	m, err := loadManifest(manifestPath, explicit)
 	if err != nil {
 		return err
 	}

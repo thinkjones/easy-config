@@ -102,6 +102,8 @@ Config
 		},
 		newEnvCmd(sys),
 		newRunCmd(sys),
+		newManifestCmd(sys),
+		newCodegenCmd(sys),
 	)
 	return root
 }

@@ -1,0 +1,272 @@
+{
+  "$id": "https://raw.githubusercontent.com/thinkjones/easy-config/main/cli/schema/v1/manifest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "What one repo requires from its environment. Policy lives here; values live in .ezc/*.yaml and the shared ezc store.",
+  "properties": {
+    "$schema": {
+      "description": "URL of this schema, so an editor can validate the file",
+      "type": "string"
+    },
+    "optional": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "else": {
+              "not": {
+                "required": [
+                  "values"
+                ]
+              }
+            },
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "enum"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "required": [
+                "values"
+              ]
+            }
+          },
+          {
+            "else": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "min"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "max"
+                    ]
+                  }
+                ]
+              }
+            },
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "int"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {}
+          }
+        ],
+        "properties": {
+          "desc": {
+            "description": "prose for humans; emitted as the docstring on the generated field",
+            "minLength": 1,
+            "type": "string"
+          },
+          "max": {
+            "description": "inclusive upper bound; type int only",
+            "type": "integer"
+          },
+          "min": {
+            "description": "inclusive lower bound; type int only",
+            "type": "integer"
+          },
+          "requiredWhen": {
+            "additionalProperties": false,
+            "description": "makes an optional variable required when another variable holds a given value",
+            "properties": {
+              "equals": {
+                "description": "the value of that variable which makes this one required",
+                "type": "string"
+              },
+              "var": {
+                "description": "the variable this one depends on",
+                "type": "string"
+              }
+            },
+            "required": [
+              "var",
+              "equals"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "description": "how the value is parsed and typed in generated code",
+            "enum": [
+              "str",
+              "int",
+              "bool",
+              "secret",
+              "url",
+              "path",
+              "enum"
+            ]
+          },
+          "values": {
+            "description": "permitted values; required when type is enum, forbidden otherwise",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "type",
+          "desc"
+        ],
+        "type": "object"
+      },
+      "description": "variables whose absence turns a feature off; never defaulted",
+      "propertyNames": {
+        "pattern": "^[A-Z][A-Z0-9_]*$"
+      },
+      "type": "object"
+    },
+    "required": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "else": {
+              "not": {
+                "required": [
+                  "values"
+                ]
+              }
+            },
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "enum"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "required": [
+                "values"
+              ]
+            }
+          },
+          {
+            "else": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "min"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "max"
+                    ]
+                  }
+                ]
+              }
+            },
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "int"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {}
+          }
+        ],
+        "properties": {
+          "desc": {
+            "description": "prose for humans; emitted as the docstring on the generated field",
+            "minLength": 1,
+            "type": "string"
+          },
+          "max": {
+            "description": "inclusive upper bound; type int only",
+            "type": "integer"
+          },
+          "min": {
+            "description": "inclusive lower bound; type int only",
+            "type": "integer"
+          },
+          "requiredWhen": {
+            "additionalProperties": false,
+            "description": "makes an optional variable required when another variable holds a given value",
+            "properties": {
+              "equals": {
+                "description": "the value of that variable which makes this one required",
+                "type": "string"
+              },
+              "var": {
+                "description": "the variable this one depends on",
+                "type": "string"
+              }
+            },
+            "required": [
+              "var",
+              "equals"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "description": "how the value is parsed and typed in generated code",
+            "enum": [
+              "str",
+              "int",
+              "bool",
+              "secret",
+              "url",
+              "path",
+              "enum"
+            ]
+          },
+          "values": {
+            "description": "permitted values; required when type is enum, forbidden otherwise",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "type",
+          "desc"
+        ],
+        "type": "object"
+      },
+      "description": "variables that must be set and non-empty; ezc env fails without them",
+      "propertyNames": {
+        "pattern": "^[A-Z][A-Z0-9_]*$"
+      },
+      "type": "object"
+    },
+    "schemaVersion": {
+      "const": "v1",
+      "description": "manifest schema version this file is written against"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "required"
+  ],
+  "title": "ezc environment manifest",
+  "type": "object"
+}

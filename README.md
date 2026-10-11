@@ -21,6 +21,9 @@ Part 1 of 7 is built; encrypted files arrive in part 2.
 | `ezc env [ENV] [-m FILE] [--verbose]` | Check an environment against the manifest. Reports on stderr, prints no values, exits 1 on problems. |
 | `ezc env export [ENV] [--format shell\|dotenv\|json]` | Print the environment's variables on stdout. `shell` is for `eval`; `dotenv` is for dotenv loaders and must not be sourced by a shell. Outside a repo it exports the store alone. |
 | `ezc run [ENV] -- <command> [args…]` | Run a command with the environment added to its own. |
+| `ezc manifest validate [-m FILE]` | Check that the manifest is well formed; prints the path and counts of required and optional variables. |
+| `ezc manifest schema [-o FILE]` | Print the manifest's JSON Schema, or write it to FILE. |
+| `ezc codegen python [-m FILE] [-o FILE]` | Validate the manifest, then generate a pydantic config module. An invalid manifest generates nothing. |
 
 ## How a repo loads its environment
 
