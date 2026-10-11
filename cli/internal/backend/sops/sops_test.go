@@ -16,6 +16,7 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/backend/backendtest"
 	"github.com/thinkjones/easy-config/cli/internal/proc"
+	"github.com/thinkjones/easy-config/cli/internal/valuefile"
 )
 
 // execRunner runs the real program. Interactive commands are not used by these tests.
@@ -883,5 +884,36 @@ func TestNewKeyWorksWithRealSops(t *testing.T) {
 	}
 	if want := []backend.Pair{{Name: "TOKEN", Value: "t0k"}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("Decrypt = %v, want %v", got, want)
+	}
+}
+
+// Setting one name leaves the stored text of every other name alone, so two
+// versions of a file can be compared without a key.
+func TestSetLeavesOtherStoredValuesAlone(t *testing.T) {
+	r := newReal(t)
+	b := New(r.opts)
+	file := filepath.Join(r.dir, "common.enc.yaml")
+	for _, name := range []string{"A", "B"} {
+		if err := b.Set(file, name, "first"); err != nil {
+			t.Fatalf("Set %s: %v", name, err)
+		}
+	}
+	before, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Set(file, "B", "second"); err != nil {
+		t.Fatalf("Set B: %v", err)
+	}
+	after, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := valuefile.ChangedNames(before, after)
+	if err != nil {
+		t.Fatalf("ChangedNames: %v", err)
+	}
+	if want := []string{"B"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ChangedNames = %v, want %v", got, want)
 	}
 }
