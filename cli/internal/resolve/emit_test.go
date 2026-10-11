@@ -55,21 +55,6 @@ func TestShellRoundTripsThroughSh(t *testing.T) {
 	}
 }
 
-func TestDotenv(t *testing.T) {
-	got := Result{Env: nasty}.Dotenv()
-	want := "CMD=\"\\$(rm -rf /)`id`\"\n" +
-		"DQ=\"say \\\"hi\\\" \\\\ \\$X\"\n" +
-		"MULTI=\"a\\nb\"\n" +
-		"PLAIN=\"v\"\n" +
-		"QUOTE=\"it's\"\n"
-	if got != want {
-		t.Errorf("Dotenv() =\n%q\nwant\n%q", got, want)
-	}
-	if got := (Result{Env: map[string]string{"A": "x\ry"}}).Dotenv(); got != "A=\"x\\ry\"\n" {
-		t.Errorf("carriage return: %q", got)
-	}
-}
-
 func TestJSON(t *testing.T) {
 	r := Result{Env: nasty}
 	b, err := r.JSON()
@@ -105,9 +90,6 @@ func TestEmptyResult(t *testing.T) {
 	r := Result{Env: map[string]string{}}
 	if got := r.Shell(); got != "" {
 		t.Errorf("Shell() = %q", got)
-	}
-	if got := r.Dotenv(); got != "" {
-		t.Errorf("Dotenv() = %q", got)
 	}
 	b, err := r.JSON()
 	if err != nil || string(b) != "{}\n" {

@@ -14,10 +14,6 @@ func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// dotenvQuote renders a value in double quotes, escaping what a dotenv loader
-// would otherwise expand or end the string on.
-var dotenvQuote = strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`, "\n", `\n`, "\r", `\r`)
-
 // Exported returns the names to emit: Names() without the selector variables.
 func (r Result) Exported() []string {
 	var names []string
@@ -36,17 +32,6 @@ func (r Result) Shell() string {
 	var b strings.Builder
 	for _, n := range r.Exported() {
 		b.WriteString("export " + n + "=" + ShellQuote(r.Env[n]) + "\n")
-	}
-	return b.String()
-}
-
-// Dotenv renders one NAME="value" line per exported name, for dotenv loaders.
-// It must never be sourced or eval'ed by a shell (a backtick is left as is);
-// Shell is the format for that.
-func (r Result) Dotenv() string {
-	var b strings.Builder
-	for _, n := range r.Exported() {
-		b.WriteString(n + `="` + dotenvQuote.Replace(r.Env[n]) + "\"\n")
 	}
 	return b.String()
 }

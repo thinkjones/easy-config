@@ -77,13 +77,12 @@ func newExportCmd(sys System) *cobra.Command {
 		Long: `Print ENV's variables (else $EZC_ENV, $APP_ENV, then local) on stdout, and nothing else. Outside a repo it exports the store alone. Nothing is printed unless the whole resolution succeeded. The selector variables EZC_ENV and APP_ENV are not exported.
 
 Formats:
-  shell   export NAME='value' lines, for eval "$(ezc env export)"
-  dotenv  NAME="value" lines, for dotenv loaders; must not be sourced by a shell
-  json    one object of names to values`,
+  shell  export NAME='value' lines, for eval "$(ezc env export)"
+  json   one object of names to values, for any other tool`,
 		Args: maxArgs(1, "at most one environment name"),
 		RunE: func(_ *cobra.Command, args []string) error {
-			if !slices.Contains([]string{"shell", "dotenv", "json"}, format) {
-				return usagef("ezc env export: unknown format %q — use shell, dotenv or json.", format)
+			if !slices.Contains([]string{"shell", "json"}, format) {
+				return usagef("ezc env export: unknown format %q — use shell or json.", format)
 			}
 			repo, err := repoDir(sys)
 			if err != nil {
@@ -101,15 +100,12 @@ Formats:
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&format, "format", "shell", "shell (for eval), dotenv (for dotenv loaders; must not be sourced by a shell) or json")
+	cmd.Flags().StringVar(&format, "format", "shell", "shell (for eval) or json")
 	return cmd
 }
 
 func render(res resolve.Result, format string) (string, error) {
-	switch format {
-	case "dotenv":
-		return res.Dotenv(), nil
-	case "json":
+	if format == "json" {
 		b, err := res.JSON()
 		return string(b), err
 	}

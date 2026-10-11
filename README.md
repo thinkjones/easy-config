@@ -29,7 +29,7 @@ ezc run -- <command>               # run a command with it
 | `ezc version` | Print ezc's version. |
 | `ezc help [command]` | Help for ezc, or for one command. |
 | `ezc env [ENV] [-m FILE] [--verbose]` | Check an environment against the manifest. Reports on stderr, prints no values, exits 1 on problems. |
-| `ezc env export [ENV] [--format shell\|dotenv\|json]` | Print the environment's variables on stdout. `shell` is for `eval`; `dotenv` is for dotenv loaders and must not be sourced by a shell. Outside a repo it exports the store alone. |
+| `ezc env export [ENV] [--format shell\|json]` | Print the environment's variables on stdout. `shell` is for `eval`; `json` is one object of names to values, for any other tool. Outside a repo it exports the store alone. |
 | `ezc run [ENV] -- <command> [args…]` | Run a command with the environment added to its own. |
 | `ezc list [ENV] [-g]` | List the names an environment holds, with each one's type and the file that supplies it, and the manifest's names that have no value. Never prints a value. `-g` lists the store alone. |
 | `ezc get NAME [ENV] [--reveal]` | Print one value on stdout. A `secret` needs `--reveal`; a name is treated as a secret when the repo's or the store's manifest declares it one. |

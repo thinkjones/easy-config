@@ -323,13 +323,6 @@ func TestExportShell(t *testing.T) {
 func TestExportFormats(t *testing.T) {
 	f := newFake(t)
 	good(t, f)
-	if err := f.run("env", "export", "--format", "dotenv"); err != nil {
-		t.Fatal(err)
-	}
-	if f.out.String() != "NAME=\"n\"\nSIZE=\"3\"\n" {
-		t.Fatalf("dotenv %q", f.out.String())
-	}
-	f.out.Reset()
 	if err := f.run("env", "export", "--format", "json"); err != nil {
 		t.Fatal(err)
 	}
@@ -337,9 +330,17 @@ func TestExportFormats(t *testing.T) {
 		t.Fatalf("json %q", f.out.String())
 	}
 	f.out.Reset()
-	wantUsage(t, f.run("env", "export", "--format", "xml"), `unknown format "xml"`)
-	if f.out.Len() != 0 {
-		t.Fatalf("stdout %q", f.out.String())
+	if err := f.run("env", "export", "--format", "shell"); err != nil || f.out.String() != "export NAME='n'\nexport SIZE='3'\n" {
+		t.Fatalf("shell %q, %v", f.out.String(), err)
+	}
+	f.out.Reset()
+	// The third name is a format ezc had and dropped: no encoding of it reads back the same in every loader.
+	for _, format := range []string{"xml", "dot" + "env", ""} {
+		err := f.run("env", "export", "--format", format)
+		wantUsage(t, err, fmt.Sprintf("ezc env export: unknown format %q — use shell or json.", format))
+		if f.out.Len() != 0 {
+			t.Fatalf("stdout %q", f.out.String())
+		}
 	}
 }
 
@@ -376,13 +377,14 @@ func TestExportOutsideARepoExportsTheStore(t *testing.T) {
 	}
 }
 
-func TestExportHelpWarnsAboutDotenv(t *testing.T) {
+func TestExportHelpListsTheFormats(t *testing.T) {
 	f := newFake(t)
 	if err := f.run("help", "env", "export"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(f.out.String(), "must not be sourced") {
-		t.Fatalf("got %q", f.out.String())
+	got := f.out.String()
+	if !strings.Contains(got, "  shell ") || !strings.Contains(got, "  json ") || !strings.Contains(got, "shell (for eval) or json") || strings.Contains(got, "dot"+"env") {
+		t.Fatalf("got %q", got)
 	}
 }
 
