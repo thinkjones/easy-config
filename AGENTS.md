@@ -30,7 +30,10 @@ On a machine, `EZC_HOME` is ezc's folder and `EZC_STORE` the store's root when i
 
 - **Commands reach the outside world only through `System`.** Packages under `cli/internal/` other than `cli` never call `os.Getenv`, `os.UserHomeDir` or `os.Exit`.
 - **A malformed command line returns a `*UsageError` and exits 2**; any other failure exits 1. Use `noArgs`, `exactArgs`, `minArgs`, `maxArgs` and `verbs` from `cli.go`, never Cobra's own argument checks.
-- **No command prints a value** except `ezc env export`, `ezc run` (to the child) and `ezc get`. Error messages and `--verbose` output carry names and paths only.
+- **No command prints a value** except `ezc env export`, `ezc run` (to the command) and `ezc get`. Error messages and `--verbose` output carry names and paths only: a check's reason never includes the value that failed it, and a YAML parser's error text, which can quote the file, is never passed on (`invalidYAML` in `cli/internal/resolve/file.go`).
+- **A variable name matches `manifest.NamePattern`** (`^[A-Za-z_][A-Za-z0-9_]*$`), tested with `manifest.ValidName`: one rule for the manifest, the values files and the JSON Schema.
+- **A values file is one flat mapping of `NAME: value`.** The resolver rejects what would silently change or drop a value: an anchor, an alias, a tag, a key defined twice, a second YAML document, a NUL byte.
+- **`ezc env export` has two formats**, `shell` and `json`.
 - **No defaults for values, anywhere.**
 - **All CLI commands are Go**, built with [Cobra](https://cobra.dev), in `cli/internal/cli`. Flags are POSIX style: long flags take two dashes.
 - **Tests set `EZC_HOME` to an absolute temporary path and `HOME` to a temporary directory** through the fake `System`; no test reads the real home or the real environment.

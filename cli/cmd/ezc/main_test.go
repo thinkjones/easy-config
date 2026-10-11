@@ -136,8 +136,12 @@ func TestShimLoadsTheEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.WriteString("GREETING: hello\n")
-	f.Close()
+	if _, err := f.WriteString("GREETING: hello\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	if out, code := run(sh, "-c", `. .ezc/env.sh; printf %s "$GREETING"`); out != "hello" || code != 0 {
 		t.Fatalf("shim: exit %d stdout %q", code, out)
@@ -145,7 +149,9 @@ func TestShimLoadsTheEnvironment(t *testing.T) {
 	if err := os.WriteFile(local, []byte("GREETING: $NOPE\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if out, code := run(sh, "-c", `. .ezc/env.sh; echo ok`); out != "ok\n" || code != 0 {
+	// A broken config loads nothing and says nothing. The first half of this
+	// test showed the shim finds ezc, so an empty GREETING is ezc's doing.
+	if out, code := run(sh, "-c", `. .ezc/env.sh; echo "ok${GREETING}"`); out != "ok\n" || code != 0 {
 		t.Fatalf("broken config: exit %d stdout %q", code, out)
 	}
 }

@@ -159,7 +159,7 @@ func loadManifest(path string, explicit bool) (manifest.Manifest, error) {
 	return m, nil
 }
 
-// warn prints the stderr notes a Result carries.
+// warn prints the stderr notes a Result carries. repo is "" when no repo is in scope.
 func warn(sys System, res resolve.Result, repo string) {
 	if res.StoreMissing {
 		p, err := paths.Resolve(sys.Getenv, sys.GOOS)
@@ -167,7 +167,11 @@ func warn(sys System, res resolve.Result, repo string) {
 		if err != nil {
 			where = "the default location"
 		}
-		fmt.Fprintf(sys.Stderr, "! no store at %s — only this repo's values were loaded. Run `ezc setup` to create one.\n", where)
+		if repo == "" {
+			fmt.Fprintf(sys.Stderr, "! no store at %s, so nothing was loaded. Run `ezc setup` to create one.\n", where)
+		} else {
+			fmt.Fprintf(sys.Stderr, "! no store at %s — only this repo's values were loaded. Run `ezc setup` to create one.\n", where)
+		}
 	}
 	if res.CommonOnly && repo != "" {
 		fmt.Fprintln(sys.Stderr, "! no environment named and no env.local.yaml — only the common files were loaded. Set EZC_ENV or pass a name.")

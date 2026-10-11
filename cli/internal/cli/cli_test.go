@@ -262,6 +262,33 @@ func TestEnvWarnsWhenNoStore(t *testing.T) {
 	}
 }
 
+func TestNoStoreWarningSaysWhatWasLoaded(t *testing.T) {
+	// In a repo the repo's values were loaded.
+	f := newFake(t)
+	repo(t, f, map[string]string{"manifest.yaml": empty, "env.local.yaml": "A: b\n"})
+	if err := f.run("run", "--", "true"); err != nil {
+		t.Fatal(err)
+	}
+	where := filepath.Join(f.env["EZC_HOME"], "store")
+	if got, want := f.errOut.String(), "! no store at "+where+" — only this repo's values were loaded. Run `ezc setup` to create one.\n"; got != want {
+		t.Errorf("in a repo: got %q, want %q", got, want)
+	}
+	// With no repo in scope nothing was.
+	for _, args := range [][]string{{"run", "--", "true"}, {"list", "-g"}} {
+		f := newFake(t)
+		if args[0] == "list" {
+			repo(t, f, map[string]string{"manifest.yaml": empty, "env.local.yaml": "A: b\n"})
+		}
+		if err := f.run(args...); err != nil {
+			t.Fatal(err)
+		}
+		where := filepath.Join(f.env["EZC_HOME"], "store")
+		if got, want := f.errOut.String(), "! no store at "+where+", so nothing was loaded. Run `ezc setup` to create one.\n"; got != want {
+			t.Errorf("%v: got %q, want %q", args, got, want)
+		}
+	}
+}
+
 func TestEnvWarnsWhenCommonOnly(t *testing.T) {
 	f := newFake(t)
 	store(t, f, map[string]string{"common.yaml": "A: b\n"})
@@ -717,6 +744,28 @@ func TestList(t *testing.T) {
 		"EZC_ENV  -    shell\n" +
 		"\n" +
 		"NOTE  str  (not set)\n"
+	if got := f.out.String(); got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// A name the repo's manifest does not declare takes its type from the store's, as `ezc get` does.
+func TestListTypeFallsBackToTheStoreManifest(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{
+		"manifest.yaml": "schemaVersion: v1\nrequired:\n  TOKEN: {type: secret, desc: t}\n  NAME: {type: secret, desc: n}\n  STORE_ONLY: {type: str, desc: s}\n",
+		"common.yaml":   "TOKEN: t\nNAME: n\nEXTRA: e\n",
+	})
+	repo(t, f, map[string]string{"manifest.yaml": m1, "env.local.yaml": "SIZE: 3\n"})
+	if err := f.run("list"); err != nil {
+		t.Fatal(err)
+	}
+	want := "EXTRA    -       store/common.yaml\n" +
+		"NAME     str     store/common.yaml\n" +
+		"SIZE     int     repo/env.local.yaml\n" +
+		"TOKEN    secret  store/common.yaml\n" +
+		"APP_ENV  -       shell\n" +
+		"EZC_ENV  -       shell\n"
 	if got := f.out.String(); got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}

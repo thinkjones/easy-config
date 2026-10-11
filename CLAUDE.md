@@ -20,4 +20,7 @@ Guidance for Claude Code in this repository. [`AGENTS.md`](AGENTS.md) is the rou
 - **`cli/share/env.sh` and `share.ShimVersion` change together.** `ezc repo init` rewrites a repo's shim when its first line differs from the embedded one.
 - **`ezc env export` never prints to stderr on success and never emits `EZC_ENV` or `APP_ENV`**: the shim discards stderr and mise unwinds variables it owns.
 - **The resolver is the only place `~`, `$HOME` and `$NAME` are expanded.**
+- **On Unix `ezc run` replaces itself with the command** (`syscall.Exec` in `cli/cmd/ezc/run_unix.go`), so nothing after `RunChild` runs there; `run_other.go` keeps a child process on other systems. The in-process tests use the fake `RunChild`; the real one is tested end to end in `cli/cmd/ezc`.
+- **A missing store is fine only at the default location.** A store that is not a folder or cannot be read is an error from `resolve.Load`; an `EZC_STORE` that does not exist is an error from `storePaths` in `cli/internal/cli/scope.go`.
+- **`codegen python` refuses a variable named after a Python keyword**; the manifest itself allows it.
 - **`docs/superpowers/` is history.** Specs and plans describe what was intended at the time; don't edit them to match the code.

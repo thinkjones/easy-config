@@ -43,7 +43,7 @@ func Resolve(getenv func(string) string, goos string) (Paths, error) {
 		return Paths{Home: home, store: store}, nil
 	}
 	if data := getenv("XDG_DATA_HOME"); data != "" {
-		return Paths{Home: filepath.Join(data, "ezc"), store: store}, nil // as pnpm does, on every OS
+		return Paths{Home: filepath.Join(data, "ezc"), store: store}, nil // XDG_DATA_HOME wins on every OS
 	}
 	user, err := userDir(getenv, goos)
 	if err != nil {
