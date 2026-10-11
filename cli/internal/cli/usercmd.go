@@ -5,24 +5,29 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/thinkjones/easy-config/cli/internal/config"
 	"github.com/thinkjones/easy-config/cli/internal/gitstore"
+	"github.com/thinkjones/easy-config/cli/internal/paths"
 	"github.com/thinkjones/easy-config/cli/internal/recipients"
+	"github.com/thinkjones/easy-config/cli/internal/setup"
 )
 
 func newUserCmd(sys System) *cobra.Command {
 	cmd := verbs(&cobra.Command{
 		Use:   "user",
 		Short: "say who can read the store, add someone or remove them, and answer requests for access",
-	}, "list, add, remove, requests, approve or deny")
-	cmd.AddCommand(newUserListCmd(sys), newUserAddCmd(sys), newUserRemoveCmd(sys), newUserRequestsCmd(sys), newUserApproveCmd(sys), newUserDenyCmd(sys))
+	}, "list, add, remove, requests, approve, deny or rotate")
+	cmd.AddCommand(newUserListCmd(sys), newUserAddCmd(sys), newUserRemoveCmd(sys), newUserRequestsCmd(sys), newUserApproveCmd(sys), newUserDenyCmd(sys), newUserRotateCmd(sys))
 	return cmd
 }
 
@@ -509,4 +514,138 @@ Needs this machine's key file and a key that recipients.yaml names, as every cha
 			return nil
 		},
 	}
+}
+
+// freshKeyFile is the path of this machine's next key file: the old one's name without its extension, a dash and
+// today's date, and -2, -3… when that is taken. It lies beside the old file. The date and number a rotation added
+// are not stacked again: keys-20261011.txt rotates to keys-20261011-2.txt.
+var datedKeyFile = regexp.MustCompile(`-\d{8}(-\d+)?$`)
+
+func freshKeyFile(old string, today string) (string, error) {
+	ext := filepath.Ext(old)
+	base := datedKeyFile.ReplaceAllString(strings.TrimSuffix(old, ext), "") + "-" + today
+	for i := 1; i < 1000; i++ {
+		path := base + ext
+		if i > 1 {
+			path = fmt.Sprintf("%s-%d%s", base, i, ext)
+		}
+		_, err := os.Lstat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return path, nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("%s: cannot read this file", path)
+		}
+	}
+	return "", fmt.Errorf("%s: every name for a new key file beside it is taken", old)
+}
+
+func newUserRotateCmd(sys System) *cobra.Command {
+	var compromised bool
+	cmd := &cobra.Command{
+		Use:   "rotate [--compromised]",
+		Short: "give this machine a new key in a new file; the old key stops opening the store",
+		Long: `Create a new key in a new file beside this machine's key file, named like it with the date added (keys-20261011.txt), replace this machine's key in recipients.yaml, write the encryption policy and re-wrap every encrypted file, in one commit named ` + "`rotate <name>`" + `, then push. Then key_file in config.toml names the new file. From that commit on the old key opens no file.
+
+The old file is never touched: back the new one up, and delete the old one when you are sure. Nobody can rotate another person's key, because there is no safe way to hand them the private half.
+
+A routine rotation records nothing to rotate. With --compromised, for a key that may have leaked, every secret the old key could read is recorded in rotation-due.yaml and listed, as ` + "`ezc user remove`" + ` does: the old key still opens every older commit of the store.
+
+Needs this machine's key file, as every change to who can read the store does, and it cannot change a key file the environment names.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				return usagef("%s replaces this machine's own key and takes no name. Nobody can rotate another person's key: there is no safe way to hand them the private half.", cmd.CommandPath())
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if variable, _ := keyInEnvironment(sys); variable != "" {
+				return fmt.Errorf("The key file is set by %s; ezc cannot change it. Unset it, or rotate by hand.", variable)
+			}
+			a, err := openAccess(sys, true)
+			if err != nil {
+				return err
+			}
+			old, _ := keyFileInUse(sys)
+			p, err := paths.Resolve(sys.Getenv, sys.GOOS)
+			if err != nil {
+				return err
+			}
+			cfgPath := p.Config()
+			cfg, err := loadConfig(sys)
+			if err != nil {
+				return err
+			}
+			// The bytes config.toml has now, to put back; a file that is not there is removed again.
+			prev, readErr := os.ReadFile(cfgPath)
+			had := readErr == nil
+			if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
+				return fmt.Errorf("%s: cannot read this file", cfgPath)
+			}
+
+			fresh, err := freshKeyFile(old, a.sys.Now().Format("20060102"))
+			if err != nil {
+				return err
+			}
+			public, created, err := setup.Key(setup.Env{Backend: a.b}, fresh)
+			if err != nil {
+				return err
+			}
+			if !created {
+				return fmt.Errorf("%s appeared while the key was being made. Run this again.", fresh)
+			}
+			saved := false
+			giveUp := func(err error) error {
+				if saved {
+					if had {
+						os.WriteFile(cfgPath, prev, 0o644)
+					} else {
+						os.Remove(cfgPath)
+					}
+				}
+				os.Remove(fresh)
+				return err
+			}
+			// The file is the one just made; its text is read here and goes nowhere but the backend.
+			private, err := os.ReadFile(fresh)
+			if err != nil {
+				return giveUp(fmt.Errorf("%s: cannot read this file", fresh))
+			}
+			next, err := a.reg.WithKey(a.myName, public)
+			if err != nil {
+				return giveUp(fmt.Errorf("%w.", err))
+			}
+			c := change{next: next, message: "rotate " + a.myName}
+			was := a.myName + " (old key)"
+			var list []string
+			if compromised {
+				if c.due, list, err = dueFor(a, was); err != nil {
+					return giveUp(err)
+				}
+			}
+			c.extra = func() error {
+				for _, file := range a.enc {
+					// The backend's error is not passed on: it was given the key.
+					if a.b.CanDecrypt(filepath.Join(a.dir, file), private) != nil {
+						return fmt.Errorf("the new key cannot read %s", file)
+					}
+				}
+				cfg.KeyFile = fresh
+				saved = true
+				return config.Save(cfgPath, cfg)
+			}
+			err = a.apply(c)
+			var unpushed *unpushedError
+			if err != nil && !errors.As(err, &unpushed) {
+				return giveUp(err)
+			}
+			// A commit that was not pushed is made all the same: the registry here holds the new key.
+			sayDue(sys.Stdout, was, list)
+			fmt.Fprintf(sys.Stdout, "✓ new key in %s\n", fresh)
+			fmt.Fprintf(sys.Stdout, "Back it up. The old key in %s no longer opens the store; delete it when you are sure.\n", old)
+			return err
+		},
+	}
+	cmd.Flags().BoolVar(&compromised, "compromised", false, "the old key may have leaked: record every secret it could read as due for a new value")
+	return cmd
 }

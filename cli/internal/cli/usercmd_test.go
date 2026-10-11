@@ -243,8 +243,8 @@ func TestUserAddUsage(t *testing.T) {
 			t.Errorf("%v: stdout %q, git ran %d times", c.args, out, len(f.gits))
 		}
 	}
-	wantUsage(t, f.run("user"), "say list, add, remove, requests, approve or deny")
-	wantUsage(t, f.run("user", "ad"), "use list, add, remove, requests, approve or deny")
+	wantUsage(t, f.run("user"), "say list, add, remove, requests, approve, deny or rotate")
+	wantUsage(t, f.run("user", "ad"), "use list, add, remove, requests, approve, deny or rotate")
 	if x.git("rev-parse", "HEAD") != head {
 		t.Fatal("a commit was made")
 	}
@@ -1398,4 +1398,196 @@ func TestSomeNames(t *testing.T) {
 	if got := someNames([]string{"a", "b", "c", "d", "e", "f", "g"}); got != "a, b, c, d, e and 2 more" {
 		t.Fatalf("got %q", got)
 	}
+}
+
+// rotateOld is the key file gene starts with, and rotateNew(f, n) the file the nth rotation of the day makes.
+func rotateNew(f *fake, suffix string) string {
+	return strings.TrimSuffix(setupKeyFile(f), ".txt") + "-" + noon.Format("20060102") + suffix + ".txt"
+}
+
+func rotateConfigKeyFile(t *testing.T, f *fake) string {
+	t.Helper()
+	c, _, err := config.Load(setupConfig(f))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c.KeyFile
+}
+
+func TestUserRotate(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	oldFile := setupKeyFile(f)
+	oldInfo, err := os.Stat(oldFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := rotateNew(f, "")
+	accessWant(t, f, "✓ rotate gene\n✓ pushed to "+x.bare+"\n✓ new key in "+fresh+"\nBack it up. The old key in "+oldFile+" no longer opens the store; delete it when you are sure.\n", "user", "rotate")
+
+	public, err := f.backend.PublicKey(fresh)
+	if err != nil || public == accessGene {
+		t.Fatalf("new key %q, %v", public, err)
+	}
+	reg := accessRegistry(t, filepath.Join(x.store, ezcDir))
+	if reg.Recipients["gene"].Key != public {
+		t.Fatalf("registry holds %q, want %q", reg.Recipients["gene"].Key, public)
+	}
+	accessReaders(t, f, filepath.Join(x.store, ezcDir), public)
+	if got := rotateConfigKeyFile(t, f); got != fresh {
+		t.Fatalf("key_file %q, want %q", got, fresh)
+	}
+	if got := readFile(t, oldFile); got != accessGenePrivate {
+		t.Fatalf("the old file is now %q", got)
+	}
+	if info, err := os.Stat(oldFile); err != nil || info.Mode() != oldInfo.Mode() || !info.ModTime().Equal(oldInfo.ModTime()) {
+		t.Fatalf("old file changed: %v %v", info, err)
+	}
+	if info, err := os.Stat(fresh); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("new file: %v %v", info, err)
+	}
+	if got := x.git("log", "-1", "--format=%s"); got != "rotate gene" {
+		t.Fatalf("last commit %q", got)
+	}
+	x.wantClean()
+	accessLevel(t, x)
+	if _, err := os.Stat(x.file(recipients.DueFile)); err == nil {
+		t.Fatal("a routine rotation wrote rotation-due.yaml")
+	}
+	// The store still reads, and nothing printed holds the private key.
+	if err := f.run("get", "TOKEN", "--reveal"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(f.out.String()+f.errOut.String(), strings.TrimSpace(readFile(t, fresh))) {
+		t.Fatal("the private key was printed")
+	}
+}
+
+func TestUserRotateTwiceInADay(t *testing.T) {
+	f := newFake(t)
+	accessStore(t, f)
+	if _, _, err := accessRun(f, "user", "rotate"); err != nil {
+		t.Fatal(err)
+	}
+	first := rotateNew(f, "")
+	if _, _, err := accessRun(f, "user", "rotate"); err != nil {
+		t.Fatal(err)
+	}
+	// The second rotation names its file beside the first one's.
+	second := strings.TrimSuffix(first, ".txt") + "-2.txt"
+	if got := rotateConfigKeyFile(t, f); got != second {
+		t.Fatalf("key_file %q, want %q", got, second)
+	}
+	if _, err := os.Stat(first); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUserRotateCompromised(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	out, _, err := accessRun(f, "user", "rotate", "--compromised")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"common.enc.yaml/TOKEN", "env.prod.enc.yaml/TOKEN", "readable by gene (old key)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, out)
+		}
+	}
+	due := readFile(t, x.file(recipients.DueFile))
+	if !strings.Contains(due, "removed: gene (old key)") {
+		t.Fatalf("rotation-due.yaml:\n%s", due)
+	}
+	x.wantClean()
+}
+
+func TestUserRotateRestoresWhenAFileFails(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	before := readFile(t, setupConfig(f))
+	f.backend.RewrapFail = "env.prod.enc.yaml"
+	head := x.git("rev-parse", "HEAD")
+	out, _, err := accessRun(f, "user", "rotate")
+	if err == nil || !strings.HasSuffix(err.Error(), "Nothing was changed.") {
+		t.Fatalf("got %v", err)
+	}
+	storeWriteExitsOne(t, err)
+	if out != "" {
+		t.Fatalf("stdout %q", out)
+	}
+	if _, err := os.Stat(rotateNew(f, "")); err == nil {
+		t.Fatal("the new key file is still there")
+	}
+	if got := readFile(t, setupConfig(f)); got != before {
+		t.Fatalf("config is now %q", got)
+	}
+	if x.git("rev-parse", "HEAD") != head {
+		t.Fatal("a commit was made")
+	}
+	x.wantClean()
+	accessReaders(t, f, filepath.Join(x.store, ezcDir), accessGene)
+}
+
+func TestUserRotateCommitFails(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	before := readFile(t, setupConfig(f))
+	// A hook that refuses every commit.
+	hook := filepath.Join(x.store, ".git", "hooks", "pre-commit")
+	write(t, hook, "#!/bin/sh\nexit 1\n")
+	if err := os.Chmod(hook, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := accessRun(f, "user", "rotate")
+	var unchanged *unchangedError
+	if !errors.As(err, &unchanged) {
+		t.Fatalf("got %T %v", err, err)
+	}
+	if _, err := os.Stat(rotateNew(f, "")); err == nil {
+		t.Fatal("the new key file is still there")
+	}
+	if got := readFile(t, setupConfig(f)); got != before {
+		t.Fatalf("config is now %q", got)
+	}
+	accessReaders(t, f, filepath.Join(x.store, ezcDir), accessGene)
+}
+
+func TestUserRotatePushFails(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	if err := os.RemoveAll(x.bare); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := accessRun(f, "user", "rotate")
+	var unpushed *unpushedError
+	if !errors.As(err, &unpushed) {
+		t.Fatalf("got %T %v", err, err)
+	}
+	// The rotation happened here: the new file and the config stay.
+	fresh := rotateNew(f, "")
+	if got := rotateConfigKeyFile(t, f); got != fresh {
+		t.Fatalf("key_file %q, want %q", got, fresh)
+	}
+	if !strings.Contains(out, "✓ new key in "+fresh) {
+		t.Fatalf("stdout %q", out)
+	}
+	if got := x.subjects(); !slices.Equal(got, []string{"rotate gene"}) {
+		t.Fatalf("commits %q", got)
+	}
+}
+
+func TestUserRotateRefusals(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	_, _, err := accessRun(f, "user", "rotate", "sam")
+	var usage *UsageError
+	if !errors.As(err, &usage) || strings.Contains(err.Error(), "sam") {
+		t.Fatalf("got %v", err)
+	}
+	f.env["SOPS_AGE_KEY_FILE"] = "/keys/mine.txt"
+	accessUntouched(t, f, x, "The key file is set by SOPS_AGE_KEY_FILE; ezc cannot change it. Unset it, or rotate by hand.", "user", "rotate")
+	delete(f.env, "SOPS_AGE_KEY_FILE")
+	f.env["SOPS_AGE_KEY"] = "text"
+	accessUntouched(t, f, x, "The key file is set by SOPS_AGE_KEY; ezc cannot change it. Unset it, or rotate by hand.", "user", "rotate")
 }
