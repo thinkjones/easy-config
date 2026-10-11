@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 	"testing"
 
 	"filippo.io/age"
+	"filippo.io/age/armor"
+	"gopkg.in/yaml.v3"
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/backend/backendtest"
@@ -1116,5 +1119,186 @@ func TestKeyTextDecryptsWithNoKeyFile(t *testing.T) {
 	o.Key = ""
 	if _, err := New(o).Decrypt(file); !errors.Is(err, backend.ErrNoKey) {
 		t.Fatalf("with no key: %v", err)
+	}
+}
+
+// dataKey is the key that encrypts the file's values, as private unwraps it from the file's own entry.
+func dataKey(t *testing.T, file, private []byte) string {
+	t.Helper()
+	ids, err := age.ParseIdentities(bytes.NewReader(private))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Sops struct {
+			Age []ageEntry `yaml:"age"`
+		} `yaml:"sops"`
+	}
+	if err := yaml.Unmarshal(file, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range doc.Sops.Age {
+		if r, err := age.Decrypt(armor.NewReader(strings.NewReader(e.Enc)), ids...); err == nil {
+			key, err := io.ReadAll(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(key)
+		}
+	}
+	t.Fatal("the key unwraps nothing from the file")
+	return ""
+}
+
+// A key that leaves a file knew the key its values are encrypted with, and every older copy of the file still
+// hands it over: the values need a new one, or the key reads whatever is written afterwards.
+func TestRewrapGivesTheValuesANewKeyWhenARecipientLeaves(t *testing.T) {
+	e := realEnv(t)
+	file := filepath.Join(e.Dir, "common.enc.yaml")
+	second, secondPrivate, err := e.Backend.NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Backend.WritePolicy(e.Dir, []string{e.Public, second}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Backend.Set(file, "A", "a1"); err != nil {
+		t.Fatal(err)
+	}
+	old, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	known := dataKey(t, old, secondPrivate)
+
+	if err := e.Backend.WritePolicy(e.Dir, []string{e.Public}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Backend.Rewrap(file); err != nil {
+		t.Fatalf("Rewrap: %v", err)
+	}
+	if err := e.Backend.Set(file, "A", "a2"); err != nil {
+		t.Fatal(err)
+	}
+	now, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dataKey(t, now, e.Private) == known {
+		t.Fatal("the values are still encrypted with the key the removed recipient unwraps from the old file")
+	}
+	if got, err := e.Backend.Decrypt(file); err != nil || !reflect.DeepEqual(got, []backend.Pair{{Name: "A", Value: "a2"}}) {
+		t.Fatalf("Decrypt = %v, %v", got, err)
+	}
+}
+
+// Adding a recipient takes nothing from anybody: the values keep their key and their bytes.
+func TestRewrapKeepsTheValuesKeyWhenNobodyLeaves(t *testing.T) {
+	e := realEnv(t)
+	file := filepath.Join(e.Dir, "common.enc.yaml")
+	if err := e.Backend.Set(file, "A", "a1"); err != nil {
+		t.Fatal(err)
+	}
+	old, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := e.Backend.NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Backend.WritePolicy(e.Dir, []string{e.Public, second}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Backend.Rewrap(file); err != nil {
+		t.Fatalf("Rewrap: %v", err)
+	}
+	now, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dataKey(t, now, e.Private) != dataKey(t, old, e.Private) {
+		t.Fatal("adding a recipient changed the key of the values")
+	}
+	valueLine := func(data []byte) string {
+		line, _, _ := strings.Cut(string(data), "\n")
+		return line
+	}
+	if valueLine(now) != valueLine(old) || !strings.HasPrefix(valueLine(now), "A: ENC[") {
+		t.Fatalf("adding a recipient rewrote the value: %q", valueLine(now))
+	}
+}
+
+// leaving is a sops whose updatekeys drops the second of a file's two recipients, as a policy without it would.
+type leaving struct {
+	recorder
+	file      string
+	rotated   []byte // the file as rotate found it
+	rotateErr error
+}
+
+const twoRecipients = "A: ENC[x]\nsops:\n    age:\n        - recipient: age1first\n          enc: one\n        - recipient: age1second\n          enc: two\n"
+
+func (l *leaving) run(c proc.Command) ([]byte, []byte, error) {
+	l.cmds = append(l.cmds, c)
+	switch c.Args[0] {
+	case "updatekeys":
+		return nil, nil, os.WriteFile(l.file, []byte("A: ENC[x]\nsops:\n    age:\n        - recipient: age1first\n          enc: one\n"), 0o644)
+	case "rotate":
+		l.rotated, _ = os.ReadFile(l.file)
+		return nil, []byte(l.stderr), l.rotateErr
+	}
+	return nil, nil, errors.New("unexpected command")
+}
+
+func (l *leaving) backend(t *testing.T) backend.Backend {
+	t.Helper()
+	for name, text := range map[string]string{PolicyFile: "creation_rules: []\n", filepath.Base(l.file): twoRecipients} {
+		if err := os.WriteFile(filepath.Join(filepath.Dir(l.file), name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return New(Options{Run: l.run, LookPath: func(string) (string, error) { return "/bin/sops", nil }, Environ: []string{"HOME=/h"}, KeyFile: "/keys/keys.txt"})
+}
+
+// The rotation runs on the file as it was, which the key that leaves still opens: in a rotation of this machine's
+// own key that is the only key here.
+func TestRewrapRotatesTheFileAsItWasThenWrapsAgain(t *testing.T) {
+	dir := t.TempDir()
+	l := &leaving{file: filepath.Join(dir, "common.enc.yaml")}
+	if err := l.backend(t).Rewrap(l.file); err != nil {
+		t.Fatalf("Rewrap: %v", err)
+	}
+	var ran []string
+	for _, c := range l.cmds {
+		if c.Name != "sops" || c.Dir != dir {
+			t.Errorf("ran %s in %q, want sops in %q", c.Name, c.Dir, dir)
+		}
+		ran = append(ran, strings.Join(c.Args, " "))
+	}
+	if want := []string{"updatekeys --yes common.enc.yaml", "rotate --in-place common.enc.yaml", "updatekeys --yes common.enc.yaml"}; !slices.Equal(ran, want) {
+		t.Fatalf("ran %q, want %q", ran, want)
+	}
+	if string(l.rotated) != twoRecipients {
+		t.Errorf("rotate found the file without the recipient that leaves:\n%s", l.rotated)
+	}
+	if got, err := l.backend(t).Recipients(l.file); err != nil || !slices.Equal(got, []string{"age1first", "age1second"}) {
+		t.Fatalf("the test's own file: %v, %v", got, err)
+	}
+}
+
+// A rotation that fails is a failed re-wrap, in the backend's own words, and the file is as it was.
+func TestRewrapRotationFailureNeverPassesStderr(t *testing.T) {
+	l := &leaving{file: filepath.Join(t.TempDir(), "common.enc.yaml"), rotateErr: errors.New("exit status 1")}
+	l.stderr = "boom s3cr3t-value"
+	err := l.backend(t).Rewrap(l.file)
+	if err == nil || strings.Contains(err.Error(), "s3cr3t-value") {
+		t.Fatalf("Rewrap error = %v", err)
+	}
+	if len(l.cmds) != 2 {
+		t.Errorf("ran %d commands after the rotation failed, want 2", len(l.cmds))
+	}
+	if now, _ := os.ReadFile(l.file); string(now) != twoRecipients {
+		t.Errorf("the file is not as it was:\n%s", now)
 	}
 }

@@ -280,7 +280,7 @@ When the push fails the commit stays, the branch is left and the command says so
 
 ### Removing someone
 
-`ezc user remove <name>` takes the entry out, re-wraps every encrypted file without that key and commits as `remove <name>`, the same way `user add` does, and pushes. Re-wrapping does not un-leak anything: the removed key opened every value in the store while it was a recipient, and it still opens every older commit, which is still in the store's history and in every clone and backup of it. Only a new value protects a secret, so the command writes each secret the key could read to `rotation-due.yaml` (the file and the name, with who was removed and the date) and prints them:
+`ezc user remove <name>` takes the entry out, re-wraps every encrypted file without that key and commits as `remove <name>`, the same way `user add` does, and pushes. Re-wrapping does not un-leak anything: the removed key opened every value in the store while it was a recipient, and it still opens every older commit, which is still in the store's history and in every clone and backup of it. Each file a key leaves is also encrypted again from scratch, with a new data key (`sops rotate`), so the removed key opens nothing that is written from that commit on, with or without `ezc`; every line of the file changes in that commit. Only a new value protects a secret, so the command writes each secret the key could read to `rotation-due.yaml` (the file and the name, with who was removed and the date) and prints them:
 
 ```
 2 secrets were readable by sam and need new values:

@@ -58,7 +58,10 @@ func (b *sopsBackend) Recipients(path string) ([]string, error) {
 }
 
 // Rewrap runs `sops updatekeys`, which opens the file with the key and wraps its data key again for the
-// policy in the file's folder.
+// policy in the file's folder. A recipient who leaves the file by that unwraps the old data key from every older
+// copy of it, and it would open whatever is written here afterwards: the file is then put back, given a new data
+// key with `sops rotate` while this machine's key still opens it (in `ezc user rotate` the key that leaves is
+// this one), and re-wrapped again.
 func (b *sopsBackend) Rewrap(path string) error {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%s: %w", path, backend.ErrNotSet)
@@ -66,11 +69,33 @@ func (b *sopsBackend) Rewrap(path string) error {
 	if err := b.requirePolicy(path); err != nil {
 		return err
 	}
-	_, stderr, err := b.run(proc.Command{Dir: filepath.Dir(path), Args: []string{"updatekeys", "--yes", filepath.Base(path)}})
+	// A file that cannot be read is for sops to refuse.
+	original, _ := os.ReadFile(path)
+	before, _ := b.Recipients(path)
+	updatekeys := func() error {
+		_, stderr, err := b.run(proc.Command{Dir: filepath.Dir(path), Args: []string{"updatekeys", "--yes", filepath.Base(path)}})
+		if err != nil {
+			return b.failure(path, stderr, err, "write")
+		}
+		return nil
+	}
+	if err := updatekeys(); err != nil {
+		return err
+	}
+	after, err := b.Recipients(path)
 	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(before, func(key string) bool { return !slices.Contains(after, key) }) {
+		return nil
+	}
+	if err := writeFileAtomic(path, original); err != nil {
+		return fmt.Errorf("%s: could not write this file", path)
+	}
+	if _, stderr, err := b.run(proc.Command{Dir: filepath.Dir(path), Args: []string{"rotate", "--in-place", filepath.Base(path)}}); err != nil {
 		return b.failure(path, stderr, err, "write")
 	}
-	return nil
+	return updatekeys()
 }
 
 // CanDecrypt unwraps the data key of the entry for private's public half, in-process: sops is not run and no

@@ -37,8 +37,9 @@ type Backend interface {
 	WritePolicy(dir string, recipients []string) error
 	// Recipients returns the public keys the file is encrypted for, sorted. It needs no key and no tool.
 	Recipients(path string) ([]string, error)
-	// Rewrap re-encrypts the file's data key for the policy in its folder. It needs the key and the tool, and
-	// fails with ErrNoKey, ErrNoTool or ErrNoPolicy as Set does.
+	// Rewrap re-encrypts the file's data key for the policy in its folder, and gives the file a new data key when
+	// a recipient left it, so that the key that left opens nothing written afterwards. It needs the key and the
+	// tool, and fails with ErrNoKey, ErrNoTool or ErrNoPolicy as Set does.
 	Rewrap(path string) error
 	// CanDecrypt is nil when that private key alone opens the file. It needs no tool; its error names the
 	// file, never the key.
