@@ -345,19 +345,29 @@ func (b *sopsBackend) failure(path string, stderr []byte, verb string) error {
 	return fmt.Errorf("%s: sops could not %s this file. To see its own message, run `sops decrypt %s` in %s.", path, verb, filepath.Base(path), filepath.Dir(path))
 }
 
-// isNoKey reports whether stderr says no key opened the file. sops prints the same first line when the key
-// block inside the file is damaged; then the detail says it could not read the stored key, which is a damaged
-// file and not a missing key.
+// noIdentityPhrases are what sops prints, in its detail lines, when the age library found no identity that opens
+// the file: the key file holds a key that is not a recipient, does not exist, or is empty or unreadable. Only
+// these count as a missing key. sops prints the same first line when the file is damaged (a bad header, bad
+// armour, a failed payload check), so the first line alone proves nothing.
+var noIdentityPhrases = []string{
+	"identity did not match any of the recipients",
+	"no identity matched any of the recipients",
+	"failed to load age identities",
+}
+
+// isNoKey reports whether stderr says no key opened the file. sops wraps its detail lines in a `|` box, so
+// the text is flattened to single spaces before matching.
 func isNoKey(stderr []byte) bool {
 	if !bytes.Contains(stderr, []byte(noKeyMarker)) {
 		return false
 	}
-	for _, damaged := range []string{"failed to read header", "parsing age header", "invalid armor"} {
-		if bytes.Contains(stderr, []byte(damaged)) {
-			return false
+	flat := strings.Join(strings.Fields(strings.ReplaceAll(string(stderr), "|", " ")), " ")
+	for _, p := range noIdentityPhrases {
+		if strings.Contains(flat, p) {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 func mustJSON(s string) string {

@@ -464,7 +464,7 @@ func TestCheckOldSops(t *testing.T) {
 }
 
 func TestNoKeyError(t *testing.T) {
-	r := &recorder{err: errors.New("exit status 128"), stderr: "Failed to get the data key required to decrypt the SOPS file."}
+	r := &recorder{err: errors.New("exit status 128"), stderr: "Failed to get the data key required to decrypt the SOPS file.\n  - | age: no identity matched any of the\n      | recipients."}
 	b, dir := recorded(t, r, nil)
 	file := filepath.Join(dir, "common.enc.yaml")
 	os.WriteFile(file, []byte("x"), 0o644)
@@ -580,14 +580,45 @@ func TestDamagedKeyBlockIsNotNoKey(t *testing.T) {
 	if err := b.Set(file, "A", "s3cr3t-value"); err != nil {
 		t.Fatal(err)
 	}
-	data, _ := os.ReadFile(file)
-	if err := os.WriteFile(file, bytes.Replace(data, []byte("-----BEGIN AGE ENCRYPTED FILE-----"), []byte("-----BEGIN AGE ENCRYPTEX FILE-----"), 1), 0o644); err != nil {
-		t.Fatal(err)
+	orig, _ := os.ReadFile(file)
+	generic := file + ": sops could not read this file. To see its own message, run `sops decrypt common.enc.yaml` in " + r.dir + "."
+	damage := func(t *testing.T, data []byte) {
+		t.Helper()
+		if err := os.WriteFile(file, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := b.Decrypt(file)
+		if err == nil {
+			return // damage that changes nothing the key block needs
+		}
+		if errors.Is(err, backend.ErrNoKey) || err.Error() != generic {
+			t.Errorf("error = %q, want the generic failure", err)
+		}
 	}
-	_, err := b.Decrypt(file)
-	if err == nil || errors.Is(err, backend.ErrNoKey) || strings.Contains(err.Error(), "s3cr3t") {
-		t.Fatalf("error = %v, want a failure that is not ErrNoKey", err)
-	}
+	t.Run("begin line", func(t *testing.T) {
+		damage(t, bytes.Replace(orig, []byte("-----BEGIN AGE ENCRYPTED FILE-----"), []byte("-----BEGIN AGE ENCRYPTEX FILE-----"), 1))
+	})
+	t.Run("end line", func(t *testing.T) {
+		damage(t, bytes.Replace(orig, []byte("-----END AGE ENCRYPTED FILE-----"), []byte("-----END AGE ENCRYPTEX FILE-----"), 1))
+	})
+	t.Run("payload", func(t *testing.T) {
+		i := bytes.Index(orig, []byte("-----END AGE")) - 10
+		d := append([]byte{}, orig...)
+		d[i] = 'A' + (d[i]-'A'+1)%26
+		damage(t, d)
+	})
+	t.Run("sweep", func(t *testing.T) {
+		start := bytes.Index(orig, []byte("-----BEGIN AGE")) + len("-----BEGIN AGE ENCRYPTED FILE-----\n")
+		stop := bytes.Index(orig, []byte("-----END AGE"))
+		for i := start; i < stop; i += 5 {
+			if c := orig[i]; c == '\n' || c == ' ' {
+				continue
+			}
+			d := append([]byte{}, orig...)
+			d[i] = '!'
+			damage(t, d)
+		}
+	})
 }
 
 func TestNameIsJSONEncodedInTheIndex(t *testing.T) {
