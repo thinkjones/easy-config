@@ -410,6 +410,23 @@ func TestPullConflictInThePlainManifest(t *testing.T) {
 	storeCmdWant(t, f, storeCmdStatus(x.store, x.bare, "diverged from origin (1 ahead, 1 behind)", "just now", "none"), "status")
 }
 
+// The usual case: both machines declare a name with a value for every environment, so two files conflict.
+func TestPullConflictInTwoPlainFiles(t *testing.T) {
+	f := newFake(t)
+	x := storeCmdStore(t, f)
+	their := storeCmdClone(t, x)
+	storeCmdSet(t, f, "", "MINE", "v", "--type", "str", "--desc", "d")
+	storeCmdSet(t, their, "", "THEIRS", "v", "--type", "str", "--desc", "d")
+	storeCmdWant(t, their, "pushed 1 commit to origin\n", "push")
+
+	head := x.git("rev-parse", "HEAD")
+	storeCmdRefused(t, f, ".ezc/common.yaml, .ezc/manifest.yaml were changed here and on the remote in the same place, so nothing was pulled. Resolve them in "+x.store+" with git (git pull --rebase).", "pull")
+	if x.git("rev-parse", "HEAD") != head {
+		t.Fatal("the store was changed")
+	}
+	x.wantClean()
+}
+
 func TestPush(t *testing.T) {
 	f := newFake(t)
 	x := remoteStore(t, f)

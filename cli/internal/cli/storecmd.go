@@ -181,7 +181,12 @@ An encrypted file changed both here and on the remote cannot be merged: the remo
 					// More went wrong than the conflict; the error says what.
 					return err
 				}
-				return fmt.Errorf("%s was changed here and on the remote in the same place, so nothing was pulled. Resolve it in %s with git (git pull --rebase).", file, dir)
+				was, it := "was", "it"
+				if strings.Contains(file, ", ") {
+					// gitstore lists more than one file with commas.
+					was, it = "were", "them"
+				}
+				return fmt.Errorf("%s %s changed here and on the remote in the same place, so nothing was pulled. Resolve %s in %s with git (git pull --rebase).", file, was, it, dir)
 			case errors.Is(err, gitstore.ErrDirty):
 				return storeDirty(dir, "pull")
 			case errors.Is(err, gitstore.ErrNoRemote):
