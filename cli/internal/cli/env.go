@@ -120,7 +120,9 @@ func newRunCmd(sys System) *cobra.Command {
 	return &cobra.Command{
 		Use:   "run [ENV] -- <command> [args...]",
 		Short: "run a command with an environment loaded",
-		Long:  `Run a command with ENV's variables (else $EZC_ENV, $APP_ENV, then local) added to its environment. They replace same-named variables already set, and EZC_ENV and APP_ENV are passed too. The command's exit code becomes ezc's.`,
+		Long: `Run a command with ENV's variables (else $EZC_ENV, $APP_ENV, then local) added to its environment. They replace same-named variables already set, and EZC_ENV and APP_ENV are passed too. The command's exit code becomes ezc's.
+
+On Unix ezc replaces itself with the command, so there is no process in between: a signal sent to ezc reaches the command. A command that is not found exits 127; one that cannot be run exits 126.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			dash := cmd.ArgsLenAtDash()
 			if dash < 0 || len(args) == dash {

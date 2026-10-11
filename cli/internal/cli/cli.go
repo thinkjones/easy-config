@@ -24,6 +24,7 @@ type System struct {
 	// GOOS is runtime.GOOS; tests fix it.
 	GOOS string
 	// RunChild runs name with args and env, wired to the terminal, and returns its exit code.
+	// On Unix it replaces ezc with the command, and returns only when that failed.
 	RunChild func(name string, args, env []string) (int, error)
 	Version  string
 }
