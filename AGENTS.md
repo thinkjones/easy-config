@@ -2,7 +2,7 @@
 
 Router for agents working in this repo: the source code of `ezc` ("easy config"), a Go CLI that composes a repo's environment from a global store of secrets and variables and the repo's own `.ezc/`, validates it against a manifest, and exports it or runs a command with it. Read the linked file for detail; this page is only where things are.
 
-The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-10-ezc-design.md); parts 1 (core), 2 (secrets) and 3 (`ezc setup`, the store as a git repo, and its sync) are built. Part 4 (access) is being built: `ezc user list`, `add` and `remove`, the rotation-due list and `ezc store rewrap` are there; `ezc join`, bots and CI setup are not yet.
+The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-10-ezc-design.md); parts 1 (core), 2 (secrets) and 3 (`ezc setup`, the store as a git repo, and its sync) are built. Part 4 (access) is being built: `ezc user list`, `add` and `remove`, the rotation-due list, `ezc store rewrap` and `ezc join` are there; `ezc user approve`, bots and CI setup are not yet.
 
 ## Where things are
 
@@ -22,6 +22,8 @@ The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-
 | `cli/internal/cli/storecmd.go` | `ezc store status`, `pull`, `push`, `rewrap` and `audit`. Pull turns the files `gitstore` replaced into the `ezc set -g` lines to run again, from `valuefile.ChangedNames`: names only. |
 | `cli/internal/cli/access.go` | The one path every change to who can decrypt the store takes: `openAccess` (the store, its registry, this machine's key, and every refusal before a write) and `access.apply` (the sequence, one commit, the push, and the restore when a step fails). |
 | `cli/internal/cli/usercmd.go` | `ezc user list`, `add` and `remove` (and `dueFor`, what a removal leaves to rotate). `ezc store rewrap` is in `storecmd.go`. |
+| `cli/internal/cli/joincmd.go` | `ezc join`: the clone, the key and the config as setup makes them, then a request (`recipients.Request`) pushed on its own branch `ezc/join-<name>` through `gitstore.PushBranch`, and the pull request. `ezc join --print` prints the `ezc user add` line instead. |
+| `cli/internal/ghcli` | The `gh` command lines that are not setup's: `pr create` for a join request, `secret set` (the value on stdin only) and `secret delete`. An error carries one line of gh's stderr, each URL through `gitstore.ShowURL`, never stdin's content. |
 | `cli/internal/setup` | What `ezc setup` does to a machine: creates the key file, creates the store as a git repo (manifest, `recipients.yaml`, policy, one commit) or clones it, adopts one made by hand (`Adopt`: a git repo, a manifest, and a registry and a policy where they are missing and the store holds no encrypted values yet), and publishes it to GitHub through `gh`. Flags, prompts and printing are in `cli/internal/cli/setupcmd.go`. It leaves alone whatever is already there. |
 | `cli/internal/doctor` | Reports the health of the machine, the store and the repo (`ezc doctor`): checks, warnings and problems with their fixes, and the files in a `.ezc/` that ezc does not read. Never a value. |
 | `bin/ezc` | Shim that builds `cli/bin/ezc` when a Go source changes and runs it; `direnv allow` puts `bin/` on PATH. |
@@ -50,7 +52,7 @@ The store's `.ezc/` holds the same files without `env.sh`, and `recipients.yaml`
 - **No command prints a value** except `ezc env export`, `ezc run` (to the command) and `ezc get`. Error messages and `--verbose` output carry names and paths only: a check's reason never includes the value that failed it, and a YAML parser's error text, which can quote the file, is never passed on (`invalidYAML` in `cli/internal/resolve/file.go`).
 - **Only `backend/sops` names sops.** No other package contains `sops`, `.sops.yaml`, `SOPS_` or `ENC[`, apart from tests and `cli/internal/cli/scope.go`, which builds the default backend. Text about the tool or the key comes from the backend's own messages.
 - **No value in output.** That covers stdout, stderr, error text, commit messages and anything passed through from a tool: the sops backend never passes sops's output on, and a commit message holds names and file names only.
-- **Only `gitstore` builds `git` command lines.** Every other package calls its methods; `gh` and `brew` command lines are built in `setup`. Git, `gh`, `brew` and `sops` run only through `proc.Runner`.
+- **Only `gitstore` builds `git` command lines.** Every other package calls its methods; `gh` and `brew` command lines are built in `setup`, and `gh`'s others in `ghcli`. Git, `gh`, `brew` and `sops` run only through `proc.Runner`.
 - **The private key is never printed** and is written to one place, the key file (`0600`, in a folder created `0700`). Nothing overwrites a key file, a store or a `config.toml` that is there.
 - **A variable name matches `manifest.NamePattern`** (`^[A-Za-z_][A-Za-z0-9_]*$`), tested with `manifest.ValidName`: one rule for the manifest, the values files and the JSON Schema.
 - **A values file is one flat mapping of `NAME: value`.** The resolver rejects what would silently change or drop a value: an anchor, an alias, a tag, a key defined twice, a second YAML document, a NUL byte.

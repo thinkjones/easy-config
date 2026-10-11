@@ -19,6 +19,9 @@ import (
 // accessFetchTimeout is how long an access change waits for the remote before it judges the store.
 const accessFetchTimeout = 30 * time.Second
 
+// requestBranch starts the name of the branch of the store's remote that holds a join request: ezc/join-<name>.
+const requestBranch = "ezc/join-"
+
 // access is the store as a command that reads or changes who can decrypt it sees it.
 type access struct {
 	sys    System

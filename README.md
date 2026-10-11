@@ -37,7 +37,7 @@ Each step is described below: [Set up](#set-up), [Writing to the store](#writing
 
 ## Not there yet
 
-This is `ezc` 0.3. A second person, or a second machine with a key of its own, is added with `ezc user add` once you have their public key, and removed with `ezc user remove` (see [Access](#access)). Asking for access from the new machine (`ezc join`), bots, and setup for CI are not there yet. A second machine can also share the first one's key file: copy `~/.config/sops/age/keys.txt` from the first machine to the same path on the second, then run `ezc setup --store owner/repo` there. Setup uses a key file that is already there and never replaces it.
+This is `ezc` 0.3. A second person, or a second machine with a key of its own, asks for access with `ezc join`, is added with `ezc user add` once you have their public key, and removed with `ezc user remove` (see [Access](#access)). Approving a request in one step (`ezc user approve`), bots, and setup for CI are not there yet: until then, whoever has access adds the newcomer with the `ezc user add` line that `ezc join --print` writes. A second machine can also share the first one's key file: copy `~/.config/sops/age/keys.txt` from the first machine to the same path on the second, then run `ezc setup --store owner/repo` there. Setup uses a key file that is already there and never replaces it.
 
 Two things are done by hand for now: a repo that keeps secrets of its own needs the store's encryption policy copied into its `.ezc/` (see [Encryption](#encryption)), and two machines that declare a new name at the same time must resolve the conflict with git (see [Syncing the store](#syncing-the-store)). The registry and the TUI come later.
 
@@ -68,6 +68,8 @@ A store made by hand, a folder with a `.ezc/` that is already at the store's pat
 | `ezc version` | Print ezc's version. |
 | `ezc help [command]` | Help for ezc, or for one command. |
 | `ezc setup [--new-local \| --new-github owner/repo \| --store REPO] [--name NAME] [--yes]` | Set the machine up: check the tools, create your key, create or clone the store, write the config. Changes only what is missing; see [Set up](#set-up). |
+| `ezc join <owner/repo \| URL \| path> [--name NAME] [--kind user\|machine] [--owner USER]` | Ask for access to an existing store from this machine: clone it, create your key when there is none, write the config, and push a request holding your public key on the branch `ezc/join-NAME`, with a pull request when `gh` is installed and the store is on GitHub. Changes nothing on the store's main branch. See [Joining a store](#joining-a-store). |
+| `ezc join --print [--name NAME] [--kind user\|machine] [--owner USER]` | Print the `ezc user add` line for this machine's key, creating the key when there is none. Takes no repo, needs no store and pushes nothing. |
 | `ezc env [ENV] [-m FILE] [--verbose]` | Check an environment against the manifest. Reports on stderr, prints no values, exits 1 on problems. With `-m FILE` the values come from that manifest's folder, not this repo. |
 | `ezc env export [ENV] [--format shell\|json]` | Print the environment's variables on stdout. `shell` is for `eval`; `json` is one object of names to values, for any other tool. Outside a repo it exports the store alone. |
 | `ezc run [ENV] -- <command> [args…]` | Run a command with the environment added to its own. On Unix `ezc` replaces itself with the command, so signals sent to it reach the command and the exit status is the command's. Exits 127 when the command is not found, 126 when it cannot be run. |
@@ -185,7 +187,38 @@ ezc store rewrap                                          # make the files match
 Run ezc store rewrap.
 ```
 
-`ezc user add <name> <key>` takes a public key, which is safe to pass around: `ezc setup --store owner/repo` prints it on a machine whose key cannot read the store yet. A private key is never given to a command. The name is lower case letters, digits and `-`. The command adds the entry, writes the policy, re-wraps every encrypted file of the store for the new list, checks that each file now lists exactly the registry's keys, commits those files as `add <name>` and pushes. The new person then runs `ezc setup --store owner/repo` (or `ezc store pull`) and can read the secrets.
+`ezc user add <name> <key>` takes a public key, which is safe to pass around: `ezc setup --store owner/repo` prints it on a machine whose key cannot read the store yet. A private key is never given to a command. The name is lower case letters, digits and `-`. The command adds the entry, writes the policy, re-wraps every encrypted file of the store for the new list, checks that each file now lists exactly the registry's keys, commits those files as `add <name>` and pushes. The new person then runs `ezc setup --store owner/repo` (or `ezc store pull`) and can read the secrets. `ezc join --print` on the new machine writes this command out, key included; see [Joining a store](#joining-a-store).
+
+### Joining a store
+
+```sh
+ezc join owner/repo                                              # ask to read the store (owner/repo needs gh; a URL or a path works too)
+ezc join owner/repo --name sam-laptop --kind machine --owner sam # ask for a second key of sam's
+ezc join --print                                                 # only print the line that adds this machine's key
+```
+
+`ezc join` is how a new person, or a new machine with a key of its own, asks for access. It takes the machine from nothing, as `ezc setup --store` does, and then files a request:
+
+- It clones the store into ezc's home. A store that is already there must be a clone of the same repo, level with its remote: neither behind it nor holding commits it lacks.
+- It creates your key when the machine has none, with the same notice to back the file up, and never replaces one that is there.
+- It writes `config.toml`, filling in only the fields that are empty.
+- It writes `.ezc/requests/<name>.yaml` (your name, your public key, `user` or `machine` and the owner, this machine's host name and the date), commits it on a new branch `ezc/join-<name>`, pushes that branch and puts the store back on its own branch with the file gone. The store's main branch is not changed, here or on the remote.
+- When `gh` is installed and the store is on GitHub, it opens a pull request for the branch and prints its URL. The pull request is only a way to see the request: it is not meant to be merged. When it cannot be opened the command says so on a `!` line and still succeeds, because the request is on its branch.
+
+It ends with what happens next:
+
+```
+Ask someone who can read the store to run: ezc user approve sam
+Then run ezc store pull.
+```
+
+Your name is `--name`, else the `user` of `config.toml`, else it is asked for on a terminal; with none of these the command stops and asks for `--name`. A machine (`--kind machine --owner <user>`) needs a name of its own and an owner who is already a user in `recipients.yaml`; its `config.toml` gets the owner as `user`.
+
+Only the public key leaves the machine: it is in the request and may be printed. The private key stays in the key file and is in no output, no argument and no commit. Like `ezc setup`, `ezc join` refuses to run while `EZC_STORE` is set or while the environment holds the key itself (`SOPS_AGE_KEY`); `SOPS_AGE_KEY_FILE` names the key file to use.
+
+Run again, `ezc join` changes only what is missing and pushes nothing twice: a request of yours that is already on the remote is reported as `✓ your request is waiting: ezc/join-<name>`. When your key is already one `recipients.yaml` names, it says `✓ <name> can already read this store.` and files nothing. When the name belongs to a recipient with another key, or somebody else's request under that name is waiting, it stops with `The store already has a recipient named <name>. Pick another name with --name.`
+
+`ezc join --print` is for a store with no remote to push a request to, or for sending the request another way. It takes no repo and needs no store: it finds or creates the key and prints one line on stdout, `ezc user add <name> <key>` (with `--kind machine --owner <user>` for a machine), which someone who can read the store runs as it is.
 
 ### Removing someone
 

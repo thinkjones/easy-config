@@ -40,6 +40,7 @@ type fake struct {
 	errTTY    bool                                       // StderrIsTerminal
 	noGit     bool                                       // git cannot be found
 	gitFail   string                                     // a git command with this argument fails
+	hostname  string                                     // System.Hostname; "" means test-host
 
 	t    *testing.T
 	gits []proc.Command // every git command Exec ran; they are not in execs
@@ -131,6 +132,12 @@ func (f *fake) sys() System {
 			return f.now
 		},
 		Backend: f.backend,
+		Hostname: func() (string, error) {
+			if f.hostname == "" {
+				return "test-host", nil
+			}
+			return f.hostname, nil
+		},
 	}
 }
 
