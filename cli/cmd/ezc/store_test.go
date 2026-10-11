@@ -168,7 +168,7 @@ func TestSetupEndToEnd(t *testing.T) {
 	if out := e.mustRun(e.repo, "", "get", "API_TOKEN", "--reveal"); out != e2eSecret+"\n" {
 		t.Fatalf("get --reveal: %q", out)
 	}
-	if stdout, stderr, code := e.run(e.repo, "", "doctor"); code != 0 || !strings.Contains(stdout, "✓ access    your key is the recipient gene") || strings.Contains(stdout+stderr, e2eSecret) {
+	if stdout, stderr, code := e.run(e.repo, "", "doctor"); code != 0 || !strings.Contains(stdout, "✓ access      your key is the recipient gene") || strings.Contains(stdout+stderr, e2eSecret) {
 		t.Fatalf("doctor: exit %d\n%s%s", code, stdout, stderr)
 	}
 	if got, want := e.git("log", "--format=%s"), "set API_TOKEN (manifest.yaml, common.enc.yaml)\nsetup: create the store"; got != want {
@@ -289,7 +289,7 @@ func TestSetupKeyFileFromEnvironmentEndToEnd(t *testing.T) {
 	if out := e.mustRun(e.repo, "", "get", "API_TOKEN", "--reveal"); out != e2eSecret+"\n" {
 		t.Fatalf("get --reveal: %q", out)
 	}
-	if stdout, stderr, code := e.run(e.repo, "", "doctor", "--only", "store"); code != 0 || !strings.Contains(stdout, "✓ access    your key is the recipient gene") {
+	if stdout, stderr, code := e.run(e.repo, "", "doctor", "--only", "store"); code != 0 || !strings.Contains(stdout, "✓ access      your key is the recipient gene") {
 		t.Fatalf("doctor: exit %d\n%s%s", code, stdout, stderr)
 	}
 }

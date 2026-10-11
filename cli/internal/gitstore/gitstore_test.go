@@ -673,3 +673,35 @@ func TestShowURL(t *testing.T) {
 		}
 	}
 }
+
+func TestParseVersion(t *testing.T) {
+	for out, want := range map[string]string{
+		"git version 2.43.0\n":                 "2.43.0",
+		"git version 2.39.5 (Apple Git-154)\n": "2.39.5",
+		"git version 2.23\n":                   "2.23",
+	} {
+		if got, ok := ParseVersion(out); !ok || got != want {
+			t.Errorf("%q: %q, %v", out, got, ok)
+		}
+	}
+	for _, out := range []string{"", "hello\n", "git version\n", "git version x.y\n"} {
+		if got, ok := ParseVersion(out); ok {
+			t.Errorf("%q parsed as %q", out, got)
+		}
+	}
+}
+
+func TestTooOld(t *testing.T) {
+	for v, want := range map[string]bool{"2.22.9": true, "1.9.1": true, "2.23.0": false, "2.23": false, "2.43.0": false, "3.0.1": false} {
+		if TooOld(v) != want {
+			t.Errorf("TooOld(%q) = %v", v, !want)
+		}
+	}
+}
+
+func TestVersion(t *testing.T) {
+	v, err := newGit(t).Version()
+	if err != nil || TooOld(v) {
+		t.Errorf("%q, %v", v, err)
+	}
+}

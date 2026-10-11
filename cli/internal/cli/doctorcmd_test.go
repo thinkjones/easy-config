@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/gitstore"
 	"github.com/thinkjones/easy-config/cli/internal/gitstore/gittest"
 	"github.com/thinkjones/easy-config/cli/internal/proc"
+	"github.com/thinkjones/easy-config/cli/internal/recipients"
 )
 
 // doctorCmdLine is the line of doctor's output that starts with marker and label, "" when there is none.
@@ -20,6 +22,27 @@ func doctorCmdLine(out, label string) string {
 		}
 	}
 	return ""
+}
+
+// doctorSquash is out with each line's runs of spaces made one and its indent dropped, so a test does not depend on
+// the width of the label column.
+func doctorSquash(out string) string {
+	lines := strings.Split(out, "\n")
+	for i, l := range lines {
+		lines[i] = strings.Join(strings.Fields(l), " ")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// doctorBroken are the labels of the items marked ✗.
+func doctorBroken(out string) []string {
+	var labels []string
+	for _, l := range strings.Split(out, "\n") {
+		if f := strings.Fields(l); len(f) > 1 && f[0] == "✗" {
+			labels = append(labels, f[1])
+		}
+	}
+	return labels
 }
 
 // doctorCmdCloned is a machine that cloned a store whose registry names its key, with origin a bare repo.
@@ -96,7 +119,7 @@ func TestDoctorWithOrigin(t *testing.T) {
 	if err := f.run("doctor"); err != nil {
 		t.Fatalf("%v\n%s", err, f.out.String())
 	}
-	if out := f.out.String(); !strings.Contains(out, "! sync      1 commit behind origin\n      Run `ezc store pull`.\n") {
+	if out := doctorSquash(f.out.String()); !strings.Contains(out, "! sync 1 commit behind origin\nRun `ezc store pull`.\n") {
 		t.Errorf("behind:\n%s", out)
 	}
 }
@@ -162,7 +185,7 @@ func TestDoctorKeyNotARecipient(t *testing.T) {
 	}
 	f.out.Reset()
 	wantExit(t, f.run("doctor"), 1)
-	want := "✗ access  your key is not one of this store's recipients. Give your public key to someone who has access."
+	want := "✗ access  your key is not one of this store's recipients."
 	if line := doctorCmdLine(f.out.String(), "access"); strings.Join(strings.Fields(line), " ") != strings.Join(strings.Fields(want), " ") {
 		t.Errorf("access: %q", line)
 	}
@@ -197,7 +220,7 @@ func TestDoctorPendingRequests(t *testing.T) {
 	if err := f.run("doctor"); err != nil {
 		t.Fatalf("%v\n%s", err, f.out.String())
 	}
-	if line := doctorCmdLine(f.out.String(), "requests"); !strings.Contains(line, "! requests  1 access request pending: ana") {
+	if line := doctorSquash(doctorCmdLine(f.out.String(), "requests")); !strings.Contains(line, "! requests 1 access request pending: ana") {
 		t.Errorf("requests: %q", line)
 	}
 }
@@ -261,8 +284,10 @@ func TestDoctorOnlyMachine(t *testing.T) {
 			t.Errorf("%s shown\n%s", label, out)
 		}
 	}
-	if len(f.gits) != 0 {
-		t.Errorf("git ran for --only machine: %v", f.gits)
+	for _, c := range f.gits {
+		if len(c.Args) != 1 || c.Args[0] != "version" {
+			t.Errorf("git ran for --only machine: %v", c)
+		}
 	}
 	f.out.Reset()
 	if err := f.run("doctor", "--only", "store"); err != nil {
@@ -275,5 +300,113 @@ func TestDoctorOnlyMachine(t *testing.T) {
 	}
 	if doctorCmdLine(f.out.String(), "config") != "" {
 		t.Errorf("config shown for --only store")
+	}
+}
+
+// doctorRun runs doctor on f and returns what it printed; the encryption tool is never named in it.
+func doctorRun(t *testing.T, f *fake) (string, error) {
+	t.Helper()
+	out, _, err := accessRun(f, "doctor")
+	if strings.Contains(strings.ToLower(out), "sops") {
+		t.Errorf("doctor named the encryption tool:\n%s", out)
+	}
+	return out, err
+}
+
+// The fixture store declares names no file sets, so its audit is always broken: these tests look at the item they are about.
+func TestDoctorJoinedButNotApproved(t *testing.T) {
+	j := joinMachines(t)
+	j.join(j.b, "--name", "sam")
+
+	out, err := doctorRun(t, j.b)
+	wantExit(t, err, 1)
+	want := "✗ access this machine's key cannot read the store yet; request sam is waiting for approval\nAsk someone who can read the store to run ezc user approve sam.\n"
+	if !strings.Contains(doctorSquash(out), want) {
+		t.Errorf("no pending line in\n%s", out)
+	}
+	if got := doctorBroken(out); !slices.Equal(got, []string{"access", "audit"}) {
+		t.Errorf("broken: %v", got)
+	}
+
+	if _, _, err := accessRun(j.a, "user", "approve", "sam", "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := joinRun(t, j.b, "store", "pull"); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = doctorRun(t, j.b)
+	if got := doctorBroken(out); !slices.Equal(got, []string{"audit"}) {
+		t.Errorf("broken after approve: %v\n%s", got, out)
+	}
+	squashed := doctorSquash(out)
+	for _, want := range []string{"✓ access your key is the recipient sam", "✓ recipients every file is encrypted for the 2 recipients"} {
+		if !strings.Contains(squashed, want) {
+			t.Errorf("no %q in\n%s", want, out)
+		}
+	}
+}
+
+func TestDoctorNotAskedForAccess(t *testing.T) {
+	j := joinMachines(t)
+	if _, _, err := accessRun(j.b, "setup", "--store", j.x.bare, "--name", "sam", "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := doctorRun(t, j.b)
+	wantExit(t, err, 1)
+	if want := "✗ access your key is not one of this store's recipients.\nRun ezc join " + j.x.bare + ".\n"; !strings.Contains(doctorSquash(out), want) {
+		t.Errorf("no join fix in\n%s", out)
+	}
+}
+
+func TestDoctorFilesThatDifferFromTheRegistry(t *testing.T) {
+	f := newFake(t)
+	reg := map[string]recipients.Recipient{"gene": accessEntry(accessGene), "sam": accessEntry(accessSam)}
+	accessStoreWith(t, f, reg, accessGene, accessStray)
+
+	out, err := doctorRun(t, f)
+	wantExit(t, err, 1)
+	want := "✗ recipients 2 files are not encrypted for the registry: common.enc.yaml, env.prod.enc.yaml\nRun ezc store rewrap.\n"
+	if !strings.Contains(doctorSquash(out), want) {
+		t.Errorf("no differing files in\n%s", out)
+	}
+	if strings.Contains(out, accessStray) {
+		t.Errorf("doctor printed a key:\n%s", out)
+	}
+
+	if _, _, err := accessRun(f, "store", "rewrap"); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = doctorRun(t, f)
+	if got := doctorBroken(out); !slices.Equal(got, []string{"audit"}) {
+		t.Errorf("broken after rewrap: %v\n%s", got, out)
+	}
+	if !strings.Contains(doctorSquash(out), "✓ recipients every file is encrypted for the 2 recipients") {
+		t.Errorf("recipients not clear:\n%s", out)
+	}
+}
+
+func TestDoctorRotationDue(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	write(t, filepath.Join(x.store, ".ezc", "rotation-due.yaml"), "common.enc.yaml/TOKEN:\n  removed: sam\n  on: \"2026-10-11\"\n")
+	out, _ := doctorRun(t, f)
+	want := "! rotation 1 secret was readable by a removed key\nezc store status --due lists them; give each a new value with ezc set -g NAME.\n"
+	if !strings.Contains(doctorSquash(out), want) {
+		t.Errorf("no rotation warning in\n%s", out)
+	}
+	if got := doctorBroken(out); !slices.Equal(got, []string{"audit"}) {
+		t.Errorf("a due list must only warn: %v", got)
+	}
+	if strings.Contains(out, "TOKEN") {
+		t.Errorf("doctor named a secret:\n%s", out)
+	}
+
+	write(t, filepath.Join(x.store, ".ezc", "rotation-due.yaml"), "[\n")
+	out, _ = doctorRun(t, f)
+	if got := doctorBroken(out); !slices.Equal(got, []string{"rotation", "audit"}) {
+		t.Errorf("unreadable: %v", got)
+	}
+	if !strings.Contains(doctorSquash(out), "✗ rotation cannot read rotation-due.yaml") {
+		t.Errorf("no rotation error in\n%s", out)
 	}
 }

@@ -190,6 +190,48 @@ func (g Git) IsRepo(dir string) (bool, error) {
 	return err == nil && string(out) == "true\n\n", nil
 }
 
+// MinVersion is the oldest git ezc works with.
+const MinVersion = "2.23"
+
+// Version is the version git reports, such as "2.43.0": the number in `git version 2.43.0 (Apple Git-146)`.
+func (g Git) Version() (string, error) {
+	out, err := g.run("", 0, "version")
+	if err != nil {
+		return "", err
+	}
+	v, ok := ParseVersion(string(out))
+	if !ok {
+		return "", errors.New("git: its version could not be read")
+	}
+	return v, nil
+}
+
+// ParseVersion is the version number in the output of `git version`.
+func ParseVersion(out string) (string, bool) {
+	fields := strings.Fields(out)
+	if len(fields) < 3 || fields[0] != "git" || fields[1] != "version" || !versionPattern.MatchString(fields[2]) {
+		return "", false
+	}
+	return fields[2], true
+}
+
+var versionPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*`)
+
+// TooOld reports whether version, as Version returns it, is older than MinVersion.
+func TooOld(version string) bool {
+	parse := func(v string) (major, minor int) {
+		parts := strings.Split(v, ".")
+		major, _ = strconv.Atoi(parts[0])
+		if len(parts) > 1 {
+			minor, _ = strconv.Atoi(parts[1])
+		}
+		return major, minor
+	}
+	wantMajor, wantMinor := parse(MinVersion)
+	major, minor := parse(version)
+	return major < wantMajor || (major == wantMajor && minor < wantMinor)
+}
+
 // Init makes dir, and the folders above it, a repo on branch main.
 func (g Git) Init(dir string) error {
 	_, err := g.run("", 0, "init", "--initial-branch=main", "--", dir)
