@@ -2,7 +2,7 @@
 
 Router for agents working in this repo: the source code of `ezc` ("easy config"), a Go CLI that composes a repo's environment from a global store of secrets and variables and the repo's own `.ezc/`, validates it against a manifest, and exports it or runs a command with it. Read the linked file for detail; this page is only where things are.
 
-The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-10-ezc-design.md); parts 1 (core) and 2 (secrets) are built, and `ezc setup` from part 3.
+The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-10-ezc-design.md); parts 1 (core) and 2 (secrets) are built, and `ezc setup` and store sync from part 3.
 
 ## Where things are
 
@@ -14,6 +14,9 @@ The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-
 | `cli/internal/proc` | The description of a child process (`Command`) and the runner type the backend is given, so tests can fake it. |
 | `cli/internal/valuefile` | Edits plaintext values files and manifests in place (`ezc set` and `unset`): comments kept, written through a temp file and rename, read back before it replaces the old. |
 | `cli/internal/storeaudit` | Audits a store's values files against its manifest (`ezc store audit`): undeclared, missing, secret-boundary, leak, placeholder and shape findings, never a value. |
+| `cli/internal/gitstore` | The one place that builds `git` command lines: a store's status against its remote, fetch, commit, push, and `Pull`, which rebases local commits and keeps the remote's version of a conflicted encrypted file. `gittest` runs the real git for tests, cut off from the user's config. |
+| `cli/internal/cli/sync.go` | What a command learns about the store before it uses it: the fetch every 10 minutes recorded in `$EZC_HOME/state.json`, the `store:` line on stderr, the refusal to write while behind, and the commit after a write. |
+| `cli/internal/cli/storecmd.go` | `ezc store status`, `pull`, `push` and `audit`. Pull turns the files `gitstore` replaced into the `ezc set -g` lines to run again, from `valuefile.ChangedNames`: names only. |
 | `cli/internal/setup` | What `ezc setup` does to a machine: creates the key file, creates the store as a git repo (manifest, `recipients.yaml`, policy, one commit) or clones it, and publishes it to GitHub through `gh`. Flags, prompts and printing are in `cli/internal/cli/setupcmd.go`. It leaves alone whatever is already there. |
 | `cli/internal/doctor` | Reports the health of the machine, the store and the repo (`ezc doctor`): checks, warnings and problems with their fixes, and the files in a `.ezc/` that ezc does not read. Never a value. |
 | `bin/ezc` | Shim that builds `cli/bin/ezc` when a Go source changes and runs it; `direnv allow` puts `bin/` on PATH. |

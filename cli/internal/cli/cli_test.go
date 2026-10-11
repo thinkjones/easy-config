@@ -1258,7 +1258,7 @@ func TestStoreAuditBackendFailureIsAnError(t *testing.T) {
 
 func TestStoreNeedsAVerb(t *testing.T) {
 	f := newFake(t)
-	wantUsage(t, f.run("store"), "say audit")
+	wantUsage(t, f.run("store"), "say status, pull, push or audit")
 }
 
 func TestDoctor(t *testing.T) {
