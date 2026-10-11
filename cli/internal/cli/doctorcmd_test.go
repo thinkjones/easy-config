@@ -233,6 +233,10 @@ func TestDoctorPlainFolderStore(t *testing.T) {
 			t.Errorf("%s shown for a plain folder: %q", label, line)
 		}
 	}
+	// Setup refuses to run with EZC_STORE set, so doctor does not send the user to it.
+	if line := doctorCmdLine(f.out.String(), "config"); !strings.HasSuffix(line, "no config at "+setupConfig(f)+".") {
+		t.Errorf("config: %q", line)
+	}
 	for _, c := range f.gits {
 		if len(c.Args) > 0 && c.Args[0] == "fetch" {
 			t.Errorf("fetched a plain folder: %v", c.Args)

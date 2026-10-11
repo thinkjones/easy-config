@@ -174,6 +174,9 @@ func configItem(o Options) Item {
 	switch {
 	case o.ConfigErr != "":
 		return Item{Broken, "config", o.ConfigErr, ""}
+	case !o.ConfigFound && o.StoreSet:
+		// Setup does not run for a store EZC_STORE names, so it is not the thing to suggest.
+		return Item{Warn, "config", "no config at " + o.ConfigPath + ".", ""}
 	case !o.ConfigFound:
 		return Item{Warn, "config", "no config at " + o.ConfigPath + ". Run `ezc setup`.", ""}
 	case o.User != "":

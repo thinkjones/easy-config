@@ -287,6 +287,71 @@ func TestNewStoreFailureLeavesNothing(t *testing.T) {
 	})
 }
 
+// handMade puts a store made by hand, a plain folder, at the machine's store path.
+func handMade(t *testing.T, m *machine, files map[string]string) {
+	t.Helper()
+	for name, content := range files {
+		path := filepath.Join(m.Paths.StoreEzc(), name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestAdopt(t *testing.T) {
+	m := newMachine(t, gittest.Runner(t))
+	handMade(t, m, map[string]string{manifestName: emptyManifest, "common.yaml": "A: 1\n"})
+	a, err := Adopt(m.Env, "gene", "fake1abc")
+	if err != nil || a != (Adopted{Repo: true, Registry: true}) {
+		t.Fatalf("got %+v, %v", a, err)
+	}
+	if got := m.git("log", "--format=%s|%an"); got != "setup: adopt the store|gene" {
+		t.Fatalf("log %q", got)
+	}
+	if got := m.git("status", "--porcelain"); got != "" {
+		t.Fatalf("left uncommitted:\n%s", got)
+	}
+	reg, found, err := recipients.Load(m.Paths.StoreEzc())
+	if err != nil || !found || reg.NameOf("fake1abc") != "gene" {
+		t.Fatalf("registry %+v, %v, %v", reg, found, err)
+	}
+	// All is there now: nothing more is done.
+	if a, err := Adopt(m.Env, "gene", "fake1abc"); err != nil || a != (Adopted{}) || m.git("rev-list", "--count", "HEAD") != "1" {
+		t.Fatalf("again: %+v, %v", a, err)
+	}
+}
+
+func TestAdoptLeavesAHandWrittenPolicy(t *testing.T) {
+	m := newMachine(t, gittest.Runner(t))
+	handMade(t, m, map[string]string{manifestName: emptyManifest, backend.FakePolicy: "by hand\n"})
+	a, err := Adopt(m.Env, "gene", "fake1abc")
+	if err != nil || a != (Adopted{Repo: true}) {
+		t.Fatalf("got %+v, %v", a, err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(m.Paths.StoreEzc(), backend.FakePolicy)); string(got) != "by hand\n" {
+		t.Fatalf("the policy is now %q", got)
+	}
+	if exists(filepath.Join(m.Paths.StoreEzc(), recipients.File)) {
+		t.Fatal("a registry was written")
+	}
+}
+
+func TestAdoptFailureLeavesTheStoreAsItWas(t *testing.T) {
+	m := newMachine(t, gittest.Runner(t))
+	m.Backend = &failingPolicy{}
+	handMade(t, m, map[string]string{manifestName: emptyManifest})
+	if a, err := Adopt(m.Env, "gene", "fake1abc"); err == nil || a != (Adopted{}) {
+		t.Fatalf("got %+v, %v", a, err)
+	}
+	entries, _ := os.ReadDir(m.Paths.StoreEzc())
+	if len(entries) != 1 || entries[0].Name() != manifestName || exists(filepath.Join(m.Paths.Store(), ".git")) {
+		t.Fatalf("left behind: %v, .git %v", entries, exists(filepath.Join(m.Paths.Store(), ".git")))
+	}
+}
+
 func TestCloneStore(t *testing.T) {
 	m := newMachine(t, gittest.Runner(t))
 	bare := remoteWith(t, map[string]string{".ezc/manifest.yaml": emptyManifest})

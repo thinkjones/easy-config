@@ -192,6 +192,75 @@ func TestSetupEndToEnd(t *testing.T) {
 	}
 }
 
+// A store made by hand under part 2, a plain folder with a policy written by hand, becomes a git repo that ezc
+// commits to; its policy and its secret are left as they were.
+func TestSetupAdoptsAHandMadeStoreEndToEnd(t *testing.T) {
+	e := newMachine(t, t.TempDir(), "a")
+	pub := writeAgeKey(t, e.key)
+	ezc := filepath.Join(e.store(), ".ezc")
+	e.writePolicy(ezc, pub)
+	if err := os.WriteFile(filepath.Join(ezc, "manifest.yaml"), []byte("schemaVersion: v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.mustRun(e.repo, e2eSecret, "set", "-g", "API_TOKEN", "--type", "secret", "--desc", "d")
+	if _, err := os.Stat(filepath.Join(e.store(), ".git")); err == nil {
+		t.Fatal("the store was a git repo before setup")
+	}
+	before := map[string][]byte{}
+	for _, name := range []string{".sops.yaml", "manifest.yaml", "common.enc.yaml"} {
+		data, err := os.ReadFile(filepath.Join(ezc, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[name] = data
+	}
+	key, err := os.ReadFile(e.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := e.mustRun(e.repo, "", "setup", "--new-local", "--name", "gene", "--yes")
+	for _, want := range []string{"✓ your key: ", "+ made the store a git repo: " + e.store() + "\n", "! This store's encryption policy was written by hand and it has no recipients.yaml"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("setup: no %q in\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Next:") || strings.Contains(out, "wrote the registry") {
+		t.Errorf("setup:\n%s", out)
+	}
+	for name, want := range before {
+		if now, err := os.ReadFile(filepath.Join(ezc, name)); err != nil || !bytes.Equal(now, want) {
+			t.Errorf("setup changed %s (%v)", name, err)
+		}
+	}
+	if now, err := os.ReadFile(e.key); err != nil || !bytes.Equal(now, key) {
+		t.Fatalf("setup changed the key file (%v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(ezc, "recipients.yaml")); err == nil {
+		t.Error("setup wrote a registry beside a policy written by hand")
+	}
+	if got := e.git("log", "--format=%s"); got != "setup: adopt the store" || e.git("status", "--porcelain") != "" {
+		t.Fatalf("log:\n%s\nstatus:\n%s", got, e.git("status", "--porcelain"))
+	}
+	if out := e.mustRun(e.repo, "", "get", "API_TOKEN", "--reveal"); out != e2eSecret+"\n" {
+		t.Fatalf("get --reveal: %q", out)
+	}
+
+	e.mustRun(e.repo, e2eSecret+"-2", "set", "-g", "DB_PASS", "--type", "secret", "--desc", "d")
+	if got, want := e.git("log", "--format=%s"), "set DB_PASS (manifest.yaml, common.enc.yaml)\nsetup: adopt the store"; got != want {
+		t.Fatalf("log:\n%s\nwant:\n%s", got, want)
+	}
+	if got := e.git("status", "--porcelain"); got != "" {
+		t.Fatalf("the store has uncommitted changes:\n%s", got)
+	}
+	wantNoValue(t, e, e2eSecret)
+
+	head := e.git("rev-parse", "HEAD")
+	if out := e.mustRun(e.repo, "", "setup", "--yes"); strings.Contains(out, "+ ") || e.git("rev-parse", "HEAD") != head {
+		t.Fatalf("the second setup made something:\n%s", out)
+	}
+}
+
 // The key file the environment names is the one setup creates and records, and the one a later command decrypts with.
 func TestSetupKeyFileFromEnvironmentEndToEnd(t *testing.T) {
 	e := newMachine(t, t.TempDir(), "a")

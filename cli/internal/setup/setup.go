@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,6 +29,10 @@ const (
 	// emptyManifest is the manifest of a new store: it declares nothing yet.
 	emptyManifest = "schemaVersion: " + manifest.SchemaVersion + "\nrequired: {}\noptional: {}\n"
 	commitMessage = "setup: create the store"
+	// The commits of a store that was there before setup.
+	adoptMessage    = "setup: adopt the store"
+	registryMessage = "setup: add the registry"
+	policyMessage   = "setup: write the encryption policy"
 )
 
 // ErrNoGh is gh missing from PATH.
@@ -138,9 +143,7 @@ func NewStore(e Env, name, public string) (err error) {
 	if err := os.WriteFile(filepath.Join(ezc, manifestName), []byte(emptyManifest), 0o644); err != nil {
 		return fmt.Errorf("%s: cannot write this file", filepath.Join(ezc, manifestName))
 	}
-	reg := recipients.Registry{Recipients: map[string]recipients.Recipient{
-		name: {Key: public, Kind: "user", Added: e.Now().Format("2006-01-02"), AddedBy: name},
-	}}
+	reg := e.registry(name, public)
 	if err := reg.Save(ezc); err != nil {
 		return err
 	}
@@ -154,6 +157,133 @@ func NewStore(e Env, name, public string) (err error) {
 	}
 	if !done {
 		return fmt.Errorf("git: nothing in %s could be committed (is it ignored?)", ezc)
+	}
+	return nil
+}
+
+// registry is a new store's registry: name, with this key, is its one user.
+func (e Env) registry(name, public string) recipients.Registry {
+	return recipients.Registry{Recipients: map[string]recipients.Recipient{
+		name: {Key: public, Kind: "user", Added: e.Now().Format("2006-01-02"), AddedBy: name},
+	}}
+}
+
+// Adopted is what Adopt found in a store and what it added to it.
+type Adopted struct {
+	Repo     bool // the folder was made a git repo
+	Registry bool // the registry and the policy were written
+	Policy   bool // the policy was written from the registry that was there
+}
+
+// Adopt gives a store that is in place what it lacks and writes over nothing: a folder that is not a git repo
+// becomes one, with its .ezc in one commit; a store with neither a registry nor a policy gets both, name with
+// this key as its one user; a store with a registry and no policy gets the policy written from it. A policy
+// with no registry was written by hand and stays as it is. When it fails it removes what it made.
+func Adopt(e Env, name, public string) (a Adopted, err error) {
+	store, ezc := e.Paths.Store(), e.Paths.StoreEzc()
+	repo, err := e.Git.IsRepo(store)
+	if err != nil {
+		return a, err
+	}
+	reg, hasRegistry, err := recipients.Load(ezc)
+	if err != nil {
+		return a, err
+	}
+	hasPolicy, err := e.Backend.HasPolicy(ezc)
+	if err != nil {
+		return a, err
+	}
+	if repo && hasPolicy {
+		return a, nil
+	}
+	before, err := fileNames(ezc)
+	if err != nil {
+		return a, err
+	}
+	gitDir := filepath.Join(store, ".git")
+	hadGitDir := exists(gitDir)
+	defer func() {
+		if err == nil {
+			return
+		}
+		for _, name := range added(ezc, before) {
+			os.Remove(filepath.Join(ezc, name))
+		}
+		if !repo && !hadGitDir {
+			os.RemoveAll(gitDir)
+		}
+		a = Adopted{}
+	}()
+
+	message := ""
+	switch {
+	case hasPolicy:
+	case hasRegistry:
+		if err := e.Backend.WritePolicy(ezc, reg.Keys()); err != nil {
+			return a, err
+		}
+		a.Policy, message = true, policyMessage
+	default:
+		reg = e.registry(name, public)
+		if err := reg.Save(ezc); err != nil {
+			return a, err
+		}
+		if err := e.Backend.WritePolicy(ezc, reg.Keys()); err != nil {
+			return a, err
+		}
+		a.Registry, message = true, registryMessage
+	}
+
+	// A folder that was no repo is committed whole; a repo gets only the files written here.
+	paths := []string{ezcDir}
+	if repo {
+		paths = nil
+		for _, name := range added(ezc, before) {
+			paths = append(paths, ezcDir+"/"+name)
+		}
+	} else {
+		if err := e.Git.Init(store); err != nil {
+			return a, err
+		}
+		a.Repo, message = true, adoptMessage
+	}
+	done, err := e.Git.Commit(store, message, gitstore.Author{Name: name}, paths...)
+	if err != nil {
+		return a, err
+	}
+	if !done && !repo {
+		return a, fmt.Errorf("git: nothing in %s could be committed (is it ignored?)", ezc)
+	}
+	return a, nil
+}
+
+// fileNames are the names of what dir holds.
+func fileNames(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("%s: cannot read this folder", dir)
+	}
+	names := make([]string, len(entries))
+	for i, entry := range entries {
+		names[i] = entry.Name()
+	}
+	return names, nil
+}
+
+// added are the names dir holds now that are not in before.
+func added(dir string, before []string) []string {
+	now, _ := fileNames(dir)
+	return slices.DeleteFunc(now, func(name string) bool { return slices.Contains(before, name) })
+}
+
+// InTheWay is an error when the store's path holds something that is not a store, where a clone would go.
+func InTheWay(e Env) error {
+	store := e.Paths.Store()
+	if !exists(store) {
+		return nil
+	}
+	if entries, err := os.ReadDir(store); err != nil || len(entries) > 0 {
+		return fmt.Errorf("%s is in the way: it is not empty and not a store. Move it away and run ezc setup again.", store)
 	}
 	return nil
 }
@@ -172,10 +302,8 @@ func Publish(e Env, slug string) (remote string, err error) {
 func CloneStore(e Env, source string) (remote string, err error) {
 	store := e.Paths.Store()
 	existed := exists(store)
-	if existed {
-		if entries, err := os.ReadDir(store); err != nil || len(entries) > 0 {
-			return "", fmt.Errorf("%s is in the way: it is not empty and not a store. Move it away and run ezc setup again.", store)
-		}
+	if err := InTheWay(e); err != nil {
+		return "", err
 	}
 	if IsSlug(source) {
 		err = e.gh("repo", "clone", source, store)

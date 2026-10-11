@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -843,4 +844,263 @@ func TestSetupStoreWithNoRegistry(t *testing.T) {
 	if strings.Contains(f.out.String(), "cannot read") {
 		t.Fatalf("stdout:\n%s", f.out.String())
 	}
+}
+
+const (
+	setupByHandNotice = "\n! This store's encryption policy was written by hand and it has no recipients.yaml, so ezc does not manage who can read it. Keep editing the policy by hand for now.\n"
+	setupHandPolicy   = "# written by hand\nfake1byhand\n"
+)
+
+// setupHandMade puts a store made by hand, a plain folder, where setup looks: a manifest, a values file and files.
+func setupHandMade(t *testing.T, f *fake, files map[string]string) {
+	t.Helper()
+	store(t, f, map[string]string{"manifest.yaml": empty, "common.yaml": "NAME: n\n"})
+	store(t, f, files)
+}
+
+// setupRegistryFor is a recipients.yaml naming gene with key.
+func setupRegistryFor(t *testing.T, key string) string {
+	t.Helper()
+	dir := t.TempDir()
+	reg := recipients.Registry{Recipients: map[string]recipients.Recipient{"gene": {Key: key, Kind: "user", Added: "2026-10-01", AddedBy: "gene"}}}
+	if err := reg.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	return readFile(t, filepath.Join(dir, recipients.File))
+}
+
+// setupAgainChangesNothing runs setup again and fails when a byte under the machine changed or the output is not want.
+func setupAgainChangesNothing(t *testing.T, f *fake, want string) {
+	t.Helper()
+	before := setupSnapshot(t, f.env["EZC_HOME"], setupKeyFile(f))
+	f.out.Reset()
+	if err := f.run("setup", "--name", "gene", "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	if after := setupSnapshot(t, f.env["EZC_HOME"], setupKeyFile(f)); !reflect.DeepEqual(after, before) {
+		t.Fatal("the second run changed a file")
+	}
+	if f.out.String() != want {
+		t.Fatalf("the second run printed:\n%s\nwant:\n%s", f.out.String(), want)
+	}
+}
+
+// setupSecondRun is what a second setup prints when all is in place.
+func setupSecondRun(f *fake) string {
+	return "✓ git\n✓ fake\n✓ your key: ~/.config/sops/age/keys.txt\n✓ the store: " + setupStore(f) + "\n✓ the config: " + setupConfig(f) + "\n"
+}
+
+// setupCommitHolds fails unless the store's last commit has this message and exactly these files of .ezc.
+func setupCommitHolds(t *testing.T, f *fake, message string, files ...string) {
+	t.Helper()
+	if got := setupGitOut(t, f, "log", "-1", "--format=%s"); got != message {
+		t.Fatalf("last commit %q, want %q", got, message)
+	}
+	var want []string
+	for _, file := range files {
+		want = append(want, ".ezc/"+file)
+	}
+	slices.Sort(want)
+	if got := setupGitOut(t, f, "show", "--name-only", "--format=", "HEAD"); got != strings.Join(want, "\n") {
+		t.Fatalf("the commit holds %q, want %q", got, want)
+	}
+}
+
+func TestSetupAdoptsAHandMadeStore(t *testing.T) {
+	t.Run("neither a registry nor a policy", func(t *testing.T) {
+		f := setupFake(t)
+		setupHandMade(t, f, nil)
+		if err := f.run("setup", "--name", "gene", "--yes"); err != nil {
+			t.Fatal(err)
+		}
+		want := "✓ git\n✓ fake\n+ created your key: ~/.config/sops/age/keys.txt\n" + setupBackupNotice +
+			"+ made the store a git repo: " + setupStore(f) + "\n+ wrote the registry and the encryption policy\n" +
+			"+ wrote " + setupConfig(f) + "\n" + setupNextLine
+		if f.out.String() != want {
+			t.Fatalf("stdout:\n%s\nwant:\n%s", f.out.String(), want)
+		}
+		setupCommitHolds(t, f, "setup: adopt the store", "manifest.yaml", "common.yaml", recipients.File, backend.FakePolicy)
+		if setupGitOut(t, f, "rev-list", "--count", "HEAD") != "1" || setupGitOut(t, f, "status", "--porcelain") != "" {
+			t.Fatal("not one commit and a clean tree")
+		}
+		reg, found, err := recipients.Load(filepath.Join(setupStore(f), ".ezc"))
+		if err != nil || !found || reg.NameOf(setupPublicKey(t, f)) != "gene" || len(reg.Recipients) != 1 {
+			t.Fatalf("registry %+v, %v, %v", reg, found, err)
+		}
+		if got := readFile(t, filepath.Join(setupStore(f), ".ezc", backend.FakePolicy)); got != setupPublicKey(t, f)+"\n" {
+			t.Fatalf("policy %q", got)
+		}
+		if readFile(t, filepath.Join(setupStore(f), ".ezc", "manifest.yaml")) != empty || readFile(t, filepath.Join(setupStore(f), ".ezc", "common.yaml")) != "NAME: n\n" {
+			t.Fatal("a file that was there was rewritten")
+		}
+		setupAgainChangesNothing(t, f, setupSecondRun(f))
+		// The store is one that ezc writes to and commits.
+		f.out.Reset()
+		if err := f.run("set", "-g", "NEW", "v", "--type", "str", "--desc", "d"); err != nil {
+			t.Fatal(err)
+		}
+		setupCommitHolds(t, f, "set NEW (manifest.yaml, common.yaml)", "manifest.yaml", "common.yaml")
+	})
+
+	t.Run("a policy written by hand", func(t *testing.T) {
+		f := setupFake(t)
+		setupHandMade(t, f, map[string]string{backend.FakePolicy: setupHandPolicy})
+		if err := f.run("setup", "--name", "gene", "--yes"); err != nil {
+			t.Fatal(err)
+		}
+		want := "✓ git\n✓ fake\n+ created your key: ~/.config/sops/age/keys.txt\n" + setupBackupNotice +
+			"+ made the store a git repo: " + setupStore(f) + "\n" +
+			"+ wrote " + setupConfig(f) + "\n" + setupByHandNotice
+		if f.out.String() != want {
+			t.Fatalf("stdout:\n%s\nwant:\n%s", f.out.String(), want)
+		}
+		setupCommitHolds(t, f, "setup: adopt the store", "manifest.yaml", "common.yaml", backend.FakePolicy)
+		if got := readFile(t, filepath.Join(setupStore(f), ".ezc", backend.FakePolicy)); got != setupHandPolicy {
+			t.Fatalf("the policy written by hand is now %q", got)
+		}
+		missing(t, filepath.Join(setupStore(f), ".ezc", recipients.File))
+		setupAgainChangesNothing(t, f, setupSecondRun(f)+setupByHandNotice)
+	})
+
+	t.Run("a registry and no policy", func(t *testing.T) {
+		f := setupFake(t)
+		_, public := setupOwnKey(t, f)
+		registry := setupRegistryFor(t, public)
+		setupHandMade(t, f, map[string]string{recipients.File: registry})
+		if err := f.run("setup", "--name", "gene", "--yes"); err != nil {
+			t.Fatal(err)
+		}
+		want := "✓ git\n✓ fake\n✓ your key: ~/.config/sops/age/keys.txt\n" +
+			"+ made the store a git repo: " + setupStore(f) + "\n+ wrote the encryption policy\n" +
+			"+ wrote " + setupConfig(f) + "\n" + setupNextLine
+		if f.out.String() != want {
+			t.Fatalf("stdout:\n%s\nwant:\n%s", f.out.String(), want)
+		}
+		setupCommitHolds(t, f, "setup: adopt the store", "manifest.yaml", "common.yaml", recipients.File, backend.FakePolicy)
+		if got := readFile(t, filepath.Join(setupStore(f), ".ezc", backend.FakePolicy)); got != public+"\n" {
+			t.Fatalf("policy %q", got)
+		}
+		if readFile(t, filepath.Join(setupStore(f), ".ezc", recipients.File)) != registry {
+			t.Fatal("the registry was rewritten")
+		}
+		setupAgainChangesNothing(t, f, setupSecondRun(f))
+	})
+
+	// A store that is a git repo already keeps its history; only the files written are committed.
+	t.Run("a git repo with neither", func(t *testing.T) {
+		f := setupFake(t)
+		x := storeWriteFix{localStore(t, f)}
+		x.commit(x.store, "manifest.yaml", empty)
+		write(t, x.file("common.yaml"), "NAME: by hand\n")
+		if err := f.run("setup", "--name", "gene", "--yes"); err != nil {
+			t.Fatal(err)
+		}
+		want := "✓ git\n✓ fake\n+ created your key: ~/.config/sops/age/keys.txt\n" + setupBackupNotice +
+			"✓ the store: " + setupStore(f) + "\n+ wrote the registry and the encryption policy\n" +
+			"+ wrote " + setupConfig(f) + "\n" + setupNextLine
+		if f.out.String() != want {
+			t.Fatalf("stdout:\n%s\nwant:\n%s", f.out.String(), want)
+		}
+		setupCommitHolds(t, f, "setup: add the registry", recipients.File, backend.FakePolicy)
+		if x.commits() != "3" || x.git("status", "--porcelain") != " M .ezc/common.yaml" {
+			t.Fatalf("%s commits, status %q", x.commits(), x.git("status", "--porcelain"))
+		}
+		setupAgainChangesNothing(t, f, setupSecondRun(f))
+	})
+
+	t.Run("a git repo with a registry and no policy", func(t *testing.T) {
+		f := setupFake(t)
+		_, public := setupOwnKey(t, f)
+		x := storeWriteFix{localStore(t, f)}
+		x.commit(x.store, "manifest.yaml", empty)
+		x.commit(x.store, recipients.File, setupRegistryFor(t, public))
+		if err := f.run("setup", "--name", "gene", "--yes"); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(f.out.String(), "✓ the store: "+setupStore(f)+"\n+ wrote the encryption policy\n") {
+			t.Fatalf("stdout:\n%s", f.out.String())
+		}
+		setupCommitHolds(t, f, "setup: write the encryption policy", backend.FakePolicy)
+		x.wantClean()
+		setupAgainChangesNothing(t, f, setupSecondRun(f))
+	})
+}
+
+// gh is given a store that is a git repo with a commit to push, not the plain folder that was there.
+func TestSetupNewGithubOnAHandMadeStore(t *testing.T) {
+	f := setupFake(t)
+	setupHandMade(t, f, nil)
+	bare := setupFakeGh(t, f, "")
+	create := f.execFn
+	f.execFn = func(c proc.Command) ([]byte, []byte, error) {
+		if got := setupGitOut(t, f, "log", "-1", "--format=%s"); got != "setup: adopt the store" {
+			t.Errorf("gh ran before the store was a repo with its commit: %q", got)
+		}
+		return create(c)
+	}
+	if err := f.run("setup", "--new-github", "o/r", "--name", "gene", "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.execs) != 1 || f.execs[0].Name != "gh" {
+		t.Fatalf("ran %+v", f.execs)
+	}
+	made, published := strings.Index(f.out.String(), "+ made the store a git repo: "), strings.Index(f.out.String(), "+ published the store: o/r\n")
+	if made < 0 || published < made {
+		t.Fatalf("stdout:\n%s", f.out.String())
+	}
+	out, _, err := f.runGit(proc.Command{Dir: bare, Name: "git", Args: []string{"log", "-1", "--format=%s", "main"}})
+	if err != nil || strings.TrimSpace(string(out)) != "setup: adopt the store" {
+		t.Fatalf("the remote holds %q, %v", out, err)
+	}
+	if c, _, _ := config.Load(setupConfig(f)); c.Store.Remote != bare {
+		t.Fatalf("config %+v", c)
+	}
+}
+
+// A folder in the way of a clone is found before the key is made.
+func TestSetupCloneInTheWayMakesNoKey(t *testing.T) {
+	f := setupFake(t)
+	bare := setupRemote(t, "fake1someoneelse")
+	write(t, filepath.Join(setupStore(f), "notes.txt"), "mine\n")
+	err := f.run("setup", "--store", bare, "--name", "gene", "--yes")
+	want := setupStore(f) + " is in the way: it is not empty and not a store. Move it away and run ezc setup again."
+	if err == nil || err.Error() != want {
+		t.Fatalf("err %v\nwant %s", err, want)
+	}
+	if strings.Contains(f.out.String(), "your key") {
+		t.Fatalf("stdout:\n%s", f.out.String())
+	}
+	missing(t, setupKeyFile(f))
+	missing(t, setupConfig(f))
+	if readFile(t, filepath.Join(setupStore(f), "notes.txt")) != "mine\n" {
+		t.Fatal("the folder in the way was changed")
+	}
+}
+
+// A cloned store with neither a registry nor a policy gets both on the first run, as one in place does.
+func TestSetupCloneWithNeitherARegistryNorAPolicy(t *testing.T) {
+	g := gitstore.Git{Run: gittest.WithIdentity(t)}
+	bare, work := gittest.Bare(t), filepath.Join(t.TempDir(), "work")
+	if err := g.Init(work); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(work, ".ezc", "manifest.yaml"), empty)
+	if _, err := g.Commit(work, "a store", gitstore.Author{}, ".ezc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.SetRemote(work, bare); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Push(work); err != nil {
+		t.Fatal(err)
+	}
+	f := setupFake(t)
+	if err := f.run("setup", "--store", bare, "--name", "gene", "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.out.String(), "+ cloned the store: "+setupStore(f)+"\n+ wrote the registry and the encryption policy\n") || !strings.HasSuffix(f.out.String(), setupNextLine) {
+		t.Fatalf("stdout:\n%s", f.out.String())
+	}
+	setupCommitHolds(t, f, "setup: add the registry", recipients.File, backend.FakePolicy)
+	setupAgainChangesNothing(t, f, setupSecondRun(f))
 }

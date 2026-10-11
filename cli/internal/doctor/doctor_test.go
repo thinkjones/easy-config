@@ -452,6 +452,13 @@ func TestConfigItem(t *testing.T) {
 	if it := item(t, Collect(o), "machine", "config"); it != want {
 		t.Errorf("missing: %+v, want %+v", it, want)
 	}
+	// Setup refuses to run while EZC_STORE is set.
+	o.StoreSet = true
+	want = Item{Warn, "config", "no config at " + o.ConfigPath + ".", ""}
+	if it := item(t, Collect(o), "machine", "config"); it != want {
+		t.Errorf("missing, with EZC_STORE: %+v, want %+v", it, want)
+	}
+	o.StoreSet = false
 	o.ConfigErr = "/x/config.toml: not valid TOML"
 	want = Item{Broken, "config", o.ConfigErr, ""}
 	if it := item(t, Collect(o), "machine", "config"); it != want {

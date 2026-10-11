@@ -204,6 +204,9 @@ func runSetup(sys System, o setupFlags) error {
 		case source != "":
 			plan = cloneStore
 			source = localSource(sys, source)
+			if err := setup.InTheWay(e); err != nil {
+				return err
+			}
 		default:
 			plan = newStore
 		}
@@ -236,10 +239,18 @@ func runSetup(sys System, o setupFlags) error {
 		fmt.Fprintf(sys.Stdout, "✓ your key: %s\n", tilde(sys, kf))
 	}
 
-	// Store.
+	// Store. One that was not made here gets what it lacks, before it is published.
+	var adopted setup.Adopted
 	switch plan {
 	case keepStore, publishStore:
-		fmt.Fprintf(sys.Stdout, "✓ the store: %s\n", p.Store())
+		if adopted, err = setup.Adopt(e, name, public); err != nil {
+			return err
+		}
+		if adopted.Repo {
+			fmt.Fprintf(sys.Stdout, "+ made the store a git repo: %s\n", p.Store())
+		} else {
+			fmt.Fprintf(sys.Stdout, "✓ the store: %s\n", p.Store())
+		}
 	case newStore, newPublishedStore:
 		if err := setup.NewStore(e, name, public); err != nil {
 			return err
@@ -250,6 +261,15 @@ func runSetup(sys System, o setupFlags) error {
 			return err
 		}
 		fmt.Fprintf(sys.Stdout, "+ cloned the store: %s\n", p.Store())
+		if adopted, err = setup.Adopt(e, name, public); err != nil {
+			return err
+		}
+	}
+	switch {
+	case adopted.Registry:
+		fmt.Fprintln(sys.Stdout, "+ wrote the registry and the encryption policy")
+	case adopted.Policy:
+		fmt.Fprintln(sys.Stdout, "+ wrote the encryption policy")
 	}
 	if plan == publishStore || plan == newPublishedStore {
 		if remote, err = setup.Publish(e, slug); err != nil {
@@ -257,7 +277,7 @@ func runSetup(sys System, o setupFlags) error {
 		}
 		fmt.Fprintf(sys.Stdout, "+ published the store: %s\n", slug)
 	}
-	made = made || plan != keepStore
+	made = made || plan != keepStore || adopted.Repo || adopted.Registry || adopted.Policy
 
 	// Config: what it says already stays; what it lacks is filled in.
 	filled := cfg
@@ -282,14 +302,18 @@ func runSetup(sys System, o setupFlags) error {
 	}
 
 	who, err := setup.Recipient(e, public)
-	// A store with no registry says nothing about who can read it.
-	_, registered, _ := recipients.Load(p.StoreEzc())
-	switch {
-	case err != nil:
+	if err != nil {
 		return err
+	}
+	// A store with no registry says nothing about who can read it; one with no policy cannot take a secret.
+	_, registered, _ := recipients.Load(p.StoreEzc())
+	hasPolicy, _ := be.HasPolicy(p.StoreEzc())
+	switch {
 	case who == "" && registered:
 		fmt.Fprintf(sys.Stdout, "\n! Your key cannot read this store's secrets yet. Give this public key to someone who has access:\n%s\n", public)
-	case made:
+	case hasPolicy && !registered:
+		fmt.Fprint(sys.Stdout, "\n! This store's encryption policy was written by hand and it has no recipients.yaml, so ezc does not manage who can read it. Keep editing the policy by hand for now.\n")
+	case made && hasPolicy:
 		fmt.Fprint(sys.Stdout, "\nNext: ezc set -g NAME --type secret --desc \"what it is\"\n")
 	}
 	return nil
