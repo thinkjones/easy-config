@@ -128,9 +128,21 @@ func (f *Fake) Unset(path, name string) error {
 }
 
 func (f *Fake) Edit(path string) error {
-	pairs, err := f.Decrypt(path)
+	ok, err := f.HasPolicy(filepath.Dir(path))
 	if err != nil {
 		return err
+	}
+	if !ok {
+		return fmt.Errorf("%s: %w", path, ErrNoPolicy)
+	}
+	if f.Locked {
+		return fmt.Errorf("%s: %w", path, ErrNoKey)
+	}
+	var pairs []Pair
+	if _, statErr := os.Stat(path); statErr == nil {
+		if pairs, err = f.Decrypt(path); err != nil {
+			return err
+		}
 	}
 	if f.EditFunc == nil {
 		return nil

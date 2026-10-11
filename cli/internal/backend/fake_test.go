@@ -79,3 +79,37 @@ func TestFakeEdit(t *testing.T) {
 		t.Errorf("an empty edit should delete the file (stat: %v)", err)
 	}
 }
+
+func TestFakeEditCreatesAMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "common.enc.yaml")
+	f := &backend.Fake{}
+	if err := f.Edit(file); !errors.Is(err, backend.ErrNoPolicy) {
+		t.Fatalf("no policy: got %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, backend.FakePolicy), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var seen []backend.Pair
+	f.EditFunc = func(p []backend.Pair) []backend.Pair { seen = p; return nil }
+	if err := f.Edit(file); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 0 {
+		t.Errorf("a missing file should start from no pairs, got %v", seen)
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Errorf("an empty result creates nothing (stat: %v)", err)
+	}
+	f.EditFunc = func([]backend.Pair) []backend.Pair { return []backend.Pair{{Name: "A", Value: "a1"}} }
+	if err := f.Edit(file); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := f.Decrypt(file); err != nil || !reflect.DeepEqual(got, []backend.Pair{{Name: "A", Value: "a1"}}) {
+		t.Errorf("Decrypt = %v, %v", got, err)
+	}
+	f.Locked = true
+	if err := f.Edit(file); !errors.Is(err, backend.ErrNoKey) {
+		t.Errorf("locked: got %v", err)
+	}
+}
