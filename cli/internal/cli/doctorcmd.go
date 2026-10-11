@@ -86,8 +86,11 @@ func machineOptions(sys System, o *doctor.Options) {
 	}
 	_, err := sys.LookPath("git")
 	o.GitFound = err == nil
-	if o.GitFound {
-		o.GitVersion, _ = storeGit(sys).Version()
+	if o.GitFound && (o.Only == "" || o.Only == "machine") {
+		var err error
+		if o.GitVersion, err = storeGit(sys).Version(); err != nil {
+			o.GitVersionUnread = true
+		}
 	}
 }
 
@@ -118,6 +121,15 @@ func storeOptions(sys System, storeEzc string, o *doctor.Options) {
 	if !found {
 		return
 	}
+	// Who the files are encrypted for is read from the files, so this needs no key.
+	o.Recipients = len(reg.Recipients)
+	if enc, err := encryptedFiles(storeEzc); err != nil {
+		o.DifferErr = firstLineOf(err)
+	} else if diffs, err := recipients.Differences(storeEzc, reg, backendFor(sys), enc); err != nil {
+		o.DifferErr = firstLineOf(err)
+	} else {
+		o.Differ = slices.Sorted(maps.Keys(diffs))
+	}
 	file, ok := keyFileInUse(sys)
 	if !ok {
 		return
@@ -127,16 +139,8 @@ func storeOptions(sys System, storeEzc string, o *doctor.Options) {
 		return
 	}
 	o.AccessKnown, o.Recipient = true, reg.NameOf(public)
-	o.Recipients = len(reg.Recipients)
 	if o.Recipient == "" {
 		o.Request, o.RequestName = ownRequest(sys, filepath.Dir(storeEzc), remote != "", public)
-	}
-	if enc, err := encryptedFiles(storeEzc); err != nil {
-		o.DifferErr = firstLineOf(err)
-	} else if diffs, err := recipients.Differences(storeEzc, reg, backendFor(sys), enc); err != nil {
-		o.DifferErr = firstLineOf(err)
-	} else {
-		o.Differ = slices.Sorted(maps.Keys(diffs))
 	}
 }
 

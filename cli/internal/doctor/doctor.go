@@ -120,9 +120,11 @@ type Options struct {
 	User        string
 	GitFound    bool
 	GitVersion  string // "" when it could not be told
-	Sync        string // the store's state as one phrase, "" when the store is not a git repo
-	SyncState   State  // OK, Warn or Broken for that phrase
-	SyncFix     string // what to do about Sync, "" when nothing
+	// GitVersionUnread is set when git was asked its version and the answer could not be read.
+	GitVersionUnread bool
+	Sync             string // the store's state as one phrase, "" when the store is not a git repo
+	SyncState        State  // OK, Warn or Broken for that phrase
+	SyncFix          string // what to do about Sync, "" when nothing
 	// Access: AccessKnown is false when this machine's public key could not be read, which leaves out the access item
 	// unless the registry itself is the problem. Recipient is the registry's name for the key, "" when it is not a recipient.
 	AccessKnown bool
@@ -207,6 +209,9 @@ func gitItem(o Options) Item {
 	if o.GitVersion != "" && gitstore.TooOld(o.GitVersion) {
 		return Item{Broken, "git", fmt.Sprintf("git %s is too old; ezc needs %s or later.", o.GitVersion, gitstore.MinVersion), ""}
 	}
+	if o.GitVersionUnread {
+		return Item{Warn, "git", "installed, but its version could not be read", fmt.Sprintf("ezc needs git %s or later.", gitstore.MinVersion)}
+	}
 	return Item{OK, "git", "installed", ""}
 }
 
@@ -271,7 +276,7 @@ func recipientsItem(o Options) []Item {
 	case !o.HasRegistry || o.RegistryErr != "":
 		return nil
 	case o.DifferErr != "":
-		return []Item{{Broken, "recipients", o.DifferErr, ""}}
+		return []Item{{Broken, "recipients", o.DifferErr, "Run ezc store rewrap, or ezc store audit for the detail."}}
 	case len(o.Differ) == 1:
 		return []Item{{Broken, "recipients", "1 file is not encrypted for the registry: " + displayName(o.Differ[0]), "Run ezc store rewrap."}}
 	case len(o.Differ) > 1:

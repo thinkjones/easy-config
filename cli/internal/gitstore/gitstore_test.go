@@ -679,6 +679,8 @@ func TestParseVersion(t *testing.T) {
 		"git version 2.43.0\n":                 "2.43.0",
 		"git version 2.39.5 (Apple Git-154)\n": "2.39.5",
 		"git version 2.23\n":                   "2.23",
+		"git version 2.43.0.windows.1\n":       "2.43.0",
+		"git version 2.39.3 (Apple Git-146)\n": "2.39.3",
 	} {
 		if got, ok := ParseVersion(out); !ok || got != want {
 			t.Errorf("%q: %q, %v", out, got, ok)

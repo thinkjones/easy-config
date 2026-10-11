@@ -619,7 +619,7 @@ func TestRecipientsItem(t *testing.T) {
 		t.Errorf("name not made safe: %q", it.Detail)
 	}
 	o.Differ, o.DifferErr = nil, "common.enc.yaml: cannot read this file"
-	if it := item(t, Collect(o), "store", "recipients"); it.State != Broken || it.Detail != o.DifferErr {
+	if it := item(t, Collect(o), "store", "recipients"); it.State != Broken || it.Detail != o.DifferErr || it.Fix == "" {
 		t.Errorf("error: %+v", it)
 	}
 }
@@ -640,6 +640,15 @@ func TestRotationItem(t *testing.T) {
 	o.Due, o.DueErr = 0, "cannot read rotation-due.yaml"
 	if it := item(t, Collect(o), "store", "rotation"); it != (Item{Broken, "rotation", o.DueErr, ""}) {
 		t.Errorf("unreadable: %+v", it)
+	}
+}
+
+func TestGitItemVersionUnread(t *testing.T) {
+	o := healthy(t)
+	o.GitVersionUnread = true
+	it := item(t, Collect(o), "machine", "git")
+	if it.State != Warn || it.Detail != "installed, but its version could not be read" || Collect(o).Broken() {
+		t.Errorf("%+v", it)
 	}
 }
 

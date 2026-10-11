@@ -290,8 +290,14 @@ func TestDoctorOnlyMachine(t *testing.T) {
 		}
 	}
 	f.out.Reset()
+	f.gits = nil
 	if err := f.run("doctor", "--only", "store"); err != nil {
 		t.Fatalf("%v\n%s", err, f.out.String())
+	}
+	for _, c := range f.gits {
+		if len(c.Args) > 0 && c.Args[0] == "version" {
+			t.Error("git was asked its version for --only store")
+		}
 	}
 	for _, label := range []string{"sync", "access"} {
 		if doctorCmdLine(f.out.String(), label) == "" {
@@ -313,9 +319,22 @@ func doctorRun(t *testing.T, f *fake) (string, error) {
 	return out, err
 }
 
-// The fixture store declares names no file sets, so its audit is always broken: these tests look at the item they are about.
+// doctorCleanStore makes x's store pass its audit: it declares NAME, which common.yaml sets, and TOKEN, which both encrypted files hold. The change is
+// committed and pushed, so a machine that joins afterwards clones it.
+func doctorCleanStore(t *testing.T, x storeWriteFix) {
+	t.Helper()
+	write(t, x.file("manifest.yaml"), "schemaVersion: v1\nrequired:\n  NAME: {type: str, desc: who}\n  TOKEN: {type: secret, desc: t}\n")
+	if done, err := x.g.Commit(x.store, "manifest", gitstore.Author{}, ezcDir+"/manifest.yaml"); err != nil || !done {
+		t.Fatalf("commit: %v, %v", done, err)
+	}
+	if _, err := x.g.Push(x.store); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDoctorJoinedButNotApproved(t *testing.T) {
 	j := joinMachines(t)
+	doctorCleanStore(t, j.x)
 	j.join(j.b, "--name", "sam")
 
 	out, err := doctorRun(t, j.b)
@@ -324,7 +343,7 @@ func TestDoctorJoinedButNotApproved(t *testing.T) {
 	if !strings.Contains(doctorSquash(out), want) {
 		t.Errorf("no pending line in\n%s", out)
 	}
-	if got := doctorBroken(out); !slices.Equal(got, []string{"access", "audit"}) {
+	if got := doctorBroken(out); !slices.Equal(got, []string{"access"}) {
 		t.Errorf("broken: %v", got)
 	}
 
@@ -334,9 +353,9 @@ func TestDoctorJoinedButNotApproved(t *testing.T) {
 	if _, _, err := joinRun(t, j.b, "store", "pull"); err != nil {
 		t.Fatal(err)
 	}
-	out, _ = doctorRun(t, j.b)
-	if got := doctorBroken(out); !slices.Equal(got, []string{"audit"}) {
-		t.Errorf("broken after approve: %v\n%s", got, out)
+	out, err = doctorRun(t, j.b)
+	if err != nil {
+		t.Fatalf("after approve and pull: %v\n%s", err, out)
 	}
 	squashed := doctorSquash(out)
 	for _, want := range []string{"✓ access your key is the recipient sam", "✓ recipients every file is encrypted for the 2 recipients"} {
@@ -361,13 +380,16 @@ func TestDoctorNotAskedForAccess(t *testing.T) {
 func TestDoctorFilesThatDifferFromTheRegistry(t *testing.T) {
 	f := newFake(t)
 	reg := map[string]recipients.Recipient{"gene": accessEntry(accessGene), "sam": accessEntry(accessSam)}
-	accessStoreWith(t, f, reg, accessGene, accessStray)
+	doctorCleanStore(t, accessStoreWith(t, f, reg, accessGene, accessStray))
 
 	out, err := doctorRun(t, f)
 	wantExit(t, err, 1)
 	want := "✗ recipients 2 files are not encrypted for the registry: common.enc.yaml, env.prod.enc.yaml\nRun ezc store rewrap.\n"
 	if !strings.Contains(doctorSquash(out), want) {
 		t.Errorf("no differing files in\n%s", out)
+	}
+	if got := doctorBroken(out); !slices.Equal(got, []string{"recipients"}) {
+		t.Errorf("broken: %v", got)
 	}
 	if strings.Contains(out, accessStray) {
 		t.Errorf("doctor printed a key:\n%s", out)
@@ -376,9 +398,9 @@ func TestDoctorFilesThatDifferFromTheRegistry(t *testing.T) {
 	if _, _, err := accessRun(f, "store", "rewrap"); err != nil {
 		t.Fatal(err)
 	}
-	out, _ = doctorRun(t, f)
-	if got := doctorBroken(out); !slices.Equal(got, []string{"audit"}) {
-		t.Errorf("broken after rewrap: %v\n%s", got, out)
+	out, err = doctorRun(t, f)
+	if err != nil {
+		t.Fatalf("after rewrap: %v\n%s", err, out)
 	}
 	if !strings.Contains(doctorSquash(out), "✓ recipients every file is encrypted for the 2 recipients") {
 		t.Errorf("recipients not clear:\n%s", out)
@@ -388,25 +410,55 @@ func TestDoctorFilesThatDifferFromTheRegistry(t *testing.T) {
 func TestDoctorRotationDue(t *testing.T) {
 	f := newFake(t)
 	x := accessStore(t, f)
-	write(t, filepath.Join(x.store, ".ezc", "rotation-due.yaml"), "common.enc.yaml/TOKEN:\n  removed: sam\n  on: \"2026-10-11\"\n")
-	out, _ := doctorRun(t, f)
+	doctorCleanStore(t, x)
+	write(t, x.file("rotation-due.yaml"), "common.enc.yaml/TOKEN:\n  removed: sam\n  on: \"2026-10-11\"\n")
+	out, err := doctorRun(t, f)
+	if err != nil {
+		t.Fatalf("a due list must only warn: %v\n%s", err, out)
+	}
 	want := "! rotation 1 secret was readable by a removed key\nezc store status --due lists them; give each a new value with ezc set -g NAME.\n"
 	if !strings.Contains(doctorSquash(out), want) {
 		t.Errorf("no rotation warning in\n%s", out)
-	}
-	if got := doctorBroken(out); !slices.Equal(got, []string{"audit"}) {
-		t.Errorf("a due list must only warn: %v", got)
 	}
 	if strings.Contains(out, "TOKEN") {
 		t.Errorf("doctor named a secret:\n%s", out)
 	}
 
-	write(t, filepath.Join(x.store, ".ezc", "rotation-due.yaml"), "[\n")
-	out, _ = doctorRun(t, f)
-	if got := doctorBroken(out); !slices.Equal(got, []string{"rotation", "audit"}) {
+	write(t, x.file("rotation-due.yaml"), "[\n")
+	out, err = doctorRun(t, f)
+	wantExit(t, err, 1)
+	if got := doctorBroken(out); !slices.Equal(got, []string{"rotation"}) {
 		t.Errorf("unreadable: %v", got)
 	}
 	if !strings.Contains(doctorSquash(out), "✗ rotation cannot read rotation-due.yaml") {
 		t.Errorf("no rotation error in\n%s", out)
+	}
+}
+
+// The files are compared with the registry whether or not this machine's key can be read.
+func TestDoctorFilesWithoutAKey(t *testing.T) {
+	f := newFake(t)
+	reg := map[string]recipients.Recipient{"gene": accessEntry(accessGene), "sam": accessEntry(accessSam)}
+	doctorCleanStore(t, accessStoreWith(t, f, reg, accessGene))
+	if err := os.Remove(setupKeyFile(f)); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := doctorRun(t, f)
+	squashed := doctorSquash(out)
+	if !strings.Contains(squashed, "✗ recipients 2 files are not encrypted for the registry: common.enc.yaml, env.prod.enc.yaml") {
+		t.Errorf("the registry was not compared with the files:\n%s", out)
+	}
+	if strings.Contains(squashed, "access") {
+		t.Errorf("access shown without a key:\n%s", out)
+	}
+
+	f2 := newFake(t)
+	doctorCleanStore(t, accessStoreWith(t, f2, reg, accessGene, accessSam))
+	if err := os.Remove(setupKeyFile(f2)); err != nil {
+		t.Fatal(err)
+	}
+	out, err := doctorRun(t, f2)
+	if err != nil || !strings.Contains(doctorSquash(out), "✓ recipients every file is encrypted for the 2 recipients") {
+		t.Errorf("%v\n%s", err, out)
 	}
 }

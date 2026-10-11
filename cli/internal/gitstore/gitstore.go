@@ -206,13 +206,14 @@ func (g Git) Version() (string, error) {
 	return v, nil
 }
 
-// ParseVersion is the version number in the output of `git version`.
+// ParseVersion is the version number in the output of `git version`: the numeric part of 2.43.0.windows.1 is 2.43.0.
 func ParseVersion(out string) (string, bool) {
 	fields := strings.Fields(out)
-	if len(fields) < 3 || fields[0] != "git" || fields[1] != "version" || !versionPattern.MatchString(fields[2]) {
+	if len(fields) < 3 || fields[0] != "git" || fields[1] != "version" {
 		return "", false
 	}
-	return fields[2], true
+	v := versionPattern.FindString(fields[2])
+	return v, v != ""
 }
 
 var versionPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*`)
