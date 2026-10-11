@@ -492,7 +492,7 @@ func TestSetArgumentsAreNeverEchoed(t *testing.T) {
 		}
 	}
 	wantUsage(t, f.run("set", "TOKEN=x"), "NAME and VALUE are separate")
-	wantUsage(t, f.run("set", "NAME", "-x"), "must be piped on stdin")
+	wantUsage(t, f.run("set", "NAME", "-x"), "invalid or unrecognised flag. A value that starts with - must be piped on stdin.")
 }
 
 func TestSetIsRefusedBeforeAskingForASecretWithoutPolicy(t *testing.T) {
@@ -704,5 +704,5 @@ func TestSetAndUnsetRejectArguments(t *testing.T) {
 	wantUsage(t, f.run("set", "A", "b", "c"), "give")
 	wantUsage(t, f.run("unset"), "give")
 	wantUsage(t, f.run("unset", "A", "b"), "give")
-	wantUsage(t, f.run("unset", "A", "--type", "str"), "unrecognised flag")
+	wantUsage(t, f.run("unset", "A", "--type", "str"), "invalid or unrecognised flag.")
 }

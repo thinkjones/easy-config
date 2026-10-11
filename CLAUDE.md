@@ -9,6 +9,7 @@ Guidance for Claude Code in this repository. [`AGENTS.md`](AGENTS.md) is the rou
 | Put `ezc` on PATH (once) | `direnv allow` |
 | Build `ezc` into `cli/bin/` | `mise run cli:build` |
 | Test changes to `cli/` (the gate: gofmt, vet, tests) | `mise run cli:test` |
+| Same gate with the real-sops tests required, not skipped | `mise run cli:test:sops` |
 | Regenerate the committed manifest JSON Schema | `mise run schema:build` |
 | Fail when the committed schema is stale | `mise run schema:check` |
 
@@ -25,4 +26,13 @@ Guidance for Claude Code in this repository. [`AGENTS.md`](AGENTS.md) is the rou
 - **`codegen python` refuses a variable named after a Python keyword**; the manifest itself allows it.
 - **`doctor` and `storeaudit` print names, counts and paths only, never a value**, and `doctor` never names the encryption tool: the policy file names, the key's location and the backend's messages come in through `Options` from `scope.go` and the backend.
 - **`doctor` enforces `share.ShimVersion` against the repo's `.ezc/env.sh`.** Change the shim, its first line and `ShimVersion` together, or `ezc doctor` reports a stale shim as healthy or a good one as broken. A shim newer than the binary is a warning there, never a fix to apply.
+- **sops runs with its working directory set to the file's folder**, so it finds that folder's `.sops.yaml`; paths given to it are the file's base name.
+- **A secret reaches sops on stdin only**, never in arguments, the environment or a temporary plaintext file. The backend never passes sops's output through: a failure is the no-key message or a fixed "could not read/write this file" message, and "no key" is said only for sops's own no-identity failures.
+- **`ezc set` declares first**: for a new name it writes the declaration, then the value, and puts the manifest's bytes back if the value write fails. No `set` or `unset` error echoes an argument.
+- **`ezc unset` removes only the value**, from the plaintext and encrypted file of the base; `--undeclare` also removes the declaration and is refused while another values file in the scope holds the name.
+- **`Backend.Edit(path, editor)`** passes the editor `ezc edit` validated to sops as `SOPS_EDITOR`. `edit --secrets` needs the file to exist, opens one that fails validation, and checks the result afterwards.
+- **A shim newer than the binary** is a doctor warning ("Upgrade ezc."), and `ezc repo init` keeps it.
+- **`enc` is a reserved environment name**; names match `^[A-Za-z0-9][A-Za-z0-9_-]*$`. `codegen python` also refuses a name starting with `_`.
+- **The fake backend's file format is not sops's.** Only the real-sops tests (`cli:test:sops`, and the end-to-end tests in `cli/cmd/ezc/sops_test.go`) prove the real format. They skip without `sops` unless `EZC_REQUIRE_SOPS=1`.
+- **The encryption policy is still written by hand**: `.ezc/.sops.yaml`.
 - **`docs/superpowers/` is history.** Specs and plans describe what was intended at the time; don't edit them to match the code.

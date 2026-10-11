@@ -321,7 +321,7 @@ func badName(name string) string {
 // noEcho makes a flag error say nothing of the arguments, which may hold a value.
 func noEcho(cmd *cobra.Command, extra string) {
 	cmd.SetFlagErrorFunc(func(c *cobra.Command, _ error) error {
-		return usagef("%s: unrecognised flag.%s Try `%s`.", c.CommandPath(), extra, helpFor(c))
+		return usagef("%s: invalid or unrecognised flag.%s Try `%s`.", c.CommandPath(), extra, helpFor(c))
 	})
 }
 

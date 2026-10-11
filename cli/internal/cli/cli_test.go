@@ -66,7 +66,7 @@ func (f *fake) sys() System {
 			f.children = append(f.children, append(call, env...))
 			return f.childExit, nil
 		},
-		Version: "0.1.0",
+		Version: "0.2.0",
 		Exec: func(c proc.Command) ([]byte, []byte, error) {
 			f.execs = append(f.execs, c)
 			if f.execFn == nil {
@@ -127,7 +127,7 @@ func TestVersion(t *testing.T) {
 	if err := f.run("version"); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.out.String(); got != "ezc 0.1.0\n" {
+	if got := f.out.String(); got != "ezc 0.2.0\n" {
 		t.Fatalf("got %q", got)
 	}
 }
