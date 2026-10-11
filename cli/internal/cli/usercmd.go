@@ -183,17 +183,7 @@ Refused for a bot (` + "`ezc bot remove`" + `), for the last recipient, for a us
 				return err
 			}
 			// A commit that was not pushed is made all the same.
-			if len(list) > 0 {
-				was, need := "were", "need new values"
-				if len(list) == 1 {
-					was, need = "was", "needs a new value"
-				}
-				fmt.Fprintf(sys.Stdout, "%s %s readable by %s and %s:\n", count(len(list), "secret"), was, name, need)
-				for _, entry := range list {
-					fmt.Fprintf(sys.Stdout, "  %s\n", entry)
-				}
-				fmt.Fprintln(sys.Stdout, "Give each a new value with ezc set -g NAME.")
-			}
+			sayDue(sys.Stdout, name, list)
 			return err
 		},
 	}
@@ -242,6 +232,22 @@ func dueFor(a *access, removed string) (func(recipients.Due), []string, error) {
 			d.Add(h.file, h.name, removed, today)
 		}
 	}, list, nil
+}
+
+// sayDue prints the secrets a key that is gone could read, dueFor's list, which need new values. who had the key.
+func sayDue(w io.Writer, who string, list []string) {
+	if len(list) == 0 {
+		return
+	}
+	was, need := "were", "need new values"
+	if len(list) == 1 {
+		was, need = "was", "needs a new value"
+	}
+	fmt.Fprintf(w, "%s %s readable by %s and %s:\n", count(len(list), "secret"), was, who, need)
+	for _, entry := range list {
+		fmt.Fprintf(w, "  %s\n", entry)
+	}
+	fmt.Fprintln(w, "Give each a new value with ezc set -g NAME.")
 }
 
 // userNameRule is the usage error for a name that could not be a recipient's. The argument is not repeated.

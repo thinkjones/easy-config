@@ -37,7 +37,7 @@ Each step is described below: [Set up](#set-up), [Writing to the store](#writing
 
 ## Not there yet
 
-This is `ezc` 0.3. A second person, or a second machine with a key of its own, asks for access with `ezc join`, is let in with `ezc user approve` (or with `ezc user add` once you have their public key), and removed with `ezc user remove` (see [Access](#access)). Bots and setup for CI are not there yet. A second machine can also share the first one's key file: copy `~/.config/sops/age/keys.txt` from the first machine to the same path on the second, then run `ezc setup --store owner/repo` there. Setup uses a key file that is already there and never replaces it.
+This is `ezc` 0.3. A second person, or a second machine with a key of its own, asks for access with `ezc join`, is let in with `ezc user approve` (or with `ezc user add` once you have their public key), and removed with `ezc user remove` (see [Access](#access)). A bot gets a key of its own with `ezc bot add` (see [Bots and CI](#bots-and-ci)); the setup that reads the store in a CI job with it is not there yet. A second machine can also share the first one's key file: copy `~/.config/sops/age/keys.txt` from the first machine to the same path on the second, then run `ezc setup --store owner/repo` there. Setup uses a key file that is already there and never replaces it.
 
 Two things are done by hand for now: a repo that keeps secrets of its own needs the store's encryption policy copied into its `.ezc/` (see [Encryption](#encryption)), and two machines that declare a new name at the same time must resolve the conflict with git (see [Syncing the store](#syncing-the-store)). The registry and the TUI come later.
 
@@ -88,6 +88,9 @@ A store made by hand, a folder with a `.ezc/` that is already at the store's pat
 | `ezc user deny <name>` | Fetch, then remove a request file that is in the store itself in a commit named `deny <name>`, and delete the request's branch from the remote. Nobody's access changes. |
 | `ezc user remove <name>` | Remove a person or one machine from `recipients.yaml` and re-wrap every encrypted file without their key, in one commit named `remove <name>`, then push; then list the secrets they could read, which need new values. See [Access](#access). |
 | `ezc user add <name> <key> [--kind user\|machine] [--owner USER]` | Add a public key to `recipients.yaml`, write the policy from it and re-wrap every encrypted file of the store, in one commit, then push. `--kind machine --owner USER` adds a second key of a user who is already a recipient. See [Access](#access). |
+| `ezc bot add <name> --repo owner/repo… [--print-private]` | Create a key for a bot, add its public half to `recipients.yaml` and re-wrap every encrypted file, in one commit named `add bot <name>`, then push. Before the commit the private half is saved as the `EZC_AGE_KEY` Actions secret of each `--repo`, through `gh`; `--print-private` prints it on stdout instead, or as well. See [Bots and CI](#bots-and-ci). |
+| `ezc bot remove <name>` | Remove a bot from `recipients.yaml` and re-wrap every encrypted file without its key, in one commit named `remove bot <name>`, then push; delete `EZC_AGE_KEY` from its repos; then list the secrets it could read, which need new values. |
+| `ezc bot rotate <name> [--print-private] [--compromised]` | Replace a bot's key in one commit named `rotate bot <name>` and deliver the new one to its repos, as `ezc bot add` does. `--compromised` also records every secret the old key could read as due for a new value. |
 | `ezc store audit` | Check the store's values files against its manifest: every value declared, every `required` name set in at least one file, secrets in encrypted files and nothing else there, no value still a placeholder or the wrong shape, and no value in an encrypted file left unencrypted. Prints names, files and the fix for each, never a value; exits 1 when there is anything to fix. |
 | `ezc doctor [ENV] [--only machine\|store\|repo]` | Report the health of the machine (ezc, the encryption tool, the key), the store (location, manifest, audit, policy, unrecognised files) and the repo (manifest, `env.sh` shim version, environments, whether the environment resolves and passes the manifest). Each line is a check (`✓`), a warning (`!`) or a problem (`✗`), with what to do about it. Prints names, counts and paths, never a value; exits 1 when anything is broken, and warnings alone exit 0. Works without a key and outside a repo. |
 | `ezc repo init` | Create `.ezc/` in the working directory with `manifest.yaml`, `env.local.yaml` and the `env.sh` shim. Existing files are kept; an `env.sh` from an older shim is updated, and one written by a newer `ezc` is kept as it is. Prints how to load the environment. |
@@ -182,6 +185,7 @@ ezc user requests                                         # who is asking to rea
 ezc user approve sam                                      # let in whoever filed the request named sam
 ezc user deny sam                                         # refuse that request
 ezc user remove sam                                       # sam can no longer read it
+ezc bot add ci --repo owner/app                           # a key for CI, saved in owner/app's Actions secrets
 ezc store status --due                                    # the secrets that need new values
 ezc store rewrap                                          # make the files match recipients.yaml again
 ```
@@ -296,6 +300,50 @@ Every change to access follows the same rules:
 
 Re-wrapping changes who can open the files from now on. It does not change the values, and it reads and prints none.
 
+### Bots and CI
+
+```sh
+ezc bot add ci --repo owner/app --repo owner/api   # a key for the bot, saved in both repos
+ezc bot rotate ci                                  # replace it
+ezc bot rotate ci --compromised                    # replace it after a leak
+ezc bot remove ci                                  # the bot can no longer read the store
+ezc bot add deploy --print-private | your-ci secret set EZC_AGE_KEY   # for a CI system that is not GitHub Actions
+```
+
+A bot is a recipient with a key of its own, so that a CI job reads the store without anybody's personal key, and so that it can be removed alone. A job needs two secrets:
+
+| Secret | What it is | Who makes it |
+| --- | --- | --- |
+| `EZC_AGE_KEY` | The bot's private key, which decrypts the store's secrets. | `ezc bot add` |
+| `EZC_STORE_TOKEN` | A credential that can read the store's repo, to clone it. | You: `ezc` cannot create it. |
+
+`ezc bot add <name> --repo owner/repo` creates the key in memory, adds its public half to `recipients.yaml` with kind `bot` and the repos it was given, writes the policy and re-wraps every encrypted file. Then, before anything is committed, it checks that the new private key opens every encrypted file and saves it as the `EZC_AGE_KEY` Actions secret of each repo with `gh secret set`, which reads it on stdin. Only then does it commit, as `add bot <name>`, and push:
+
+```
+✓ add bot ci
+✓ pushed to https://github.com/owner/store
+✓ EZC_AGE_KEY set in owner/app
+✓ EZC_AGE_KEY set in owner/api
+The bot also needs to read the store repo. Create a read-only deploy key or a fine-grained token for it and save it as the EZC_STORE_TOKEN secret in each repo. ezc cannot create that credential.
+```
+
+The private key is never written to disk, never passed as an argument or in the environment, and never printed unless you ask. It needs `gh`, signed in as someone who can set the secrets of each repo; without `gh` the command stops before it writes anything. When a repo cannot be given the key, the store is put back as it was and nothing is committed: `EZC_AGE_KEY could not be set in owner/api (<why>). Nothing was changed.` When an earlier repo had already been given it, that repo now holds a key that was never registered and opens nothing, and the message says so: `It was set in owner/app to a key the store does not name, which reads nothing until this is run again. The store was not changed.` Run the command again; it makes a new key and sets it in every repo. `--repo` is not yet checked against anything but its shape, `owner/repo`. A repo has one `EZC_AGE_KEY`, so give a repo to one bot only: a second bot added with the same repo replaces the first one's key there.
+
+`--print-private` prints the private key on stdout, followed by a newline, with nothing else there: every other line of the command goes to stderr, so the output can be piped straight into another CI system's secret store. Do not run it with stdout on a terminal you share or record. It can be given with `--repo` or alone; one of the two is needed.
+
+The store credential is the part you do by hand, once for each repo whose jobs read the store:
+
+1. On GitHub open Settings, Developer settings, Personal access tokens, Fine-grained tokens, and generate a token.
+2. Under Repository access choose "Only select repositories" and pick the store's repo alone.
+3. Under Repository permissions set Contents to "Read-only" and leave everything else as it is.
+4. Save it as the secret: run `gh secret set EZC_STORE_TOKEN --repo owner/app` and paste the token at the prompt, which does not show it. Do not put it on the command line.
+
+A read-only deploy key on the store's repo (Settings, Deploy keys, without write access) serves a job that sets up SSH itself. Using the two secrets in a job, to clone the store and load a repo's environment there, is the CI setup that is not there yet.
+
+`ezc bot rotate <name>` creates a new key and puts it in the bot's entry in place of the old one, in one commit named `rotate bot <name>`; from that commit on the old key opens no file. The new key is delivered as `ezc bot add` delivers one, to the repos the entry names, before the commit and with the same failure. A bot that was added with `--print-private` alone has no repos, and needs `--print-private` here too. A routine rotation records nothing: the old key never left its repos' secrets. When it may have leaked, pass `--compromised`: every secret the old key could read is written to `rotation-due.yaml` as readable by `<name> (old key)` and listed, exactly as a removal does, because the old key still opens every older commit of the store.
+
+`ezc bot remove <name>` takes the bot's entry out, re-wraps every encrypted file without its key, commits as `remove bot <name>` and pushes, then deletes `EZC_AGE_KEY` from each repo the entry names and lists the secrets that need new values, as [`ezc user remove`](#removing-someone) does. A repo the secret could not be deleted from is named on a `!` line, as are all of them when `gh` is not installed; the bot is removed all the same, and its key opens nothing committed from then on. `EZC_STORE_TOKEN` is yours, and is left where it is: delete it when no job of that repo reads the store any more. `ezc bot remove` and `ezc bot rotate` refuse an entry that is not a bot.
+
 ### A store made by hand
 
 A store whose encryption policy you wrote yourself has no `recipients.yaml`, so `ezc` does not know who can read it, and `ezc user list`, `ezc user add`, `ezc user remove` and `ezc store rewrap` say so. To hand it over, write `.ezc/recipients.yaml` with one entry for each key your policy lists, this machine's among them:
@@ -333,7 +381,7 @@ A repo's `.ezc/` folder and the global store use the same layout. Every values f
 | `common.enc.yaml` | Encrypted values for all environments. |
 | `env.<name>.enc.yaml` | Encrypted values for one environment. |
 | `.sops.yaml` | The encryption policy: which files are encrypted, and for which keys. Needed before a secret can be stored in the folder. `ezc setup` writes the store's; see [Encryption](#encryption). |
-| `recipients.yaml` | In the store only: who can decrypt it, by name and public key. `ezc setup` writes the first entry and `ezc user add` the next ones; see [Access](#access). |
+| `recipients.yaml` | In the store only: who can decrypt it, by name and public key. `ezc setup` writes the first entry, and `ezc user add`, `ezc user approve` and `ezc bot add` the next ones; see [Access](#access). |
 | `env.sh` | The shim mise or direnv sources. Written by `ezc repo init`; do not edit. |
 
 On a machine, ezc's home holds the store (`store/`, a git repo whose values are in its `.ezc/`), `config.toml` (your name in the store, the key file, and the store's remote) and `state.json` (when the store's remote was last reached). `ezc setup` writes the first two.

@@ -131,6 +131,7 @@ Config
 		newEditCmd(sys),
 		newStoreCmd(sys),
 		newUserCmd(sys),
+		newBotCmd(sys),
 		newDoctorCmd(sys),
 		newSetupCmd(sys),
 		newJoinCmd(sys),
