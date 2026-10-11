@@ -384,7 +384,7 @@ func TestCreateWithoutPolicyRunsNothing(t *testing.T) {
 func TestEditWithoutPolicyOnNewFile(t *testing.T) {
 	r := &recorder{}
 	b, dir := recorded(t, r, nil)
-	err := b.Edit(filepath.Join(dir, "common.enc.yaml"))
+	err := b.Edit(filepath.Join(dir, "common.enc.yaml"), "nano")
 	if !errors.Is(err, backend.ErrNoPolicy) || len(r.cmds) != 0 {
 		t.Fatalf("error = %v, %d commands", err, len(r.cmds))
 	}
@@ -395,12 +395,57 @@ func TestEditIsInteractive(t *testing.T) {
 	b, dir := recorded(t, r, nil)
 	file := filepath.Join(dir, "common.enc.yaml")
 	os.WriteFile(file, []byte("x"), 0o644)
-	if err := b.Edit(file); err != nil {
+	if err := b.Edit(file, "code --wait"); err != nil {
 		t.Fatal(err)
 	}
 	c := r.cmds[0]
 	if !c.Interactive || !reflect.DeepEqual(c.Args, []string{"edit", "common.enc.yaml"}) {
 		t.Errorf("command = %+v", c)
+	}
+}
+
+func TestEditSetsExactlyOneEditor(t *testing.T) {
+	r := &recorder{}
+	b, dir := recorded(t, r, []string{"HOME=/h", "SOPS_EDITOR=code", "EDITOR=vim"})
+	file := filepath.Join(dir, "common.enc.yaml")
+	os.WriteFile(file, []byte("x"), 0o644)
+	if err := b.Edit(file, "nano -u NONE"); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, kv := range r.cmds[0].Env {
+		if strings.HasPrefix(kv, "SOPS_EDITOR=") {
+			n++
+			if kv != "SOPS_EDITOR=nano -u NONE" {
+				t.Errorf("got %q", kv)
+			}
+		}
+	}
+	if n != 1 || !slicesContains(r.cmds[0].Env, "HOME=/h") {
+		t.Errorf("Env = %v", r.cmds[0].Env)
+	}
+}
+
+// TestEditRunsTheGivenEditor runs a real sops whose environment names a different, failing editor.
+func TestEditRunsTheGivenEditor(t *testing.T) {
+	r := newReal(t)
+	r.opts.Environ = append(r.opts.Environ, "EDITOR=false", "VISUAL=false", "SOPS_EDITOR=false")
+	b := New(r.opts)
+	file := filepath.Join(r.dir, "common.enc.yaml")
+	if err := b.Set(file, "A", "a1"); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "append.sh")
+	body := "#!/bin/sh\n[ \"$1\" = --flag ] || exit 1\nprintf 'B: b1\\n' >> \"$2\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Edit(file, script+" --flag"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.Decrypt(file)
+	if err != nil || !reflect.DeepEqual(got, []backend.Pair{{Name: "A", Value: "a1"}, {Name: "B", Value: "b1"}}) {
+		t.Fatalf("Decrypt = %v, %v", got, err)
 	}
 }
 

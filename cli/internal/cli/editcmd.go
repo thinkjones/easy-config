@@ -20,9 +20,6 @@ import (
 // asyncEditors return before the user has finished editing unless told to wait.
 var asyncEditors = []string{"code", "code-insiders", "cursor", "windsurf", "subl", "zed", "atom", "mate"}
 
-// waitFlags make an async editor wait.
-var waitFlags = []string{"--wait", "-w", "-W"}
-
 // editorCommand is the user's editor split into words: $VISUAL, else $EDITOR. Quoting is not understood.
 func editorCommand(sys System) ([]string, error) {
 	for _, v := range []string{"VISUAL", "EDITOR"} {
@@ -33,10 +30,18 @@ func editorCommand(sys System) ([]string, error) {
 	return nil, errors.New("set EDITOR to an editor that waits, for example: export EDITOR=nano")
 }
 
+// waitFlag reports whether w makes an async editor wait: --wait, --wait=..., or a short flag cluster holding w or W.
+func waitFlag(w string) bool {
+	if strings.HasPrefix(w, "--") {
+		return w == "--wait" || strings.HasPrefix(w, "--wait=")
+	}
+	return strings.HasPrefix(w, "-") && strings.ContainsAny(w, "wW")
+}
+
 // waits is an error when the editor would return before the user finishes.
 func waits(editor []string) error {
-	base := strings.TrimSuffix(filepath.Base(editor[0]), ".exe")
-	if slices.Contains(asyncEditors, base) && !slices.ContainsFunc(editor[1:], func(w string) bool { return slices.Contains(waitFlags, w) }) {
+	base := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(editor[0]), ".exe"), ".cmd")
+	if slices.Contains(asyncEditors, base) && !slices.ContainsFunc(editor[1:], waitFlag) {
 		return fmt.Errorf("%s returns before you finish editing, so changes would be lost. Use `%s --wait`.", editor[0], editor[0])
 	}
 	return nil
@@ -53,7 +58,7 @@ func validValues(path string) string {
 		case slices.Contains(resolve.SelectorVars, p.Name):
 			return fmt.Sprintf("%s names the environment and cannot be stored.", p.Name)
 		case !manifest.ValidName(p.Name):
-			return fmt.Sprintf("%q is not a valid variable name.", p.Name)
+			return "a name in the file is not a valid variable name; use letters, digits and _, not starting with a digit."
 		}
 	}
 	return ""
@@ -95,7 +100,7 @@ The editor must wait until you finish: for example nano, vim, or "code --wait". 
 				return err
 			}
 			if secrets {
-				err = editSecrets(sys, sc, path)
+				err = editSecrets(sys, sc, path, editor)
 			} else {
 				err = editPlain(sys, sc, file, path, editor)
 			}
@@ -139,7 +144,7 @@ func editPlain(sys System, sc scope, file, path string, editor []string) error {
 }
 
 // editSecrets has the backend edit the encrypted file, then checks that every name in it is encrypted.
-func editSecrets(sys System, sc scope, path string) error {
+func editSecrets(sys System, sc scope, path string, editor []string) error {
 	be := backendFor(sys)
 	if ok, err := be.HasPolicy(sc.dir); err != nil {
 		return err
@@ -152,7 +157,7 @@ func editSecrets(sys System, sc scope, path string) error {
 			return err
 		}
 	}
-	if err := be.Edit(path); err != nil {
+	if err := be.Edit(path, strings.Join(editor, " ")); err != nil {
 		return err
 	}
 	if _, err := os.Stat(path); err != nil {

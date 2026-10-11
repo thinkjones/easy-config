@@ -23,8 +23,8 @@ type Backend interface {
 	Set(path, name, value string) error
 	// Unset removes one name. Removing the last one deletes the file.
 	Unset(path, name string) error
-	// Edit opens the decrypted file in the user's editor and re-encrypts it on save.
-	Edit(path string) error
+	// Edit opens the decrypted file in editor, a command line, and re-encrypts it on save.
+	Edit(path, editor string) error
 }
 
 // Every error a backend returns names the file, wraps one of these where it applies, and never contains a value.

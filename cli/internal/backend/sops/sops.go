@@ -25,6 +25,7 @@ const PolicyFile = ".sops.yaml"
 const (
 	envKey     = "SOPS_AGE_KEY"
 	envKeyFile = "SOPS_AGE_KEY_FILE"
+	envEditor  = "SOPS_EDITOR" // wins over EDITOR and VISUAL; split on spaces
 
 	// noKeyMarker is what sops prints on stderr when no key it can find opens the file: the key file holds a
 	// key that is not a recipient, does not exist, or is empty or unreadable. A corrupt file or a bad MAC prints
@@ -271,14 +272,17 @@ func (b *sopsBackend) Unset(path, name string) error {
 	return nil
 }
 
-// Edit hands the terminal to `sops edit`. A file that does not exist is created by it, which needs the policy.
-func (b *sopsBackend) Edit(path string) error {
+// Edit hands the terminal to `sops edit`, which runs editor (SOPS_EDITOR replaces any in the environment). A file that does not exist is created by it, which needs the policy.
+func (b *sopsBackend) Edit(path, editor string) error {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		if err := b.requirePolicy(path); err != nil {
 			return err
 		}
 	}
-	_, _, err := b.run(proc.Command{Dir: filepath.Dir(path), Interactive: true, Args: []string{"edit", filepath.Base(path)}})
+	c := proc.Command{Dir: filepath.Dir(path), Interactive: true, Args: []string{"edit", filepath.Base(path)}}
+	c.Env = b.env(envEditor + "=" + editor)
+	c.Name = "sops"
+	_, _, err := b.o.Run(c)
 	if err != nil {
 		return fmt.Errorf("%s: sops edit failed: %w", path, err)
 	}
@@ -299,9 +303,13 @@ func (b *sopsBackend) run(c proc.Command) (stdout, stderr []byte, err error) {
 }
 
 // env is the environment plus the key file, unless the environment already says where the key is.
-func (b *sopsBackend) env() []string {
+// extra entries replace any entry of the same name.
+func (b *sopsBackend) env(extra ...string) []string {
 	var env []string
 	for _, kv := range b.o.Environ {
+		if slices.ContainsFunc(extra, func(e string) bool { return strings.HasPrefix(kv, e[:strings.Index(e, "=")+1]) }) {
+			continue
+		}
 		if kv == envKey+"=" || kv == envKeyFile+"=" { // sops ignores an empty value; so does the check below
 			continue
 		}
@@ -313,7 +321,7 @@ func (b *sopsBackend) env() []string {
 	if b.keyFromEnv() == "" && b.o.KeyFile != "" {
 		env = append(env, envKeyFile+"="+b.o.KeyFile)
 	}
-	return env
+	return append(env, extra...)
 }
 
 // keyFromEnv names the variable the environment supplies the key through, or "" when it supplies none.

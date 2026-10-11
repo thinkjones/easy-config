@@ -21,9 +21,10 @@ const (
 // `NAME: FAKE[<base64 of the value>]` line per name, in insertion order. A line `NAME: plain` is a name
 // whose value is not encrypted.
 type Fake struct {
-	Locked   bool                      // Decrypt, Set, Unset and Edit fail with ErrNoKey
-	Missing  bool                      // Check fails with ErrNoTool
-	EditFunc func(pairs []Pair) []Pair // what Edit does; nil leaves the file unchanged
+	Locked     bool                      // Decrypt, Set, Unset and Edit fail with ErrNoKey
+	Missing    bool                      // Check fails with ErrNoTool
+	EditFunc   func(pairs []Pair) []Pair // what Edit does; nil leaves the file unchanged
+	LastEditor string                    // the editor the last Edit was given
 }
 
 // fakeLine is one parsed line of a fake file; enc is false for a value stored without FAKE[ ].
@@ -127,7 +128,8 @@ func (f *Fake) Unset(path, name string) error {
 	return writeFake(path, kept)
 }
 
-func (f *Fake) Edit(path string) error {
+func (f *Fake) Edit(path, editor string) error {
+	f.LastEditor = editor
 	ok, err := f.HasPolicy(filepath.Dir(path))
 	if err != nil {
 		return err

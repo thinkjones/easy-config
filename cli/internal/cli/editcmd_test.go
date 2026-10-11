@@ -39,7 +39,7 @@ func TestEditNeedsAnEditor(t *testing.T) {
 
 func TestEditRefusesNonBlockingEditor(t *testing.T) {
 	for editor, ok := range map[string]bool{
-		"code": false, "cursor": false, "/usr/bin/subl -n": false,
+		"code": false, "cursor": false, "code -n": false, "subl -nw": true, "code --wait=true": true, "code.cmd": false, "/usr/bin/subl -n": false,
 		"code --wait": true, "code -w": true, "/usr/local/bin/code --wait": true, "nano": true, "vim": true,
 	} {
 		f := editFake(t, editor, "NAME: x\n")
@@ -188,17 +188,15 @@ func TestEditorFailure(t *testing.T) {
 func TestEditSecrets(t *testing.T) {
 	f := editFake(t, "nano", "")
 	secretIn(t, f, "repo", "common.enc.yaml", "TOKEN", "t1")
-	var path string
 	f.backend.EditFunc = func(p []backend.Pair) []backend.Pair { return append(p, backend.Pair{Name: "B", Value: "b1"}) }
 	if err := f.run("edit", "--secrets"); err != nil {
 		t.Fatal(err)
 	}
-	path = repoFile(f, "common.enc.yaml")
 	if f.out.String() != "edited repo/common.enc.yaml\n" {
 		t.Fatalf("got %q", f.out.String())
 	}
 	if v, _ := stored(t, f, "common.enc.yaml", "B"); v != "b1" {
-		t.Fatalf("EditFunc did not run on %s", path)
+		t.Fatal("EditFunc did not run")
 	}
 	if len(f.execs) != 0 {
 		t.Fatal("ezc ran the editor itself")
@@ -247,7 +245,7 @@ func TestEditSecretsWithoutKey(t *testing.T) {
 // leakyBackend's Edit leaves a name in the file without encrypting it.
 type leakyBackend struct{ *backend.Fake }
 
-func (b leakyBackend) Edit(path string) error {
+func (b leakyBackend) Edit(path, _ string) error {
 	return os.WriteFile(path, []byte("TOKEN: FAKE[dDE=]\nLEAK: plain\n"), 0o644)
 }
 
@@ -294,5 +292,17 @@ func TestEditGlobalNeedsAStore(t *testing.T) {
 	err := f.run("edit", "-g")
 	if err == nil || !strings.Contains(err.Error(), "no store at") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestEditSecretsPassesTheValidatedEditor(t *testing.T) {
+	f := editFake(t, "code", "")
+	f.env["VISUAL"] = "nano -u"
+	secretIn(t, f, "repo", "common.enc.yaml", "TOKEN", "t1")
+	if err := f.run("edit", "--secrets"); err != nil {
+		t.Fatal(err)
+	}
+	if f.backend.LastEditor != "nano -u" {
+		t.Fatalf("the backend was given %q", f.backend.LastEditor)
 	}
 }
