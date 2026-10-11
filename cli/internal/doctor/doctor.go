@@ -112,6 +112,22 @@ type Options struct {
 	KeyFound bool
 	// ExtraFiles are file names that belong in a .ezc folder besides ezc's own, such as the backend's policy file.
 	ExtraFiles []string
+
+	ConfigPath  string // where config.toml is
+	ConfigFound bool
+	ConfigErr   string // "" unless the file could not be read
+	User        string
+	GitFound    bool
+	Sync        string // the store's state as one phrase, "" when the store is not a git repo
+	SyncState   State  // OK, Warn or Broken for that phrase
+	SyncFix     string // what to do about Sync, "" when nothing
+	// Access: AccessKnown is false when this machine's public key could not be read, which leaves out the access item
+	// unless the registry itself is the problem. Recipient is the registry's name for the key, "" when it is not a recipient.
+	AccessKnown bool
+	Recipient   string
+	HasRegistry bool   // the store has a recipients.yaml
+	RegistryErr string // "" unless it could not be loaded
+	Requests    []string
 }
 
 // Collect gathers the picture Options asks for. It never fails: whatever it cannot read is a Broken item.
@@ -142,11 +158,76 @@ func machine(o Options) []Item {
 	} else {
 		items = append(items, Item{OK, "backend", o.Backend.Name(), ""})
 	}
+	items = append(items, keyItem(o))
+	return append(items, configItem(o), gitItem(o))
+}
+
+func keyItem(o Options) Item {
 	if o.KeyFound {
-		return append(items, Item{OK, "key", o.KeyNote, ""})
+		return Item{OK, "key", o.KeyNote, ""}
 	}
-	return append(items, Item{Warn, "key", "no key at " + o.KeyNote,
-		"An environment with no encrypted file still loads. One that has any needs a key, for every command; `ezc setup` will create one."})
+	return Item{Warn, "key", "no key at " + o.KeyNote,
+		"An environment with no encrypted file still loads. One that has any needs a key, for every command; `ezc setup` creates one."}
+}
+
+func configItem(o Options) Item {
+	switch {
+	case o.ConfigErr != "":
+		return Item{Broken, "config", o.ConfigErr, ""}
+	case !o.ConfigFound && o.StoreSet:
+		// Setup does not run for a store EZC_STORE names, so it is not the thing to suggest.
+		return Item{Warn, "config", "no config at " + o.ConfigPath + ".", ""}
+	case !o.ConfigFound:
+		return Item{Warn, "config", "no config at " + o.ConfigPath + ". Run `ezc setup`.", ""}
+	case o.User != "":
+		return Item{OK, "config", o.ConfigPath + " (user " + o.User + ")", ""}
+	}
+	return Item{OK, "config", o.ConfigPath, ""}
+}
+
+func gitItem(o Options) Item {
+	if !o.GitFound {
+		return Item{Broken, "git", "git is not installed.", ""}
+	}
+	return Item{OK, "git", "installed", ""}
+}
+
+// syncItem is the store's state against its remote; none when the store is not a git repo.
+func syncItem(o Options) []Item {
+	if o.Sync == "" {
+		return nil
+	}
+	return []Item{{o.SyncState, "sync", o.Sync, o.SyncFix}}
+}
+
+// accessItem says whether this machine's key can read the store. It is left out when there is nothing to say:
+// the store has no registry and no policy, or the key's public half is not known.
+func accessItem(o Options) []Item {
+	switch {
+	case o.RegistryErr != "":
+		return []Item{{Broken, "access", o.RegistryErr, ""}}
+	case !o.HasRegistry:
+		if ok, _ := o.Backend.HasPolicy(o.StoreDir); ok {
+			return []Item{{Warn, "access", "the store has an encryption policy but no recipients.yaml, so ezc cannot say who has access.", ""}}
+		}
+		return nil
+	case !o.AccessKnown:
+		return nil
+	case o.Recipient == "":
+		return []Item{{Broken, "access", "your key is not one of this store's recipients. Give your public key to someone who has access.", ""}}
+	}
+	return []Item{{OK, "access", "your key is the recipient " + o.Recipient, ""}}
+}
+
+func requestsItem(o Options) []Item {
+	if len(o.Requests) == 0 {
+		return nil
+	}
+	unit := "requests"
+	if len(o.Requests) == 1 {
+		unit = "request"
+	}
+	return []Item{{Warn, "requests", fmt.Sprintf("%d access %s pending: %s", len(o.Requests), unit, strings.Join(o.Requests, ", ")), ""}}
 }
 
 func store(o Options) []Item {
@@ -155,6 +236,9 @@ func store(o Options) []Item {
 	if !ok {
 		return items
 	}
+	items = append(items, syncItem(o)...)
+	items = append(items, accessItem(o)...)
+	items = append(items, requestsItem(o)...)
 	_, item, valid := manifestItem(o.StoreDir, func(m manifest.Manifest) string {
 		return fmt.Sprintf("%d declared", len(m.Required)+len(m.Optional))
 	}, Warn)

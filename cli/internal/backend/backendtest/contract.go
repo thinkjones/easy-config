@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -80,12 +81,14 @@ func Run(t *testing.T, newEnv func(t *testing.T) Env) {
 	})
 
 	run("FileIsNotPlaintext", func(t *testing.T, e Env, file string) {
-		set(t, e.Backend, file, "TOKEN", "t0k")
+		// A short value turns up in ciphertext by chance; this one cannot, with a character base64 has none of.
+		const value = "plain!value"
+		set(t, e.Backend, file, "TOKEN", value)
 		data, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if bytes.Contains(data, []byte("t0k")) {
+		if bytes.Contains(data, []byte(value)) {
 			t.Error("the file holds the value in plaintext")
 		}
 		if !bytes.Contains(data, []byte("TOKEN")) {
@@ -263,6 +266,111 @@ func Run(t *testing.T, newEnv func(t *testing.T) Env) {
 	run("Check", func(t *testing.T, e Env, _ string) {
 		if err := e.Backend.Check(); err != nil {
 			t.Errorf("Check: %v", err)
+		}
+	})
+
+	run("NewKeyIsFresh", func(t *testing.T, e Env, _ string) {
+		a, _, err := e.Backend.NewKey()
+		if err != nil {
+			t.Fatalf("NewKey: %v", err)
+		}
+		b, _, err := e.Backend.NewKey()
+		if err != nil {
+			t.Fatalf("NewKey: %v", err)
+		}
+		if a == "" || a == b {
+			t.Errorf("two keys have public halves %q and %q", a, b)
+		}
+	})
+
+	run("PublicKeyOfWrittenKey", func(t *testing.T, e Env, _ string) {
+		pub, private, err := e.Backend.NewKey()
+		if err != nil {
+			t.Fatalf("NewKey: %v", err)
+		}
+		keyFile := filepath.Join(t.TempDir(), "keys.txt")
+		if err := os.WriteFile(keyFile, private, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := e.Backend.PublicKey(keyFile)
+		if err != nil {
+			t.Fatalf("PublicKey: %v", err)
+		}
+		if got != pub {
+			t.Errorf("PublicKey = %q, want %q", got, pub)
+		}
+	})
+
+	run("PublicKeyWithoutKey", func(t *testing.T, e Env, _ string) {
+		dir := t.TempDir()
+		empty := filepath.Join(dir, "empty.txt")
+		if err := os.WriteFile(empty, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range []string{filepath.Join(dir, "missing.txt"), empty} {
+			_, err := e.Backend.PublicKey(f)
+			if !errors.Is(err, backend.ErrNoKey) {
+				t.Fatalf("PublicKey(%s) error = %v, want ErrNoKey", f, err)
+			}
+			if !strings.Contains(err.Error(), f) {
+				t.Errorf("error %q does not name the file", err)
+			}
+		}
+	})
+
+	run("WritePolicyNeedsRecipients", func(t *testing.T, e Env, _ string) {
+		if err := e.Backend.WritePolicy(e.NoPolicyDir, nil); err == nil {
+			t.Error("WritePolicy with no recipients succeeded")
+		}
+		if ok, _ := e.Backend.HasPolicy(e.NoPolicyDir); ok {
+			t.Error("a policy was written for no recipients")
+		}
+	})
+
+	run("WritePolicy", func(t *testing.T, e Env, _ string) {
+		a, _, err := e.Backend.NewKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _, err := e.Backend.NewKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := e.NoPolicyDir
+		before := dirNames(t, dir)
+		if err := e.Backend.WritePolicy(dir, []string{a}); err != nil {
+			t.Fatalf("WritePolicy: %v", err)
+		}
+		if ok, err := e.Backend.HasPolicy(dir); err != nil || !ok {
+			t.Fatalf("HasPolicy = %v, %v, want true", ok, err)
+		}
+		// The policy is whatever WritePolicy added to the folder: the contract does not know a backend's file names.
+		policy := func() []byte {
+			var found []byte
+			for _, n := range dirNames(t, dir) {
+				if !slices.Contains(before, n) {
+					data, err := os.ReadFile(filepath.Join(dir, n))
+					if err != nil {
+						t.Fatal(err)
+					}
+					found = append(found, data...)
+				}
+			}
+			return found
+		}
+		first := policy()
+		if err := e.Backend.WritePolicy(dir, []string{a}); err != nil {
+			t.Fatalf("WritePolicy again: %v", err)
+		}
+		if !bytes.Equal(first, policy()) {
+			t.Error("writing the same recipients twice changed the policy")
+		}
+		if err := e.Backend.WritePolicy(dir, []string{b}); err != nil {
+			t.Fatalf("WritePolicy second list: %v", err)
+		}
+		second := policy()
+		if bytes.Equal(first, second) || bytes.Contains(second, []byte(a)) || !bytes.Contains(second, []byte(b)) {
+			t.Error("the second list did not replace the first")
 		}
 	})
 }

@@ -16,8 +16,8 @@ run = [
 ]
 
 [tasks."cli:test:sops"]
-description = "The cli:test gate with the real-sops tests required instead of skipped"
-env = { EZC_REQUIRE_SOPS = "1" }
+description = "The cli:test gate with the real-sops and real-git tests required instead of skipped"
+env = { EZC_REQUIRE_SOPS = "1", EZC_REQUIRE_GIT = "1" }
 run = "mise run cli:test"
 
 [tasks."schema:build"]

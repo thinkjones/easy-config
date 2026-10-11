@@ -89,3 +89,13 @@ func TestNoHome(t *testing.T) {
 		t.Errorf("EZC_HOME without HOME: %v", err)
 	}
 }
+
+func TestState(t *testing.T) {
+	p, err := Resolve(env(map[string]string{"EZC_HOME": "/e"}), "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join("/e", "state.json"); p.State() != want {
+		t.Errorf("State() = %q, want %q", p.State(), want)
+	}
+}

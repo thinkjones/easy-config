@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -37,6 +38,10 @@ type System struct {
 	// ReadSecret prints prompt to the terminal and reads a line without echo.
 	ReadSecret      func(prompt string) (string, error)
 	StdinIsTerminal func() bool
+	// StderrIsTerminal reports whether stderr is a terminal.
+	StderrIsTerminal func() bool
+	// Now is the clock.
+	Now func() time.Time
 	// Backend overrides the encryption backend; nil means the default backend for this machine. Tests set it.
 	Backend backend.Backend
 }
@@ -124,6 +129,7 @@ Config
 		newEditCmd(sys),
 		newStoreCmd(sys),
 		newDoctorCmd(sys),
+		newSetupCmd(sys),
 		newRepoCmd(sys),
 	)
 	return root

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/thinkjones/easy-config/cli/internal/proc"
 )
@@ -62,5 +63,33 @@ func TestExecErrorCarriesTheExitStatus(t *testing.T) {
 		if !errors.As(err, &exit) || exit.ExitCode() != 200 {
 			t.Errorf("interactive %v: got %v", interactive, err)
 		}
+	}
+}
+
+func TestExecCommandTimeout(t *testing.T) {
+	start := time.Now()
+	_, _, err := execCommand(proc.Command{Name: "sleep", Args: []string{"5"}, Timeout: 200 * time.Millisecond})
+	if !errors.Is(err, proc.ErrTimeout) {
+		t.Fatalf("err = %v, want proc.ErrTimeout", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("took %v", d)
+	}
+}
+
+func TestExecCommandNoTimeout(t *testing.T) {
+	if _, _, err := execCommand(proc.Command{Name: "true", Timeout: 0}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecCommandTimeoutWithGrandchildHoldingPipes(t *testing.T) {
+	start := time.Now()
+	_, _, err := execCommand(proc.Command{Name: "sh", Args: []string{"-c", "sleep 5 & wait"}, Timeout: 200 * time.Millisecond})
+	if !errors.Is(err, proc.ErrTimeout) {
+		t.Fatalf("err = %v, want proc.ErrTimeout", err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("took %v", d)
 	}
 }

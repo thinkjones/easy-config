@@ -24,16 +24,24 @@ import (
 type scope struct {
 	layer string // "repo" or "store"
 	dir   string
+	store bool // dir is the store's .ezc: always under -g, and for a repo that is the store itself
 }
 
 func (s scope) manifest() string        { return filepath.Join(s.dir, manifestName) }
 func (s scope) show(file string) string { return s.layer + "/" + file }
 
-// scopeFor is the repo's .ezc folder, or with global the store's, which must exist.
+// scopeFor is the repo's .ezc folder, or with global the store's, which must exist. An invalid config.toml is an error.
 func scopeFor(sys System, global bool) (scope, error) {
+	if _, err := loadConfig(sys); err != nil {
+		return scope{}, err
+	}
 	if !global {
 		dir, err := requireRepoDir(sys)
-		return scope{"repo", dir}, err
+		if err != nil {
+			return scope{}, err
+		}
+		p, _, err := storePathsLoose(sys)
+		return scope{"repo", dir, err == nil && sameDir(dir, p.StoreEzc())}, nil
 	}
 	p, err := storePaths(sys)
 	if err != nil {
@@ -42,7 +50,33 @@ func scopeFor(sys System, global bool) (scope, error) {
 	if info, err := os.Stat(p.StoreEzc()); err != nil || !info.IsDir() {
 		return scope{}, fmt.Errorf("no store at %s. `ezc setup` creates one.", p.Store())
 	}
-	return scope{"store", p.StoreEzc()}, nil
+	return scope{"store", p.StoreEzc(), true}, nil
+}
+
+// guard is guardStoreWrite and guardStoreFiles when the scope is the store; any other scope has nothing to wait for.
+// files are the ones the write may change.
+func (s scope) guard(sys System, files ...string) (storeSync, error) {
+	if !s.store {
+		return storeSync{}, nil
+	}
+	st, err := guardStoreWrite(sys)
+	if err != nil {
+		return st, err
+	}
+	return st, guardStoreFiles(sys, st, files...)
+}
+
+// commit commits, as "<what> (<files>)", those of names whose file in the scope is not as before says.
+// It does nothing when none changed, or when st is not a store that is a git repo.
+func (s scope) commit(sys System, st storeSync, what string, names []string, before []fileState) error {
+	if !st.Git {
+		return nil
+	}
+	files := changedFiles(s.dir, names, before)
+	if len(files) == 0 {
+		return nil
+	}
+	return commitStore(sys, st, what+" ("+strings.Join(files, ", ")+")", files...)
 }
 
 // valuesBase is "common", or "env.<env>" when an environment is named.
@@ -193,6 +227,15 @@ A name the scope's manifest does not declare is declared by this command, as req
 				}
 			}
 
+			// The manifest first, as in the commit's message; it is written only for a new name.
+			watched := []string{file}
+			if !declared {
+				watched = []string{manifestName, file}
+			}
+			st, err := sc.guard(sys, watched...)
+			if err != nil {
+				return err
+			}
 			value, err := valueToSet(sys, name, v.IsSecret(), args[1:])
 			if err != nil {
 				return err
@@ -221,6 +264,7 @@ A name the scope's manifest does not declare is declared by this command, as req
 
 			// A new name is declared first, so a failure to declare leaves nothing behind; if the value then
 			// cannot be written, the manifest is put back byte for byte.
+			before := fileStates(sc.dir, watched)
 			var saved []byte
 			if !declared {
 				if saved, err = os.ReadFile(sc.manifest()); err != nil {
@@ -269,7 +313,7 @@ A name the scope's manifest does not declare is declared by this command, as req
 			if !declared {
 				fmt.Fprintf(sys.Stdout, "declared %s (%s) in %s\n", name, v.Type, sc.show(manifestName))
 			}
-			return nil
+			return sc.commit(sys, st, "set "+name, watched, before)
 		},
 	}
 	f := cmd.Flags()
@@ -429,38 +473,52 @@ func newUnsetCmd(sys System) *cobra.Command {
 					return fmt.Errorf("%s is still set in %s; unset it there first, or leave the declaration.", name, sc.show(other))
 				}
 			}
-			removed := 0
-			for _, file := range files {
-				path := filepath.Join(sc.dir, file)
-				in, err := holds(be, path, name)
-				if err != nil {
-					return err
-				}
-				if !in {
-					continue
-				}
-				if resolve.IsEncrypted(file) {
-					err = be.Unset(path, name)
-				} else {
-					_, err = valuefile.Unset(path, name)
-				}
-				if err != nil {
-					return err
-				}
-				removed++
-				fmt.Fprintf(sys.Stdout, "unset %s from %s\n", name, sc.show(file))
+			watched := files
+			if undeclare {
+				watched = append([]string{manifestName}, files...)
 			}
-			if removed == 0 && !(undeclare && declared) {
-				return fmt.Errorf("%s is not set in %s or %s.", name, sc.show(files[0]), sc.show(files[1]))
+			st, err := sc.guard(sys, watched...)
+			if err != nil {
+				return err
 			}
-			if undeclare && declared {
-				if gone, err := valuefile.Undeclare(sc.manifest(), name); err != nil {
-					return err
-				} else if gone {
-					fmt.Fprintf(sys.Stdout, "removed %s from %s\n", name, sc.show(manifestName))
+			before := fileStates(sc.dir, watched)
+			remove := func() error {
+				removed := 0
+				for _, file := range files {
+					path := filepath.Join(sc.dir, file)
+					in, err := holds(be, path, name)
+					if err != nil {
+						return err
+					}
+					if !in {
+						continue
+					}
+					if resolve.IsEncrypted(file) {
+						err = be.Unset(path, name)
+					} else {
+						_, err = valuefile.Unset(path, name)
+					}
+					if err != nil {
+						return err
+					}
+					removed++
+					fmt.Fprintf(sys.Stdout, "unset %s from %s\n", name, sc.show(file))
 				}
+				if removed == 0 && !(undeclare && declared) {
+					return fmt.Errorf("%s is not set in %s or %s.", name, sc.show(files[0]), sc.show(files[1]))
+				}
+				if undeclare && declared {
+					if gone, err := valuefile.Undeclare(sc.manifest(), name); err != nil {
+						return err
+					} else if gone {
+						fmt.Fprintf(sys.Stdout, "removed %s from %s\n", name, sc.show(manifestName))
+					}
+				}
+				return nil
 			}
-			return nil
+			// A removal that fails part way has still removed what it said it did, and that is committed too.
+			err = remove()
+			return errors.Join(err, sc.commit(sys, st, "unset "+name, watched, before))
 		},
 	}
 	cmd.Flags().BoolVarP(&global, "global", "g", false, "remove from the global store")

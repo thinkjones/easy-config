@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -38,6 +39,11 @@ func healthy(t *testing.T) Options {
 		KeyNote:    "~/key",
 		KeyFound:   true,
 		ExtraFiles: []string{backend.FakePolicy},
+
+		ConfigPath:  filepath.Join(root, "config.toml"),
+		ConfigFound: true,
+		User:        "gene",
+		GitFound:    true,
 	}
 	put(t, filepath.Join(o.StoreDir, "manifest.yaml"), storeManifest)
 	put(t, filepath.Join(o.StoreDir, "common.yaml"), "NAME: n\n")
@@ -433,5 +439,134 @@ func TestStoreAuditWithAnUnencryptedValueIsBrokenNotAborted(t *testing.T) {
 	want := []string{"3 to fix — run `ezc store audit`", "damaged: value checks skipped for common.enc.yaml"}
 	if !reflect.DeepEqual(details, want) || !reflect.DeepEqual(states, []State{Broken, Warn}) {
 		t.Fatalf("got %v %v", states, details)
+	}
+}
+
+func TestConfigItem(t *testing.T) {
+	o := healthy(t)
+	if it := item(t, Collect(o), "machine", "config"); it.State != OK || it.Detail != o.ConfigPath+" (user gene)" {
+		t.Errorf("found: %+v", it)
+	}
+	o.ConfigFound, o.User = false, ""
+	want := Item{Warn, "config", "no config at " + o.ConfigPath + ". Run `ezc setup`.", ""}
+	if it := item(t, Collect(o), "machine", "config"); it != want {
+		t.Errorf("missing: %+v, want %+v", it, want)
+	}
+	// Setup refuses to run while EZC_STORE is set.
+	o.StoreSet = true
+	want = Item{Warn, "config", "no config at " + o.ConfigPath + ".", ""}
+	if it := item(t, Collect(o), "machine", "config"); it != want {
+		t.Errorf("missing, with EZC_STORE: %+v, want %+v", it, want)
+	}
+	o.StoreSet = false
+	o.ConfigErr = "/x/config.toml: not valid TOML"
+	want = Item{Broken, "config", o.ConfigErr, ""}
+	if it := item(t, Collect(o), "machine", "config"); it != want {
+		t.Errorf("invalid: %+v, want %+v", it, want)
+	}
+}
+
+func TestGitItem(t *testing.T) {
+	o := healthy(t)
+	if it := item(t, Collect(o), "machine", "git"); it.State != OK {
+		t.Errorf("found: %+v", it)
+	}
+	o.GitFound = false
+	want := Item{Broken, "git", "git is not installed.", ""}
+	if it := item(t, Collect(o), "machine", "git"); it != want {
+		t.Errorf("missing: %+v, want %+v", it, want)
+	}
+}
+
+// labels are the labels of a section's items.
+func labels(r Report, section string) []string {
+	var out []string
+	for _, s := range r.Sections {
+		if s.Name == section {
+			for _, it := range s.Items {
+				out = append(out, it.Label)
+			}
+		}
+	}
+	return out
+}
+
+func TestSyncItem(t *testing.T) {
+	o := healthy(t)
+	for _, label := range labels(Collect(o), "store") {
+		if label == "sync" || label == "access" || label == "requests" {
+			t.Errorf("%s shown for a store that is not a git repo", label)
+		}
+	}
+	for _, c := range []struct {
+		phrase string
+		state  State
+		fix    string
+	}{
+		{"in sync", OK, ""},
+		{"local only", OK, ""},
+		{"2 commits ahead of origin", Warn, "Run `ezc store push`."},
+		{"1 commit behind origin", Warn, "Run `ezc store pull`."},
+		{"uncommitted changes", Warn, "Commit them."},
+		{"diverged from origin (1 ahead, 1 behind)", Broken, "Run `ezc store pull`."},
+	} {
+		o.Sync, o.SyncState, o.SyncFix = c.phrase, c.state, c.fix
+		want := Item{c.state, "sync", c.phrase, c.fix}
+		if it := item(t, Collect(o), "store", "sync"); it != want {
+			t.Errorf("%+v, want %+v", it, want)
+		}
+	}
+}
+
+func TestAccessItem(t *testing.T) {
+	o := healthy(t)
+	o.HasRegistry, o.AccessKnown, o.Recipient = true, true, "gene"
+	if it := item(t, Collect(o), "store", "access"); it != (Item{OK, "access", "your key is the recipient gene", ""}) {
+		t.Errorf("recipient: %+v", it)
+	}
+	o.Recipient = ""
+	want := Item{Broken, "access", "your key is not one of this store's recipients. Give your public key to someone who has access.", ""}
+	if it := item(t, Collect(o), "store", "access"); it != want {
+		t.Errorf("not a recipient: %+v", it)
+	}
+	if !Collect(o).Broken() {
+		t.Error("not a recipient must be broken")
+	}
+	o.AccessKnown = false
+	if slices.Contains(labels(Collect(o), "store"), "access") {
+		t.Error("access shown with no public key")
+	}
+	o.RegistryErr = "/x/recipients.yaml: not valid YAML"
+	if it := item(t, Collect(o), "store", "access"); it != (Item{Broken, "access", o.RegistryErr, ""}) {
+		t.Errorf("registry error: %+v", it)
+	}
+
+	o = healthy(t)
+	if slices.Contains(labels(Collect(o), "store"), "access") {
+		t.Error("access shown with no registry and no policy")
+	}
+	put(t, filepath.Join(o.StoreDir, backend.FakePolicy), "age1x\n")
+	want = Item{Warn, "access", "the store has an encryption policy but no recipients.yaml, so ezc cannot say who has access.", ""}
+	if it := item(t, Collect(o), "store", "access"); it != want {
+		t.Errorf("policy only: %+v", it)
+	}
+}
+
+func TestRequestsItem(t *testing.T) {
+	o := healthy(t)
+	if slices.Contains(labels(Collect(o), "store"), "requests") {
+		t.Error("requests shown with none")
+	}
+	o.Requests = []string{"ana"}
+	want := Item{Warn, "requests", "1 access request pending: ana", ""}
+	if it := item(t, Collect(o), "store", "requests"); it != want {
+		t.Errorf("%+v", it)
+	}
+	o.Requests = []string{"ana", "bo"}
+	if it := item(t, Collect(o), "store", "requests"); it.Detail != "2 access requests pending: ana, bo" {
+		t.Errorf("%+v", it)
+	}
+	if Collect(o).Broken() {
+		t.Error("requests alone must not fail")
 	}
 }

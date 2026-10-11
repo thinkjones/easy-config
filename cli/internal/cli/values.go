@@ -49,6 +49,7 @@ func newListCmd(sys System) *cobra.Command {
 					return err
 				}
 			}
+			touchStore(sys)
 			// Resolve first: what is wrong with the store is said once, by the resolver.
 			res, err := load(sys, repo, envName(sys, firstArg(args)))
 			if err != nil {
@@ -179,6 +180,7 @@ func newGetCmd(sys System) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			touchStore(sys)
 			// Resolve first: what is wrong with the store is said once, by the resolver.
 			res, err := load(sys, repo, envName(sys, firstArg(args[1:])))
 			if err != nil {

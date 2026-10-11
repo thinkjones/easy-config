@@ -25,6 +25,7 @@ type e2e struct {
 	key     string // the key file
 	pub     string // its public key, which the repo's policy encrypts to
 	path    string
+	env     []string // more of the child's environment, after HOME, EZC_HOME and PATH
 }
 
 func requireSopsOnPath(t *testing.T) string {
@@ -99,7 +100,7 @@ func (e *e2e) exec(dir, stdin, name string, args ...string) (stdout, stderr stri
 	e.t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	cmd.Env = []string{"HOME=" + e.home, "EZC_HOME=" + e.ezcHome, "PATH=" + e.path}
+	cmd.Env = append([]string{"HOME=" + e.home, "EZC_HOME=" + e.ezcHome, "PATH=" + e.path}, e.env...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut

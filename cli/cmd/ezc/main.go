@@ -1,7 +1,5 @@
 // ezc is easy config: one store for secrets and variables, layered into every
-// repo. Every command is Go code in internal/cli:
-//
-//	ezc env [export] | run | version | help [command]
+// repo. Every command is Go code in internal/cli; `ezc help` lists them.
 //
 // Data lives in EZC_HOME. bin/ezc in the source checkout builds this binary
 // on demand. main only wires the process into cli.Run; run_unix.go and
@@ -10,12 +8,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
 	"runtime"
+	"time"
 
 	"golang.org/x/term"
 
@@ -23,7 +23,7 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/proc"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 func main() {
 	os.Exit(run())
@@ -41,10 +41,12 @@ func run() int {
 		RunChild: runChild,
 		Version:  version,
 
-		Exec:            execCommand,
-		LookPath:        exec.LookPath,
-		ReadSecret:      readSecret,
-		StdinIsTerminal: func() bool { return term.IsTerminal(int(os.Stdin.Fd())) },
+		Exec:             execCommand,
+		LookPath:         exec.LookPath,
+		ReadSecret:       readSecret,
+		StdinIsTerminal:  func() bool { return term.IsTerminal(int(os.Stdin.Fd())) },
+		StderrIsTerminal: func() bool { return term.IsTerminal(int(os.Stderr.Fd())) },
+		Now:              time.Now,
 	})
 	var exit *cli.ExitError
 	var usage *cli.UsageError
@@ -94,18 +96,35 @@ func startFailure(name string, err error) error {
 // returns no output; otherwise stdout and stderr are captured separately and
 // the program's stdin is exactly c.Stdin.
 func execCommand(c proc.Command) ([]byte, []byte, error) {
-	cmd := exec.Command(c.Name, c.Args...)
+	ctx := context.Background()
+	if c.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.Timeout)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, c.Name, c.Args...)
+	if c.Timeout > 0 {
+		cmd.WaitDelay = time.Second // a grandchild holding the pipes must not outlast the timeout
+	}
 	cmd.Dir = c.Dir
 	cmd.Env = c.Env
 	if c.Interactive {
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-		return nil, nil, cmd.Run()
+		return nil, nil, timedOut(ctx, cmd.Run())
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdin = bytes.NewReader(c.Stdin)
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err := cmd.Run()
+	err := timedOut(ctx, cmd.Run())
 	return stdout.Bytes(), stderr.Bytes(), err
+}
+
+// timedOut is proc.ErrTimeout when ctx's deadline passed, else err.
+func timedOut(ctx context.Context, err error) error {
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return proc.ErrTimeout
+	}
+	return err
 }
 
 // readSecret prints prompt to stderr and reads a line from the terminal on

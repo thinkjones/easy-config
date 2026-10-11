@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
+	"github.com/thinkjones/easy-config/cli/internal/gitstore/gittest"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
 	"github.com/thinkjones/easy-config/cli/internal/proc"
 	"github.com/thinkjones/easy-config/cli/share"
@@ -33,6 +36,13 @@ type fake struct {
 	tty       bool                                       // StdinIsTerminal
 	paths     map[string]string                          // what LookPath finds, by name
 	backend   *backend.Fake                              // the encryption backend; System.Backend
+	now       time.Time                                  // System.Now; the zero value means 2026-10-11T12:00:00Z
+	errTTY    bool                                       // StderrIsTerminal
+	noGit     bool                                       // git cannot be found
+
+	t    *testing.T
+	gits []proc.Command // every git command Exec ran; they are not in execs
+	git  proc.Runner    // the real git, isolated; made on first use
 }
 
 func newFake(t *testing.T) *fake {
@@ -41,8 +51,25 @@ func newFake(t *testing.T) *fake {
 		env: map[string]string{"HOME": t.TempDir(), "EZC_HOME": t.TempDir()},
 		wd:  t.TempDir(),
 
+		paths:   map[string]string{"git": "/usr/bin/git"},
 		backend: &backend.Fake{},
+		t:       t,
 	}
+}
+
+// runGit runs the real git, cut off from the user's config. Without git it answers as a machine that has none.
+func (f *fake) runGit(c proc.Command) ([]byte, []byte, error) {
+	f.gits = append(f.gits, c)
+	if f.noGit {
+		return nil, nil, exec.ErrNotFound
+	}
+	if f.git == nil {
+		if _, err := exec.LookPath("git"); err != nil && os.Getenv("EZC_REQUIRE_GIT") != "1" {
+			return nil, nil, exec.ErrNotFound
+		}
+		f.git = gittest.Runner(f.t)
+	}
+	return f.git(c)
 }
 
 func (f *fake) sys() System {
@@ -66,8 +93,11 @@ func (f *fake) sys() System {
 			f.children = append(f.children, append(call, env...))
 			return f.childExit, nil
 		},
-		Version: "0.2.0",
+		Version: "0.3.0",
 		Exec: func(c proc.Command) ([]byte, []byte, error) {
+			if c.Name == "git" {
+				return f.runGit(c)
+			}
 			f.execs = append(f.execs, c)
 			if f.execFn == nil {
 				return nil, nil, errors.New("no exec configured")
@@ -84,8 +114,15 @@ func (f *fake) sys() System {
 			f.prompts = append(f.prompts, prompt)
 			return f.secret, f.secretErr
 		},
-		StdinIsTerminal: func() bool { return f.tty },
-		Backend:         f.backend,
+		StdinIsTerminal:  func() bool { return f.tty },
+		StderrIsTerminal: func() bool { return f.errTTY },
+		Now: func() time.Time {
+			if f.now.IsZero() {
+				return time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+			}
+			return f.now
+		},
+		Backend: f.backend,
 	}
 }
 
@@ -127,7 +164,7 @@ func TestVersion(t *testing.T) {
 	if err := f.run("version"); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.out.String(); got != "ezc 0.2.0\n" {
+	if got := f.out.String(); got != "ezc 0.3.0\n" {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -1225,7 +1262,7 @@ func TestStoreAuditBackendFailureIsAnError(t *testing.T) {
 
 func TestStoreNeedsAVerb(t *testing.T) {
 	f := newFake(t)
-	wantUsage(t, f.run("store"), "say audit")
+	wantUsage(t, f.run("store"), "say status, pull, push or audit")
 }
 
 func TestDoctor(t *testing.T) {

@@ -52,6 +52,7 @@ func envCheck(sys System, arg, manifestPath string, verbose bool) error {
 	if err != nil {
 		return err
 	}
+	touchStore(sys)
 	res, err := load(sys, repo, envName(sys, arg))
 	if err != nil {
 		return err
@@ -135,6 +136,8 @@ On Unix ezc replaces itself with the command, so there is no process in between:
 			if err != nil {
 				return err
 			}
+			// On Unix RunChild does not return, so the store is looked at first.
+			touchStore(sys)
 			res, err := load(sys, repo, envName(sys, firstArg(args[:dash])))
 			if err != nil {
 				return err

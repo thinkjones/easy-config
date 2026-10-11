@@ -106,7 +106,7 @@ func policyFiles(sys System) []string {
 }
 
 // keySource says where the default backend finds the key, for display, and whether a key is there: the key
-// in the environment, else the key file the environment names, else the default key file (shown with ~).
+// in the environment, else the key file the environment names, else the config's, else the default key file (shown with ~).
 // With a backend set (tests) there is no real key: the key is found unless the backend is a locked Fake.
 func keySource(sys System) (note string, found bool) {
 	if sys.Backend != nil {
@@ -123,12 +123,28 @@ func keySource(sys System) (note string, found bool) {
 		_, err := os.Stat(file)
 		return file, err == nil
 	}
+	if c, err := loadConfig(sys); err == nil && c.KeyFile != "" {
+		_, err := os.Stat(c.KeyFile)
+		return c.KeyFile, err == nil
+	}
 	home := homeDir(sys)
 	if home == "" {
 		return sops.DefaultKeyFile("~"), false
 	}
 	_, err := os.Stat(sops.DefaultKeyFile(home))
 	return sops.DefaultKeyFile("~"), err == nil
+}
+
+// keyInEnvironment says what key the environment supplies to the default backend: the variable that holds it,
+// "" when there is none, and the key file it names, "" when the variable holds the key's text.
+func keyInEnvironment(sys System) (variable, file string) {
+	if sys.Getenv("SOPS_AGE_KEY") != "" {
+		return "SOPS_AGE_KEY", ""
+	}
+	if file := sys.Getenv("SOPS_AGE_KEY_FILE"); file != "" {
+		return "SOPS_AGE_KEY_FILE", file
+	}
+	return "", ""
 }
 
 // backendFor is sys.Backend, else the sops backend for this machine.
@@ -144,8 +160,12 @@ func backendFor(sys System) backend.Backend {
 	})
 }
 
-// keyFile is the default key file; "" with no home, where the path would be a relative one.
+// keyFile is the config's key file, else the default one; "" with neither a config nor a home, where the path would be a relative one.
+// A config that cannot be read counts as none: load reports it.
 func keyFile(sys System) string {
+	if c, err := loadConfig(sys); err == nil && c.KeyFile != "" {
+		return c.KeyFile
+	}
 	home := homeDir(sys)
 	if home == "" {
 		return ""
@@ -153,8 +173,26 @@ func keyFile(sys System) string {
 	return sops.DefaultKeyFile(home)
 }
 
-// load resolves the environment for repo (a .ezc directory, or "" for the store alone).
+// keyFileInUse is the key file the commands read, and false when there is none to read: the key is in the
+// environment as text, or there is no home to look in. The public half of the key is read from this file.
+func keyFileInUse(sys System) (string, bool) {
+	if sys.Backend == nil {
+		if sys.Getenv("SOPS_AGE_KEY") != "" {
+			return "", false
+		}
+		if file := sys.Getenv("SOPS_AGE_KEY_FILE"); file != "" {
+			return file, true
+		}
+	}
+	file := keyFile(sys)
+	return file, file != ""
+}
+
+// load resolves the environment for repo (a .ezc directory, or "" for the store alone). An invalid config.toml is an error.
 func load(sys System, repo, env string) (resolve.Result, error) {
+	if _, err := loadConfig(sys); err != nil {
+		return resolve.Result{}, err
+	}
 	p, err := storePaths(sys)
 	if err != nil {
 		return resolve.Result{}, err

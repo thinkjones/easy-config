@@ -18,6 +18,9 @@ type Paths struct {
 // Config is ezc's config file.
 func (p Paths) Config() string { return filepath.Join(p.Home, "config.toml") }
 
+// State is ezc's state file, which records what ezc did last (a fetch, say).
+func (p Paths) State() string { return filepath.Join(p.Home, "state.json") }
+
 // Store is the global store's root: EZC_STORE, else <Home>/store.
 func (p Paths) Store() string {
 	if p.store != "" {
