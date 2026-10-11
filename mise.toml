@@ -15,6 +15,11 @@ run = [
   "go test ./...",
 ]
 
+[tasks."cli:test:sops"]
+description = "The cli:test gate with the real-sops tests required instead of skipped"
+env = { EZC_REQUIRE_SOPS = "1" }
+run = "mise run cli:test"
+
 [tasks."schema:build"]
 description = "Regenerate the committed manifest JSON Schema from the Go types"
 depends = ["cli:build"]

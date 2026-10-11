@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -23,6 +24,14 @@ import (
 // DefaultEnv applies when no environment is named. It must be the inert one:
 // local reaches no live resource, so a forgotten selector cannot touch production.
 const DefaultEnv = "local"
+
+// ReservedEnv is not an environment name: it marks encrypted files (env.<name>.enc.yaml).
+const ReservedEnv = "enc"
+
+var envNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
+// ValidEnvName reports whether s can name an environment.
+func ValidEnvName(s string) bool { return envNamePattern.MatchString(s) && s != ReservedEnv }
 
 // SelectorVars are the variables that name the environment. They are recorded
 // in a Result and never exported.
@@ -52,10 +61,15 @@ type Source struct {
 // Result is the composed environment plus a record of where each value came
 // from. Later files win, so Origin holds the LAST file to set each name.
 type Result struct {
-	Env          map[string]string
-	Origin       map[string]string // the last file to set each name, or ShellOrigin
-	Sources      []Source          // every candidate file, in precedence order
-	EnvName      string            // "" when CommonOnly
+	Env    map[string]string
+	Origin map[string]string // the last file to set each name, or ShellOrigin
+	// Refs holds, for each name whose winning value referenced another, every name that value was built
+	// from, sorted: the names it references and the ones their values were built from at that point.
+	Refs map[string][]string
+	// Encrypted marks each name whose winning value was read from an encrypted file or built from one that was.
+	Encrypted    map[string]bool
+	Sources      []Source // every candidate file, in precedence order
+	EnvName      string   // "" when CommonOnly
 	CommonOnly   bool
 	StoreMissing bool
 }
@@ -87,7 +101,7 @@ func (r Result) Overrides(name string) []string {
 }
 
 // Envs returns the sorted, de-duplicated environment names found in dirs: any
-// env.<name>.yaml or env.<name>.enc.yaml. A directory that does not exist has
+// env.<name>.yaml or env.<name>.enc.yaml whose name is a valid one. A directory that does not exist has
 // none; any other read error is returned.
 func Envs(dirs ...string) ([]string, error) {
 	seen := map[string]bool{}
@@ -104,8 +118,11 @@ func Envs(dirs ...string) ([]string, error) {
 			if !strings.HasPrefix(n, "env.") || !strings.HasSuffix(n, ".yaml") {
 				continue
 			}
+			if n == "env.enc.yaml" {
+				continue
+			}
 			name := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(n, "env."), ".yaml"), ".enc")
-			if name != "" {
+			if ValidEnvName(name) {
 				seen[name] = true
 			}
 		}
@@ -153,7 +170,13 @@ func isDir(path, what string) (bool, error) {
 // environment that does not exist is an error listing the ones that do, so a
 // typo cannot silently degrade to common-only.
 func Load(o Options) (Result, error) {
-	res := Result{Env: map[string]string{}, Origin: map[string]string{}}
+	res := Result{Env: map[string]string{}, Origin: map[string]string{}, Refs: map[string][]string{}, Encrypted: map[string]bool{}}
+	switch {
+	case o.Env == ReservedEnv:
+		return res, fmt.Errorf("%s is a reserved name; it marks encrypted files (env.<name>.enc.yaml)", ReservedEnv)
+	case o.Env != "" && !ValidEnvName(o.Env):
+		return res, fmt.Errorf("%q is not a valid environment name; use letters, digits, - and _", o.Env)
+	}
 
 	type layer struct{ name, dir string }
 	var layers []layer
@@ -229,12 +252,29 @@ func Load(o Options) (Result, error) {
 			if strings.ContainsRune(pair.Value, 0) {
 				return res, fmt.Errorf("%s: %s contains a NUL byte, which an environment variable cannot hold", s.Path, pair.Name)
 			}
-			value := pair.Value
-			if !isEncrypted(s.Path) {
-				value, err = expandRefs(value, pair.Name, s.Path, o.Home, res.Env)
+			value, encrypted := pair.Value, IsEncrypted(s.Path)
+			var built []string
+			if !encrypted {
+				var refs []string
+				value, refs, err = expandRefs(value, pair.Name, s.Path, o.Home, res.Env)
 				if err != nil {
 					return res, err
 				}
+				// Taken before this name's own record changes: a value may reference the one it replaces.
+				for _, ref := range refs {
+					built = append(built, ref)
+					built = append(built, res.Refs[ref]...)
+					encrypted = encrypted || res.Encrypted[ref]
+				}
+			}
+			delete(res.Refs, pair.Name)
+			if len(built) > 0 {
+				slices.Sort(built)
+				res.Refs[pair.Name] = slices.Compact(built)
+			}
+			delete(res.Encrypted, pair.Name)
+			if encrypted {
+				res.Encrypted[pair.Name] = true
 			}
 			res.Env[pair.Name] = value
 			res.Origin[pair.Name] = s.Path

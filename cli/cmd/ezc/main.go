@@ -9,6 +9,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,10 +17,13 @@ import (
 	"os/exec"
 	"runtime"
 
+	"golang.org/x/term"
+
 	"github.com/thinkjones/easy-config/cli/internal/cli"
+	"github.com/thinkjones/easy-config/cli/internal/proc"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 func main() {
 	os.Exit(run())
@@ -36,6 +40,11 @@ func run() int {
 		GOOS:     runtime.GOOS,
 		RunChild: runChild,
 		Version:  version,
+
+		Exec:            execCommand,
+		LookPath:        exec.LookPath,
+		ReadSecret:      readSecret,
+		StdinIsTerminal: func() bool { return term.IsTerminal(int(os.Stdin.Fd())) },
 	})
 	var exit *cli.ExitError
 	var usage *cli.UsageError
@@ -79,4 +88,34 @@ func startFailure(name string, err error) error {
 		err = path.Err
 	}
 	return &startError{126, fmt.Sprintf("%s: %v", name, err)}
+}
+
+// execCommand runs c and waits. An interactive command shares the terminal and
+// returns no output; otherwise stdout and stderr are captured separately and
+// the program's stdin is exactly c.Stdin.
+func execCommand(c proc.Command) ([]byte, []byte, error) {
+	cmd := exec.Command(c.Name, c.Args...)
+	cmd.Dir = c.Dir
+	cmd.Env = c.Env
+	if c.Interactive {
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		return nil, nil, cmd.Run()
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdin = bytes.NewReader(c.Stdin)
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	return stdout.Bytes(), stderr.Bytes(), err
+}
+
+// readSecret prints prompt to stderr and reads a line from the terminal on
+// stdin without echoing it.
+func readSecret(prompt string) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }

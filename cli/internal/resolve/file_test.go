@@ -114,19 +114,19 @@ func TestHomeExpansionWithoutHome(t *testing.T) {
 func TestEncryptedWithoutDecrypter(t *testing.T) {
 	p := write(t, "common.enc.yaml", "K: ciphertext\n")
 	_, _, err := loadFile(p, "/h", nil)
-	if err == nil || !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "is encrypted, and this version of ezc cannot decrypt") {
+	if err == nil || !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "is encrypted, and no decrypter was supplied") {
 		t.Errorf("got %v", err)
 	}
 }
 
-func TestEncryptedUsesDecrypter(t *testing.T) {
+func TestEncryptedUsesDecrypterAndKeepsValuesLiteral(t *testing.T) {
 	p := write(t, "common.enc.yaml", "K: ciphertext\n")
 	decrypt := func(string) ([]backend.Pair, error) { return []backend.Pair{{Name: "K", Value: "~/k"}}, nil }
 	pairs, _, err := loadFile(p, "/h", decrypt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pairs) != 1 || pairs[0].Value != "/h/k" {
+	if len(pairs) != 1 || pairs[0].Value != "~/k" {
 		t.Errorf("got %v", pairs)
 	}
 }
@@ -174,5 +174,67 @@ func TestSpecialCharactersStillLoadVerbatim(t *testing.T) {
 	want := []backend.Pair{{Name: "A", Value: "!quoted"}, {Name: "B", Value: "08540"}, {Name: "C", Value: "yes"}, {Name: "D", Value: "&literal"}, {Name: "E", Value: "a!b&c"}, {Name: "F", Value: "!block\n"}, {Name: "É", Value: "!x"}}
 	if !slices.Equal(pairs, want) {
 		t.Errorf("got %q, want %q", pairs, want)
+	}
+}
+
+func TestBareTagBeforeQuotedValue(t *testing.T) {
+	for _, content := range []string{"PW: ! \"hunter2\"\n", "PW: ! 'hunter2'\n", "PW: ! |\n  hunter2\n"} {
+		if got := loadErr(t, "common.yaml", content, ""); !strings.Contains(got, `"PW" has a YAML tag`) {
+			t.Errorf("%q: got %q", content, got)
+		}
+	}
+}
+
+func TestBOMDoesNotHideATag(t *testing.T) {
+	if got := loadErr(t, "common.yaml", "\ufeffPW: ! hunter2\n", ""); !strings.Contains(got, "has a YAML tag") {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestDocumentEndMarker(t *testing.T) {
+	pairs := mustLoad(t, "common.yaml", "A: 1\n...\n", "")
+	if len(pairs) != 1 || pairs[0].Name != "A" || pairs[0].Value != "1" {
+		t.Errorf("got %v", pairs)
+	}
+	if got := loadErr(t, "common.yaml", "A: 1\n...\nB: 2\n", ""); !strings.Contains(got, "more than one YAML document") {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestPlain(t *testing.T) {
+	p := write(t, "common.yaml", "A: ~/x\nB: $A\n")
+	pairs, present, err := Plain(p)
+	if err != nil || !present || len(pairs) != 2 || pairs[0].Value != "~/x" || pairs[1].Value != "$A" {
+		t.Fatalf("got %v %v %v", pairs, present, err)
+	}
+	pairs, present, err = Plain(p + ".missing")
+	if pairs != nil || present || err != nil {
+		t.Fatalf("absent file: got %v %v %v", pairs, present, err)
+	}
+	bad := write(t, "bad.yaml", "A: [1]\n")
+	if _, present, err := Plain(bad); err == nil || present {
+		t.Fatalf("got %v %v", present, err)
+	}
+}
+
+func TestEscapeAndUnescape(t *testing.T) {
+	for value, want := range map[string]string{"plain": "plain", "a$b": "a$$b", "a$$b": "a$$$$b", "$HOME/x": "$$HOME/x", "${HOME}": "$${HOME}", "~user": "~user", "": ""} {
+		text, ok := Escape(value)
+		if !ok || text != want {
+			t.Errorf("Escape(%q) = %q, %v; want %q", value, text, ok, want)
+		}
+		if back, ok := Unescape(text); !ok || back != value {
+			t.Errorf("Unescape(%q) = %q, %v; want %q", text, back, ok, value)
+		}
+	}
+	for _, value := range []string{"~", "~/x"} {
+		if _, ok := Escape(value); ok {
+			t.Errorf("Escape(%q) succeeded", value)
+		}
+	}
+	for _, text := range []string{"~/x", "$HOME/x", "$NAME", "a${NAME}b", "~"} {
+		if _, ok := Unescape(text); ok {
+			t.Errorf("Unescape(%q) succeeded", text)
+		}
 	}
 }

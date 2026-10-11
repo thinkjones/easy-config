@@ -175,7 +175,7 @@ func TestReferences(t *testing.T) {
 func TestForwardReferenceIsError(t *testing.T) {
 	_, repo := tree(t, map[string]string{"repo/env.local.yaml": "A: $B/x\nB: y\n"})
 	_, err := Load(Options{RepoDir: repo, Env: "local"})
-	if err == nil || !strings.Contains(err.Error(), "A references $B, which is not defined") || !strings.Contains(err.Error(), "Write $$B if you meant a literal dollar sign") {
+	if err == nil || !strings.Contains(err.Error(), "A references a name that is not defined") || !strings.Contains(err.Error(), "Write $$ if you meant a literal dollar sign") {
 		t.Errorf("got %v", err)
 	}
 }
@@ -357,5 +357,105 @@ func TestRepoDirThatIsNotAFolder(t *testing.T) {
 	r := mustResolve(t, Options{RepoDir: filepath.Join(t.TempDir(), "absent", ".ezc")})
 	if len(r.Env) != 0 || len(r.Sources) != 0 {
 		t.Errorf("got %v, %v", r.Env, r.Sources)
+	}
+}
+
+func TestReservedEnvName(t *testing.T) {
+	_, repo := tree(t, nil)
+	_, err := Load(Options{RepoDir: repo, Env: "enc"})
+	if err == nil || !strings.Contains(err.Error(), "enc is a reserved name") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestInvalidEnvName(t *testing.T) {
+	_, repo := tree(t, nil)
+	for _, name := range []string{"../x", "a b"} {
+		_, err := Load(Options{RepoDir: repo, Env: name})
+		if err == nil || !strings.Contains(err.Error(), strconv.Quote(name)+" is not a valid environment name") {
+			t.Errorf("%q: got %v", name, err)
+		}
+	}
+}
+
+func TestEnvEncFileIsNotAnEnvironment(t *testing.T) {
+	_, repo := tree(t, map[string]string{"repo/env.enc.yaml": "x: y\n", "repo/env.local.yaml": "A: 1\n"})
+	got, err := Envs(repo)
+	if err != nil || !slices.Equal(got, []string{"local"}) {
+		t.Errorf("got %v, %v", got, err)
+	}
+}
+
+func TestUnknownReferenceHidesTheFragment(t *testing.T) {
+	store, repo := tree(t, map[string]string{"store/common.yaml": "ROOT: /r\n", "repo/env.local.yaml": "PW: P@ss$word123\n"})
+	_, err := Load(Options{StoreDir: store, RepoDir: repo, Env: "local"})
+	if err == nil || !strings.Contains(err.Error(), "PW references a name that is not defined") || !strings.Contains(err.Error(), "defined so far") || strings.Contains(err.Error(), "word123") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestEnvsReturnsOnlyValidNames(t *testing.T) {
+	_, repo := tree(t, map[string]string{
+		"repo/env.a.b.yaml": "A: 1\n", "repo/env.enc.enc.yaml": "x: y\n", "repo/env..yaml": "A: 1\n",
+		"repo/env.ok.yaml": "A: 1\n", "repo/env.fine.enc.yaml": "x: y\n",
+	})
+	got, err := Envs(repo)
+	if err != nil || !slices.Equal(got, []string{"fine", "ok"}) {
+		t.Fatalf("got %v, %v", got, err)
+	}
+}
+
+func TestRefsRecordsWhatAValueWasBuiltFrom(t *testing.T) {
+	_, repo := tree(t, map[string]string{
+		"repo/common.yaml":    "A: a\nB: $A/b\nC: ${B}/c\nD: $$A\nE: $HOME/e\nF: ~/f\nG: x$HOME\n",
+		"repo/env.local.yaml": "",
+	})
+	r := mustResolve(t, Options{RepoDir: repo, Home: "/h"})
+	want := map[string][]string{"B": {"A"}, "C": {"A", "B"}}
+	if len(r.Refs) != len(want) {
+		t.Fatalf("got %v", r.Refs)
+	}
+	for name, refs := range want {
+		if !slices.Equal(r.Refs[name], refs) {
+			t.Errorf("%s: got %v, want %v", name, r.Refs[name], refs)
+		}
+	}
+}
+
+func TestRefsFollowTheWinningValue(t *testing.T) {
+	_, repo := tree(t, map[string]string{
+		"repo/common.yaml":    "S: s\nA: $S\nB: $A\nC: $S\n",
+		"repo/env.local.yaml": "A: plain\nC: none\n",
+	})
+	r := mustResolve(t, Options{RepoDir: repo})
+	// B was built from the A that held S, so the later A does not clear it; C's winning value references nothing.
+	if !slices.Equal(r.Refs["B"], []string{"A", "S"}) || r.Refs["A"] != nil || r.Refs["C"] != nil {
+		t.Fatalf("got %v", r.Refs)
+	}
+}
+
+func TestEncryptedMarksValuesBuiltFromAnEncryptedFile(t *testing.T) {
+	_, repo := tree(t, map[string]string{
+		"repo/common.yaml":        "P: p\n",
+		"repo/common.enc.yaml":    "x",
+		"repo/env.local.yaml":     "URL: u:$TOKEN@h\nHOP: $URL\nQ: $P\nTOKEN: plain\n",
+		"repo/env.local.enc.yaml": "x",
+	})
+	decrypt := func(path string) ([]backend.Pair, error) {
+		if strings.HasSuffix(path, "common.enc.yaml") {
+			return []backend.Pair{{Name: "TOKEN", Value: "t"}}, nil
+		}
+		return []backend.Pair{{Name: "Q", Value: "q"}}, nil
+	}
+	r := mustResolve(t, Options{RepoDir: repo, Decrypt: decrypt})
+	// TOKEN's winning value is plaintext, but URL and HOP were built from the encrypted one.
+	want := map[string]bool{"URL": true, "HOP": true, "Q": true}
+	if len(r.Encrypted) != len(want) {
+		t.Fatalf("got %v", r.Encrypted)
+	}
+	for name := range want {
+		if !r.Encrypted[name] {
+			t.Errorf("%s is not marked", name)
+		}
 	}
 }

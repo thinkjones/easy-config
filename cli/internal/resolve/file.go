@@ -14,7 +14,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func isEncrypted(path string) bool { return strings.HasSuffix(path, ".enc.yaml") }
+// IsEncrypted reports whether path names an encrypted values file (*.enc.yaml).
+func IsEncrypted(path string) bool { return strings.HasSuffix(path, ".enc.yaml") }
 
 // loadFile reads one values file: plaintext through loadYAML, an *.enc.yaml
 // through decrypt. A file that does not exist is not an error; present says so.
@@ -26,9 +27,9 @@ func loadFile(path, home string, decrypt func(string) ([]backend.Pair, error)) (
 		return nil, false, fmt.Errorf("%s: %w", path, err)
 	}
 
-	if isEncrypted(path) {
+	if IsEncrypted(path) {
 		if decrypt == nil {
-			return nil, true, fmt.Errorf("%s is encrypted, and this version of ezc cannot decrypt it yet", path)
+			return nil, true, fmt.Errorf("%s is encrypted, and no decrypter was supplied", path)
 		}
 		pairs, err = decrypt(path)
 	} else {
@@ -38,18 +39,33 @@ func loadFile(path, home string, decrypt func(string) ([]backend.Pair, error)) (
 		return nil, true, err
 	}
 
-	// Both paths converge here, so a home-relative path means the same thing
-	// whether it was committed in plaintext or encrypted. Reference expansion
-	// does NOT happen here: it needs the names resolved so far, which only the
-	// caller composing the files has.
-	for i := range pairs {
-		expanded, err := expandHome(pairs[i].Value, pairs[i].Name, path, home)
-		if err != nil {
-			return nil, true, err
+	// A home-relative path in plaintext means the same wherever it was
+	// committed. A decrypted value is data and is never rewritten. Reference
+	// expansion does NOT happen here: it needs the names resolved so far, which
+	// only the caller composing the files has.
+	if !IsEncrypted(path) {
+		for i := range pairs {
+			expanded, err := expandHome(pairs[i].Value, pairs[i].Name, path, home)
+			if err != nil {
+				return nil, true, err
+			}
+			pairs[i].Value = expanded
 		}
-		pairs[i].Value = expanded
 	}
 	return pairs, true, nil
+}
+
+// Plain reads one plaintext values file as written: names and raw values in file order,
+// with no home or reference expansion. A file that does not exist is (nil, false, nil).
+func Plain(path string) (pairs []backend.Pair, present bool, err error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("%s: %w", path, err)
+	}
+	pairs, err = loadYAML(path)
+	return pairs, err == nil, err
 }
 
 // expandHome resolves a leading ~ or $HOME in a value.
@@ -86,8 +102,8 @@ func expandHome(value, name, path, home string) (string, error) {
 	// Needed only when a value asks for it, so a machine with no home directory
 	// still loads any store whose values do not.
 	if home == "" {
-		return "", fmt.Errorf("%s: %s starts with a home reference (%s) but this process has no home directory.\n"+
-			"       Set HOME, or write the path out in full", path, name, prefix)
+		return "", &RefError{path, name, fmt.Sprintf("%s: %s starts with a home reference (%s) but this process has no home directory.\n"+
+			"       Set HOME, or write the path out in full", path, name, prefix)}
 	}
 	return home + rest, nil
 }
@@ -111,9 +127,12 @@ func expandHome(value, name, path, home string) (string, error) {
 //
 // HOME is the one name resolvable without being declared, because it is what
 // makes the shared store portable in the first place.
-func expandRefs(value, name, path, home string, resolved map[string]string) (string, error) {
+//
+// refs are the resolved names the value referenced, in the order met; the home
+// directory standing in for an undeclared HOME is not one.
+func expandRefs(value, name, path, home string, resolved map[string]string) (expanded string, refs []string, err error) {
 	if !strings.ContainsRune(value, '$') {
-		return value, nil
+		return value, nil, nil
 	}
 	var b strings.Builder
 	for i := 0; i < len(value); {
@@ -135,14 +154,17 @@ func expandRefs(value, name, path, home string, resolved map[string]string) (str
 			i++
 			continue
 		}
-		sub, found := lookupRef(ref, home, resolved)
+		sub, declared, found := lookupRef(ref, home, resolved)
 		if !found {
-			return "", unknownRefError(ref, name, path, resolved)
+			return "", nil, unknownRefError(name, path, resolved)
+		}
+		if declared {
+			refs = append(refs, ref)
 		}
 		b.WriteString(sub)
 		i = next
 	}
-	return b.String(), nil
+	return b.String(), refs, nil
 }
 
 // parseRef reads the reference beginning at value[i], which is known to be '$'.
@@ -180,27 +202,57 @@ func isRefChar(c byte, first bool) bool {
 	return false
 }
 
-func lookupRef(ref, home string, resolved map[string]string) (string, bool) {
+// lookupRef is the value ref stands for. declared says it is a resolved name, not the home directory.
+func lookupRef(ref, home string, resolved map[string]string) (value string, declared, found bool) {
 	if v, ok := resolved[ref]; ok {
-		return v, true
+		return v, true, true
 	}
 	if ref == "HOME" && home != "" {
-		return home, true
+		return home, false, true
 	}
-	return "", false
+	return "", false, false
 }
 
 // unknownRefError names what is in scope, because the overwhelmingly likely
 // cause is a typo or an ordering mistake, and both are answered by the list.
-func unknownRefError(ref, name, path string, resolved map[string]string) error {
+func unknownRefError(name, path string, resolved map[string]string) error {
 	available := sortedKeys(resolved)
 	scope := "nothing is defined yet at this point in the file"
 	if len(available) > 0 {
 		scope = "defined so far: " + strings.Join(available, ", ")
 	}
-	return fmt.Errorf("%s: %s references $%s, which is not defined.\n"+
+	return &RefError{path, name, fmt.Sprintf("%s: %s references a name that is not defined.\n"+
 		"       A value may only use a name set in an earlier file or an earlier line, %s.\n"+
-		"       Write $$%s if you meant a literal dollar sign", path, name, ref, scope, ref)
+		"       Write $$ if you meant a literal dollar sign", path, name, scope)}
+}
+
+// RefError is a value that could not be expanded: Name in the file at Path references a name that is
+// not defined, or the home directory when there is none. Its text never holds the value.
+type RefError struct {
+	Path, Name string
+	msg        string
+}
+
+func (e *RefError) Error() string { return e.msg }
+
+// Escape is the text to write in a plaintext values file so that value loads exactly as given: every
+// $ doubled. ok is false when no text does: a leading ~ or ~/ is always expanded.
+func Escape(value string) (text string, ok bool) {
+	if value == "~" || strings.HasPrefix(value, "~/") {
+		return "", false
+	}
+	return strings.ReplaceAll(value, "$", "$$"), true
+}
+
+// Unescape is what text in a plaintext values file loads as when it takes nothing from its
+// surroundings. ok is false when it holds a reference or starts with a home reference.
+func Unescape(text string) (value string, ok bool) {
+	value, err := expandHome(text, "", "", "")
+	if err != nil {
+		return "", false
+	}
+	value, _, err = expandRefs(value, "", "", "", nil)
+	return value, err == nil
 }
 
 // loadYAML reads a plaintext values file.
@@ -270,15 +322,13 @@ func loadYAML(path string) ([]backend.Pair, error) {
 // hasTag reports whether the scalar v was written with a tag (!x, !!str, or a
 // bare !). yaml.v3 gives every scalar an implicit tag, so Tag says nothing;
 // Style does, except for a bare !, which leaves no trace in the node. A plain
-// scalar cannot begin with !, so one whose source text does had that tag.
+// scalar cannot begin with !, and a quoted or block one begins with its quote
+// or indicator, so a node whose source text begins with ! had that tag.
 func hasTag(v *yaml.Node, src []byte) bool {
 	if v.Style&yaml.TaggedStyle != 0 {
 		return true
 	}
-	if v.Style != 0 {
-		return false // quoted or block: the ! is the value's own
-	}
-	lines := strings.Split(string(src), "\n")
+	lines := strings.Split(string(bytes.TrimPrefix(src, []byte("\ufeff"))), "\n")
 	if v.Line < 1 || v.Line > len(lines) {
 		return false
 	}

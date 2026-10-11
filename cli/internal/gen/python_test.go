@@ -165,3 +165,11 @@ json.dump(docs, sys.stdout)
 		}
 	}
 }
+
+func TestPythonRefusesPrivateNames(t *testing.T) {
+	m := manifest.Manifest{SchemaVersion: "v1", Required: map[string]manifest.Var{"_TOKEN": {Type: manifest.TypeStr, Desc: "d"}}}
+	_, err := Python(m, ".ezc/manifest.yaml")
+	if err == nil || err.Error() != "cannot generate Python: _TOKEN starts with an underscore, which pydantic treats as private" {
+		t.Errorf("got %v", err)
+	}
+}

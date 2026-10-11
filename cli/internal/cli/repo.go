@@ -69,29 +69,32 @@ func repoInit(sys System) error {
 		{"env.sh", share.EnvSh},
 	}
 	for _, f := range files {
-		status, err := ensureFile(filepath.Join(dir, f.name), f.content, f.name == "env.sh")
+		status, note, err := ensureFile(filepath.Join(dir, f.name), f.content, f.name == "env.sh")
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(sys.Stdout, "%s %s/%s\n", status, ezcDir, f.name)
+		fmt.Fprintf(sys.Stdout, "%s %s/%s%s\n", status, ezcDir, f.name, note)
 	}
 	_, err = fmt.Fprint(sys.Stdout, nextSteps)
 	return err
 }
 
-// ensureFile writes content to path unless it exists, and says "created" or "kept". For a shim, an existing file whose first line differs from content's is rewritten: "updated".
-func ensureFile(path, content string, shim bool) (string, error) {
+// ensureFile writes content to path unless it exists, and says "created" or "kept". For a shim, an existing file with a different first line is rewritten ("updated"), unless it is newer than the embedded one: that is kept, with a note, so a teammate's newer shim is not downgraded.
+func ensureFile(path, content string, shim bool) (status, note string, err error) {
 	old, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return "created", os.WriteFile(path, []byte(content), 0o644)
+		return "created", "", os.WriteFile(path, []byte(content), 0o644)
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	first, _, _ := strings.Cut(content, "\n")
 	oldFirst, _, _ := strings.Cut(string(old), "\n")
 	if shim && oldFirst != first {
-		return "updated", os.WriteFile(path, []byte(content), 0o644)
+		if n, ok := share.VersionOf(string(old)); ok && n > share.ShimVersion {
+			return "kept", fmt.Sprintf(" (version %d, newer than this ezc)", n), nil
+		}
+		return "updated", "", os.WriteFile(path, []byte(content), 0o644)
 	}
-	return "kept", nil
+	return "kept", "", nil
 }

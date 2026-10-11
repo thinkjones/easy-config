@@ -28,7 +28,7 @@ An environment named "export" cannot be passed to ` + "`ezc env`" + ` (it is the
 			return envCheck(sys, firstArg(args), manifestFlag, verbose)
 		},
 	}
-	cmd.Flags().StringVarP(&manifestFlag, "manifest", "m", "", "the manifest to check against (default: the repo's)")
+	cmd.Flags().StringVarP(&manifestFlag, "manifest", "m", "", "the manifest to check against; the values come from that manifest's folder, not this repo")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "show which file set each name")
 	cmd.AddCommand(newExportCmd(sys))
 	return cmd

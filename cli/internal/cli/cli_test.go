@@ -10,7 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
+	"github.com/thinkjones/easy-config/cli/internal/proc"
 	"github.com/thinkjones/easy-config/cli/share"
 )
 
@@ -21,6 +23,16 @@ type fake struct {
 	wd          string
 	children    [][]string // each RunChild call: name, args..., then "--env--", then the env
 	childExit   int
+
+	execs     []proc.Command                             // every Exec call
+	execFn    func(proc.Command) ([]byte, []byte, error) // the Exec response; nil is an error
+	secret    string                                     // what ReadSecret returns
+	secretErr error                                      // what ReadSecret fails with
+	prompts   []string                                   // every prompt ReadSecret was given
+	stdin     string                                     // what Stdin holds
+	tty       bool                                       // StdinIsTerminal
+	paths     map[string]string                          // what LookPath finds, by name
+	backend   *backend.Fake                              // the encryption backend; System.Backend
 }
 
 func newFake(t *testing.T) *fake {
@@ -28,6 +40,8 @@ func newFake(t *testing.T) *fake {
 	return &fake{
 		env: map[string]string{"HOME": t.TempDir(), "EZC_HOME": t.TempDir()},
 		wd:  t.TempDir(),
+
+		backend: &backend.Fake{},
 	}
 }
 
@@ -35,7 +49,7 @@ func (f *fake) sys() System {
 	return System{
 		Stdout: &f.out,
 		Stderr: &f.errOut,
-		Stdin:  strings.NewReader(""),
+		Stdin:  strings.NewReader(f.stdin),
 		Getenv: func(k string) string { return f.env[k] },
 		Environ: func() []string {
 			var env []string
@@ -52,7 +66,26 @@ func (f *fake) sys() System {
 			f.children = append(f.children, append(call, env...))
 			return f.childExit, nil
 		},
-		Version: "0.1.0",
+		Version: "0.2.0",
+		Exec: func(c proc.Command) ([]byte, []byte, error) {
+			f.execs = append(f.execs, c)
+			if f.execFn == nil {
+				return nil, nil, errors.New("no exec configured")
+			}
+			return f.execFn(c)
+		},
+		LookPath: func(name string) (string, error) {
+			if p, ok := f.paths[name]; ok {
+				return p, nil
+			}
+			return "", fmt.Errorf("%s: not found", name)
+		},
+		ReadSecret: func(prompt string) (string, error) {
+			f.prompts = append(f.prompts, prompt)
+			return f.secret, f.secretErr
+		},
+		StdinIsTerminal: func() bool { return f.tty },
+		Backend:         f.backend,
 	}
 }
 
@@ -68,12 +101,33 @@ func write(t *testing.T, path, content string) {
 	}
 }
 
+// secretIn writes name=value to file ("common.enc.yaml") in the layer's .ezc folder ("repo" or "store"),
+// through the fake backend, creating its policy first.
+func secretIn(t *testing.T, f *fake, layer, file, name, value string) {
+	t.Helper()
+	dir := filepath.Join(f.wd, ezcDir)
+	if layer == "store" {
+		p, err := storePaths(f.sys())
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir = p.StoreEzc()
+	}
+	policy := filepath.Join(dir, backend.FakePolicy)
+	if _, err := os.Stat(policy); err != nil {
+		write(t, policy, "")
+	}
+	if err := f.backend.Set(filepath.Join(dir, file), name, value); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestVersion(t *testing.T) {
 	f := newFake(t)
 	if err := f.run("version"); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.out.String(); got != "ezc 0.1.0\n" {
+	if got := f.out.String(); got != "ezc 0.2.0\n" {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -426,8 +480,8 @@ func TestEZC_STOREThatExistsButIsEmpty(t *testing.T) {
 func TestExportPrintsNothingOnFailure(t *testing.T) {
 	f := newFake(t)
 	repo(t, f, map[string]string{"manifest.yaml": empty, "env.local.yaml": "B: ok\nA: $NOPE\n"})
-	if err := f.run("env", "export"); err == nil || !strings.Contains(err.Error(), "NOPE") {
-		t.Fatalf("want an error naming NOPE, got %v", err)
+	if err := f.run("env", "export"); err == nil || !strings.Contains(err.Error(), "A references a name that is not defined") || strings.Contains(err.Error(), "NOPE") {
+		t.Fatalf("want an error naming A and not NOPE, got %v", err)
 	}
 	if f.out.Len() != 0 {
 		t.Fatalf("stdout %q", f.out.String())
@@ -1043,6 +1097,23 @@ func TestRepoInitUpdatesAnOldShim(t *testing.T) {
 	}
 }
 
+func TestRepoInitKeepsANewerShim(t *testing.T) {
+	f := newFake(t)
+	shim := filepath.Join(f.wd, ".ezc", "env.sh")
+	newer := fmt.Sprintf("# ezc-shim: %d\necho newer\n", share.ShimVersion+1)
+	write(t, shim, newer)
+	if err := f.run("repo", "init"); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("kept .ezc/env.sh (version %d, newer than this ezc)\n", share.ShimVersion+1)
+	if !strings.Contains(f.out.String(), want) {
+		t.Fatalf("got %q", f.out.String())
+	}
+	if b, _ := os.ReadFile(shim); string(b) != newer {
+		t.Fatalf("shim changed: %q", b)
+	}
+}
+
 func TestRepoInitInsideAnotherRepo(t *testing.T) {
 	f := newFake(t)
 	write(t, filepath.Join(f.wd, ".ezc", "manifest.yaml"), "schemaVersion: v1\nrequired: {}\n")
@@ -1071,4 +1142,192 @@ func TestRepoNeedsAVerb(t *testing.T) {
 	if !errors.As(err, &u) || !strings.Contains(err.Error(), "say init") {
 		t.Fatalf("got %v", err)
 	}
+}
+
+func TestStoreIsNotItsOwnRepo(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"common.yaml": "A: 1\n"})
+	f.wd = filepath.Join(f.env["EZC_HOME"], "store")
+	for _, args := range [][]string{{"list", "-g"}, {"list"}, {"env", "export"}} {
+		f.out.Reset()
+		if err := f.run(args...); err != nil {
+			t.Fatal(err)
+		}
+		got := f.out.String()
+		if strings.Count(got, "A") != 1 || strings.Contains(got, "overrides") {
+			t.Errorf("%v: got %q", args, got)
+		}
+		if args[0] == "env" && got != "export A='1'\n" {
+			t.Errorf("got %q", got)
+		}
+	}
+}
+
+func TestEnvManifestFlagHelp(t *testing.T) {
+	f := newFake(t)
+	if err := f.run("help", "env"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.out.String(), "the values come from that manifest's folder") {
+		t.Errorf("got %q", f.out.String())
+	}
+}
+
+const auditManifest = "schemaVersion: v1\nrequired:\n  NAME: {type: str, desc: who}\n"
+
+func TestStoreAuditClean(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"manifest.yaml": auditManifest, "common.yaml": "NAME: n\n"})
+	if err := f.run("store", "audit"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.out.String(); !strings.HasSuffix(got, "✓ nothing to fix\n") || !strings.Contains(got, "1 declared, 1 files") {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestStoreAuditFindings(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"manifest.yaml": auditManifest, "common.yaml": "STRAY: secret-value\n"})
+	err := f.run("store", "audit")
+	var x *ExitError
+	if !errors.As(err, &x) || x.Code != 1 {
+		t.Fatalf("got %v", err)
+	}
+	out := f.out.String()
+	if !strings.Contains(out, "STRAY (common.yaml)") || !strings.Contains(out, "NAME — declared but no file sets it") {
+		t.Fatalf("got %q", out)
+	}
+	if strings.Contains(out, "secret-value") {
+		t.Fatalf("a value leaked: %q", out)
+	}
+}
+
+func TestStoreAuditNoStore(t *testing.T) {
+	f := newFake(t)
+	err := f.run("store", "audit")
+	if err == nil || !strings.Contains(err.Error(), "no store at") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestStoreAuditBackendFailureIsAnError(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"manifest.yaml": auditManifest, "common.yaml": "NAME: n\n"})
+	secretIn(t, f, "store", "common.enc.yaml", "NAME", "v")
+	write(t, filepath.Join(f.env["EZC_HOME"], "store", ".ezc", "env.x.enc.yaml"), "garbage\n")
+	err := f.run("store", "audit")
+	var x *ExitError
+	if err == nil || errors.As(err, &x) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestStoreNeedsAVerb(t *testing.T) {
+	f := newFake(t)
+	wantUsage(t, f.run("store"), "say audit")
+}
+
+func TestDoctor(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	if err := f.run("doctor"); err != nil {
+		t.Fatalf("%v\n%s", err, f.out.String())
+	}
+	for _, want := range []string{"machine\n", "store\n", "repo\n", "environment local"} {
+		if !strings.Contains(f.out.String(), want) {
+			t.Errorf("no %q in\n%s", want, f.out.String())
+		}
+	}
+}
+
+func TestDoctorExitsOneWhenBroken(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	f.backend.Missing = true
+	wantExit(t, f.run("doctor"), 1)
+	if !strings.Contains(f.out.String(), "✗ backend") {
+		t.Fatalf("got\n%s", f.out.String())
+	}
+}
+
+func TestDoctorOnly(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	if err := f.run("doctor", "--only", "repo"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(f.out.String(), "machine") || !strings.Contains(f.out.String(), "repo\n") {
+		t.Fatalf("got\n%s", f.out.String())
+	}
+	err := f.run("doctor", "--only", "nope")
+	wantUsage(t, err, "machine")
+	wantUsage(t, err, "store")
+	wantUsage(t, err, "repo")
+}
+
+func TestDoctorNamedEnvironment(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	if err := f.run("doctor", "prod"); err != nil {
+		t.Fatalf("%v\n%s", err, f.out.String())
+	}
+	if !strings.Contains(f.out.String(), "environment prod") {
+		t.Fatalf("got\n%s", f.out.String())
+	}
+}
+
+func TestDoctorOutsideARepo(t *testing.T) {
+	f := newFake(t)
+	if err := f.run("doctor"); err != nil {
+		t.Fatalf("%v\n%s", err, f.out.String())
+	}
+	if !strings.Contains(f.out.String(), "not in an ezc repo") {
+		t.Fatalf("got\n%s", f.out.String())
+	}
+}
+
+func TestDoctorMissingExplicitStoreIsReported(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	f.env["EZC_STORE"] = filepath.Join(f.env["EZC_HOME"], "typo")
+	wantExit(t, f.run("doctor"), 1)
+	if !strings.Contains(f.out.String(), "✗ location") {
+		t.Fatalf("got\n%s", f.out.String())
+	}
+}
+
+func TestDoctorNoKey(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	f.backend.Locked = true
+	if err := f.run("doctor"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.out.String(), "! key") {
+		t.Fatalf("got\n%s", f.out.String())
+	}
+}
+
+func TestKeySource(t *testing.T) {
+	f := newFake(t)
+	sys := f.sys()
+	sys.Backend = nil // the default backend, whose key comes from the environment
+	check := func(wantNote string, wantFound bool) {
+		t.Helper()
+		note, found := keySource(sys)
+		if note != wantNote || found != wantFound {
+			t.Fatalf("got (%q, %v), want (%q, %v)", note, found, wantNote, wantFound)
+		}
+	}
+	check("~/.config/sops/age/keys.txt", false)
+	write(t, filepath.Join(f.env["HOME"], ".config", "sops", "age", "keys.txt"), "k")
+	check("~/.config/sops/age/keys.txt", true)
+	other := filepath.Join(t.TempDir(), "other.txt")
+	f.env["SOPS_AGE_KEY_FILE"] = other
+	check(other, false)
+	write(t, other, "k")
+	check(other, true)
+	f.env["SOPS_AGE_KEY"] = "AGE-SECRET-KEY-x"
+	check("SOPS_AGE_KEY", true)
 }

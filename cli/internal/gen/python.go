@@ -28,6 +28,9 @@ func Python(m manifest.Manifest, manifestPath string) ([]byte, error) {
 		if pythonKeywords[e.Name] {
 			return nil, fmt.Errorf("cannot generate Python: %s is a Python keyword", e.Name)
 		}
+		if strings.HasPrefix(e.Name, "_") {
+			return nil, fmt.Errorf("cannot generate Python: %s starts with an underscore, which pydantic treats as private", e.Name)
+		}
 	}
 
 	var b bytes.Buffer

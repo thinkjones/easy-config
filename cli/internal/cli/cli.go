@@ -11,6 +11,9 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/thinkjones/easy-config/cli/internal/backend"
+	"github.com/thinkjones/easy-config/cli/internal/proc"
 )
 
 // System is everything a command needs from outside the process.
@@ -27,6 +30,15 @@ type System struct {
 	// On Unix it replaces ezc with the command, and returns only when that failed.
 	RunChild func(name string, args, env []string) (int, error)
 	Version  string
+
+	// Exec runs a program with stdin and waits for it.
+	Exec     proc.Runner
+	LookPath func(string) (string, error)
+	// ReadSecret prints prompt to the terminal and reads a line without echo.
+	ReadSecret      func(prompt string) (string, error)
+	StdinIsTerminal func() bool
+	// Backend overrides the encryption backend; nil means the default backend for this machine. Tests set it.
+	Backend backend.Backend
 }
 
 // ExitError ends ezc with Code and no further message: the output already
@@ -107,6 +119,11 @@ Config
 		newCodegenCmd(sys),
 		newListCmd(sys),
 		newGetCmd(sys),
+		newSetCmd(sys),
+		newUnsetCmd(sys),
+		newEditCmd(sys),
+		newStoreCmd(sys),
+		newDoctorCmd(sys),
 		newRepoCmd(sys),
 	)
 	return root
