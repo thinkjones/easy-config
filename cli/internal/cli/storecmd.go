@@ -81,7 +81,7 @@ func newStoreStatusCmd(sys System) *cobra.Command {
 		Short: "say how the store stands against its remote",
 		Long: `Fetch from the store's remote, then print where the store is, its remote, whether it is in sync, ahead, behind, diverged or holds uncommitted changes, when the remote was last reached, and the names of pending access requests.
 
-Exits 0 whatever the state. A store that is not a git repo is not synced, and is said to be.`,
+Exits 0 in every state it can read. A store that is not a git repo is not synced, and is said to be.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			p, err := storeFolder(sys)

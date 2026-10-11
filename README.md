@@ -8,6 +8,39 @@
 go install github.com/thinkjones/easy-config/cli/cmd/ezc@latest
 ```
 
+`ezc` needs `git`, and [`sops`](https://github.com/getsops/sops) for secrets. `ezc setup` checks for both.
+
+## Quick start
+
+```sh
+# once per machine: your key, the store and ezc's config
+ezc setup --new-local
+
+# put values in the store, for every repo
+ezc set -g REGION us-east-1 --type str --desc "where we run"
+ezc set -g API_TOKEN --type secret --desc "the API's token"   # asks for the value at a hidden prompt
+
+# use them in a repo
+cd my-repo
+ezc repo init                      # creates .ezc/ in this folder
+ezc set PORT 8080 --type int --desc "the port to listen on"   # a value of the repo's own
+ezc env                            # check the environment against the manifest
+ezc run -- <command>               # run a command with it
+
+# share the store through a private GitHub repo (needs gh), and keep it level
+ezc setup --new-github owner/repo  # publishes the store you have
+ezc store push                     # after you change the store
+ezc store pull                     # to bring in changes made elsewhere
+```
+
+Each step is described below: [Set up](#set-up), [Writing to the store](#writing-to-the-store), [How a repo loads its environment](#how-a-repo-loads-its-environment) and [Syncing the store](#syncing-the-store). When something does not work, run `ezc doctor`.
+
+## Not there yet
+
+This is `ezc` 0.3: one person, on one machine or several. Adding a second person to a store (`ezc join`), bots, and setup for CI arrive in the next part. Until then a second machine needs the same key file: copy `~/.config/sops/age/keys.txt` from the first machine to the same path on the second, then run `ezc setup --store owner/repo` there. Setup uses a key file that is already there and never replaces it.
+
+Two things are done by hand for now: a repo that keeps secrets of its own needs the store's encryption policy copied into its `.ezc/` (see [Encryption](#encryption)), and two machines that declare a new name at the same time must resolve the conflict with git (see [Syncing the store](#syncing-the-store)). The registry and the TUI come later.
+
 ## Set up
 
 ```sh
@@ -20,26 +53,11 @@ ezc setup --store owner/repo          # an existing store: owner/repo (needs gh)
 
 Each line it prints is something that was already there (`✓`) or something it made (`+`). A new key is written to `~/.config/sops/age/keys.txt` (or the `key_file` of `config.toml`, or the file `SOPS_AGE_KEY_FILE` names), readable only by you. Back that file up when setup says so: without it your secrets cannot be read, and it cannot be recovered. Setup never prints the private key.
 
-A new store starts with an empty manifest, `recipients.yaml` naming you and your public key, the encryption policy written from it, and one commit. Your name is `--name`, else the `user` of `config.toml`, else your login name in lower case; it is lower case letters, digits and `-`.
+A new store starts with an empty manifest, `recipients.yaml` naming you and your public key, the encryption policy written from it, and one commit. Your name is `--name`, else the `user` of `config.toml`, else your login name (`$USER`) in lower case; it is lower case letters, digits and `-`, starting with a letter or a digit. When none of these gives one, setup stops and asks for `--name`.
 
-`--store a/b` always means the GitHub repo `a/b`; for a folder of that shape write `./a/b`. After `--store`, when your key is not one the store's `recipients.yaml` names, setup says so and prints your public key: give it to someone who has access. The machine is set up either way.
+`--store a/b` always means the GitHub repo `a/b`; for a folder of that shape write `./a/b`. After `--store`, when your key is not one the store's `recipients.yaml` names, setup says so and prints your public key: give it to someone who has access (the command they add it with is [not there yet](#not-there-yet)). The machine is set up either way, and `ezc doctor` reports the missing access as a problem until it is given. To use the key of another machine of yours, put its key file in place before you run setup.
 
 Run again, setup changes only what is missing. A key file, a store or a value in `config.toml` that is already there is never overwritten, and a store with no remote is published by `--new-github`. Asking for a different store than the one in place is refused: move the store away first. Setup manages the store in ezc's home, so it refuses to run while `EZC_STORE` is set.
-
-## Status
-
-Parts 1 and 2 of 7 are built: the environment commands, and secrets: encrypted values files read and written through `sops`, `ezc set`, `unset` and `edit`, `ezc store audit` and `ezc doctor`. From part 3, `ezc setup` and store sync (`ezc store status`, `pull` and `push`) are built. Still to come: users and bots, the registry and the TUI.
-
-## Quick start
-
-```sh
-ezc setup --new-local              # once per machine: your key and the store
-ezc repo init                      # creates .ezc/ in this folder
-$EDITOR .ezc/manifest.yaml         # declare what the repo needs under `required`
-$EDITOR .ezc/env.local.yaml        # give it values: NAME: value
-ezc env                            # check the environment against the manifest
-ezc run -- <command>               # run a command with it
-```
 
 ## Commands
 
@@ -56,7 +74,7 @@ ezc run -- <command>               # run a command with it
 | `ezc set NAME [VALUE] [--env E] [-g] [--expand] [--type T] [--desc D] [--optional] [--values a,b] [--min N] [--max N]` | Set a value in `common.yaml` (or `env.E.yaml`), in the repo or with `-g` in the store. A name the manifest does not declare is declared in the same step, as required unless `--optional`: give `--type` and `--desc`. The declaration is written first, then the value; if the value cannot be written the manifest is put back as it was. The value is checked against the declared type and bounds, and stored literally: what you give is what loads, so a `$` is written to the file as `$$` (a literal value cannot start with `~` or `~/`, which is always expanded). With `--expand` the value is written as given, so `$NAME`, `${NAME}`, `$$` and a leading `~` keep their meaning at load; the type check is then skipped for a value holding a `$`, the environment is resolved once, and a reference to a name that is not defined yet puts the file back as it was (when the environment cannot be resolved for another reason, such as a missing key, the value is kept and the reference is not checked). `--expand` does not apply to a secret, which is always stored exactly as given. A secret goes to the encrypted file and is typed at a hidden prompt or piped on stdin, never given as an argument; leave VALUE out of any variable to do the same. A name already in the other file of the pair (plaintext against encrypted) is refused. Prints names and files, never the value. |
 | `ezc unset NAME [--env E] [-g] [--undeclare]` | Remove a name's value from the plaintext and the encrypted file of the base (`common` or `env.E`), whichever hold it. The declaration stays; `--undeclare` removes it too, and is refused while any other values file in the scope still holds the name. |
 | `ezc edit [--env E] [--secrets] [-g]` | Open `common.yaml` (or `env.E.yaml`), or with `--secrets` the encrypted file of the same name, in `$VISUAL` or `$EDITOR`, in the repo or with `-g` in the store. The editor must wait until you finish editing, so a graphical one needs a flag, for example `export EDITOR="code --wait"`; ezc refuses one that returns at once. The command is split on spaces, including in a path (so an editor under a folder with a space in its name needs a wrapper script on a path without one), and quoting inside `EDITOR` is not supported. A plaintext file that is not valid afterwards is reported, and a file this command created and you left empty is removed. With `--secrets` the file must already exist (create it with `ezc set`), and the result is decrypted again to check it; closing the editor without a change is fine. Needs a terminal. |
-| `ezc store status` | Fetch from the store's remote, then print where the store is, its remote, how it stands against the remote (in sync, ahead, behind, diverged, uncommitted changes), when the remote was last reached and the pending access requests. Exits 0 in every state. |
+| `ezc store status` | Fetch from the store's remote, then print where the store is, its remote, how it stands against the remote (in sync, ahead, behind, diverged, uncommitted changes), when the remote was last reached and the pending access requests. Exits 0 in every state it can read. |
 | `ezc store pull` | Bring the remote's commits into the store, replaying the commits made here on top of them. An encrypted file changed on both sides keeps the remote's version: the names to set again are listed and the command exits 1. Prints names and files, never a value. |
 | `ezc store push` | Send the commits made here to the store's remote. Refused while the store is behind the remote or has diverged from it, holds uncommitted changes, or has no remote. |
 | `ezc store audit` | Check the store's values files against its manifest: every value declared, every `required` name set in at least one file, secrets in encrypted files and nothing else there, no value still a placeholder or the wrong shape, and no value in an encrypted file left unencrypted. Prints names, files and the fix for each, never a value; exits 1 when there is anything to fix. |
@@ -80,7 +98,7 @@ the store is 2 commits behind origin. Run `ezc store pull` first: a change made 
 
 A store that is ahead or has no remote takes the write; when the remote cannot be reached, what was last known of it decides. When the write worked and the commit did not, the command says so and where to commit it with git.
 
-A store that is not a git repo (an `EZC_STORE` pointing at a plain folder) is written as before, with no commit. A write to any other repo never touches git.
+A store that is not a git repo (an `EZC_STORE` pointing at a plain folder) is written with no commit, and is neither fetched nor reported on. A write to any other repo never touches git.
 
 ## Syncing the store
 
@@ -102,7 +120,7 @@ fetched   just now
 requests  none
 ```
 
-`state` is one of `in sync`, `N commits ahead of origin`, `N commits behind origin`, `diverged from origin (A ahead, B behind)` and `uncommitted changes`. `fetched` is how long ago the remote was last reached, followed by `; origin could not be reached` when it was not reached this time. `requests` is `none` or the names of the pending access requests. A password or token in the remote's URL is not printed. A store with no remote prints `remote    none (local only)` and `fetched   n/a`. A store that is not a git repo prints only where it is and `state     not a git repo, so it is not synced`. Status exits 0 in every state it can read.
+`state` is one of `in sync`, `N commits ahead of origin`, `N commits behind origin`, `diverged from origin (A ahead, B behind)` and `uncommitted changes`. `fetched` is how long ago the remote was last reached, followed by `; origin could not be reached` when it was not reached this time. `requests` is `none` or the names of the pending access requests (the files of the store's `.ezc/requests/`; one whose name could not be a person's name in the store is not shown). A password or token in the remote's URL is not printed. A store with no remote prints `remote    none (local only)` and `fetched   n/a`. A store that is not a git repo prints only where it is and `state     not a git repo, so it is not synced`. Status exits 0 in every state it can read, and 1 when git cannot say how the store stands, for example when the store is not on a branch.
 
 `ezc store pull` prints `pulled 3 commits from origin` or `already up to date`. Commits you made here are replayed on top of the remote's. An encrypted file cannot be merged, so when one was changed both here and on the remote the remote's version is kept and the command tells you what to do again, on stderr, and exits 1:
 
@@ -116,10 +134,10 @@ The list holds the names you changed in that file, never a value; a name you rem
 A plaintext file changed in the same place on both sides stops the pull, and the store is left exactly as it was:
 
 ```
-.ezc/manifest.yaml was changed here and on the remote in the same place, so nothing was pulled. Resolve it in /Users/gene/Library/ezc/store with git (git pull --rebase).
+.ezc/common.yaml, .ezc/manifest.yaml were changed here and on the remote in the same place, so nothing was pulled. Resolve them in /Users/gene/Library/ezc/store with git (git pull --rebase).
 ```
 
-This is a limit to know about: two people who each declare a new name at the same time both add it at the end of `manifest.yaml`, so the second to pull gets this conflict and must resolve it with git: run `git pull --rebase` in the store, keep both declarations, `git add` the file and `git rebase --continue`. Pull before you declare a name and push soon after to make it rare.
+This is a limit to know about: two machines that each declare a new name at the same time both add it at the end of `manifest.yaml` (and its value at the end of the same values file), so the second to pull gets this conflict and must resolve it with git: run `git pull --rebase` in the store, edit each file named so that it holds both sides' entries in full (when two declarations differ only in their names, git marks only the name lines, and the lines under them must be written out for each), `git add` the files and `git rebase --continue`. `ezc store status` says `diverged from origin` until then, and writes to the store are refused. Pull before you declare a name and push soon after to make it rare. Setting a value for a name that is already declared does not touch the manifest.
 
 A pull is also refused when the store holds uncommitted changes (commit or discard them with git first), when it has no remote (`ezc setup --new-github owner/repo` gives it one), and when the remote cannot be reached.
 
@@ -161,6 +179,8 @@ A repo's `.ezc/` folder and the global store use the same layout. Every values f
 | `.sops.yaml` | The encryption policy: which files are encrypted, and for which keys. Needed before a secret can be stored in the folder. `ezc setup` writes the store's; see [Encryption](#encryption). |
 | `recipients.yaml` | In the store only: who can decrypt it, by name and public key. `ezc setup` writes the first entry. |
 | `env.sh` | The shim mise or direnv sources. Written by `ezc repo init`; do not edit. |
+
+On a machine, ezc's home holds the store (`store/`, a git repo whose values are in its `.ezc/`), `config.toml` (your name in the store, the key file, and the store's remote) and `state.json` (when the store's remote was last reached). `ezc setup` writes the first two.
 
 A values file is one flat YAML mapping of `NAME: value` lines. Values are read as raw text, so no type is inferred: `08540` stays `08540`.
 
