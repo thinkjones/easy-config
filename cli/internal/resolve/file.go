@@ -3,6 +3,7 @@ package resolve
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -218,7 +219,7 @@ func loadYAML(path string) ([]backend.Pair, error) {
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(b, &doc); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, invalidYAML(path, err)
 	}
 	var out []backend.Pair
 	if doc.Kind == 0 {
@@ -243,6 +244,17 @@ func loadYAML(path string) ([]backend.Pair, error) {
 		out = append(out, backend.Pair{Name: k.Value, Value: v.Value})
 	}
 	return out, nil
+}
+
+var yamlLine = regexp.MustCompile(`line (\d+):`)
+
+// invalidYAML is the error for a values file the YAML parser rejects. It keeps
+// the line number and drops the rest of the parser's text, which can quote the file.
+func invalidYAML(path string, err error) error {
+	if m := yamlLine.FindStringSubmatch(err.Error()); m != nil {
+		return fmt.Errorf("%s: not valid YAML (line %s)", path, m[1])
+	}
+	return fmt.Errorf("%s: not valid YAML", path)
 }
 
 func sortedKeys(m map[string]string) []string {

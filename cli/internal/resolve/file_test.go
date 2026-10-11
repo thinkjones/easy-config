@@ -1,6 +1,7 @@
 package resolve
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,5 +121,35 @@ func TestMissingFileIsAbsent(t *testing.T) {
 	pairs, present, err := loadFile(filepath.Join(t.TempDir(), "common.yaml"), "", nil)
 	if err != nil || present || pairs != nil {
 		t.Errorf("got %v, %v, %v", pairs, present, err)
+	}
+}
+
+// A parser error never quotes the file: yaml.v3 names an unknown anchor, which here is most of a password.
+func TestYAMLErrorsNeverQuoteTheFile(t *testing.T) {
+	p := write(t, "env.local.yaml", "PW: *hunter2star\n")
+	_, _, err := loadFile(p, "", nil)
+	if err == nil || err.Error() != p+": not valid YAML" {
+		t.Errorf("got %v", err)
+	}
+	p = write(t, "env.local.yaml", "A: 1\n  PW: hunter2star\n")
+	_, _, err = loadFile(p, "", nil)
+	if err == nil || err.Error() != p+": not valid YAML (line 2)" {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestInvalidYAML(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{errors.New("yaml: line 12: did not find expected key"), "f.yaml: not valid YAML (line 12)"},
+		{errors.New("yaml: unknown anchor 'hunter2star' referenced"), "f.yaml: not valid YAML"},
+		{errors.New("yaml: unmarshal errors:\n  line 3: cannot unmarshal !!str `hunter2` into int"), "f.yaml: not valid YAML (line 3)"},
+	}
+	for _, c := range cases {
+		if got := invalidYAML("f.yaml", c.err).Error(); got != c.want {
+			t.Errorf("got %q, want %q", got, c.want)
+		}
 	}
 }
