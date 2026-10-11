@@ -14,19 +14,23 @@ import (
 // schemaID is the published URL of the manifest JSON Schema; change it with the file's location.
 const schemaID = "https://raw.githubusercontent.com/thinkjones/easy-config/main/cli/schema/" + manifest.SchemaVersion + "/manifest.schema.json"
 
-// writeOut writes b to path, creating its folder, and says "wrote <path>" on stderr; "" writes to stdout.
+// writeOut writes b to path (relative to the working directory), creating its folder, and says "wrote <path>" on stderr; "" writes to stdout.
 func writeOut(sys System, path string, b []byte) error {
 	if path == "" {
 		_, err := sys.Stdout.Write(b)
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	abs, err := absPath(sys, path)
+	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, b, 0o644); err != nil {
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(sys.Stderr, "wrote %s\n", path)
+	if err := os.WriteFile(abs, b, 0o644); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(sys.Stderr, "wrote %s\n", path)
 	return err
 }
 
@@ -46,15 +50,15 @@ func newManifestValidateCmd(sys System) *cobra.Command {
 		Short: "check that the manifest is well formed",
 		Args:  noArgs,
 		RunE: func(*cobra.Command, []string) error {
-			_, path, explicit, err := manifestTarget(sys, manifestFlag)
+			tgt, err := manifestTarget(sys, manifestFlag)
 			if err != nil {
 				return err
 			}
-			m, err := loadManifest(path, explicit)
+			m, err := loadManifest(tgt.Path, tgt.Explicit)
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(sys.Stdout, "%s ok — %d required, %d optional (schema %s)\n", path, len(m.Required), len(m.Optional), m.SchemaVersion)
+			_, err = fmt.Fprintf(sys.Stdout, "%s ok — %d required, %d optional (schema %s)\n", tgt.Path, len(m.Required), len(m.Optional), m.SchemaVersion)
 			return err
 		},
 	}
@@ -97,15 +101,15 @@ func newCodegenPythonCmd(sys System) *cobra.Command {
 		Long:  "Validate the manifest, then generate a pydantic v2 module for it. An invalid manifest generates nothing.",
 		Args:  noArgs,
 		RunE: func(*cobra.Command, []string) error {
-			_, path, explicit, err := manifestTarget(sys, manifestFlag)
+			tgt, err := manifestTarget(sys, manifestFlag)
 			if err != nil {
 				return err
 			}
-			m, err := loadManifest(path, explicit)
+			m, err := loadManifest(tgt.Path, tgt.Explicit)
 			if err != nil {
 				return err
 			}
-			b, err := gen.Python(m, path)
+			b, err := gen.Python(m, tgt.Source)
 			if err != nil {
 				return err
 			}

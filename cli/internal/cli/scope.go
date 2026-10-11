@@ -87,22 +87,37 @@ func load(sys System, repo, env string) (resolve.Result, error) {
 	})
 }
 
-// manifestTarget is the repo (a .ezc directory) and manifest path a command works on: the
-// repo's own manifest, or the file named by -m, resolved against the working directory.
-func manifestTarget(sys System, flag string) (repo, path string, explicit bool, err error) {
+// target is the manifest a command works on. Source is how generated files name it: the same on every machine.
+type target struct {
+	Repo     string // the .ezc directory whose values go with the manifest
+	Path     string // absolute, where the manifest is read
+	Source   string
+	Explicit bool // the path came from -m
+}
+
+// manifestTarget is the repo's own manifest, or the file named by -m, resolved against the working directory.
+func manifestTarget(sys System, flag string) (target, error) {
 	if flag == "" {
-		repo, err = requireRepoDir(sys)
-		return repo, filepath.Join(repo, manifestName), false, err
+		repo, err := requireRepoDir(sys)
+		return target{Repo: repo, Path: filepath.Join(repo, manifestName), Source: ezcDir + "/" + manifestName}, err
 	}
-	path = flag
-	if !filepath.IsAbs(path) {
-		wd, err := sys.Getwd()
-		if err != nil {
-			return "", "", true, err
-		}
-		path = filepath.Join(wd, path)
+	path, err := absPath(sys, flag)
+	if err != nil {
+		return target{}, err
 	}
-	return filepath.Dir(path), path, true, nil
+	return target{Repo: filepath.Dir(path), Path: path, Source: filepath.ToSlash(flag), Explicit: true}, nil
+}
+
+// absPath is p resolved against the working directory as sys sees it.
+func absPath(sys System, p string) (string, error) {
+	if filepath.IsAbs(p) {
+		return p, nil
+	}
+	wd, err := sys.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(wd, p), nil
 }
 
 // loadManifest reads and validates a manifest; an invalid one is an error listing every problem.

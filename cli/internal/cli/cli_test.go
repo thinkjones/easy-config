@@ -450,7 +450,7 @@ func TestManifestValidateInvalid(t *testing.T) {
 	f := newFake(t)
 	repo(t, f, map[string]string{"manifest.yaml": "schemaVersion: v1\nrequired:\n  A: {type: str}\n  B: {type: int, min: 5, max: 1, desc: x}\n"})
 	err := f.run("manifest", "validate")
-	if err == nil || !strings.Contains(err.Error(), "is invalid:") || !strings.Contains(err.Error(), "A") || !strings.Contains(err.Error(), "B") {
+	if err == nil || !strings.Contains(err.Error(), "is invalid:") || !strings.Contains(err.Error(), "A: empty desc") || !strings.Contains(err.Error(), "B: min 5 exceeds max 1") {
 		t.Fatalf("got %v", err)
 	}
 	if f.out.Len() != 0 {
@@ -547,7 +547,10 @@ func TestCommittedSchemaIsCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(filepath.Join("..", "..", "schema", "v1", "manifest.schema.json"))
-	if err != nil || !bytes.Equal(got, want) {
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
 		t.Fatal("cli/schema/v1/manifest.schema.json is stale — run: mise run schema:build")
 	}
 }
@@ -563,5 +566,44 @@ func TestUnknownTypeRefusedByValidateAndCodegen(t *testing.T) {
 		if f.out.Len() != 0 {
 			t.Errorf("%v: stdout %q", args, f.out.String())
 		}
+	}
+}
+
+func TestCodegenSourceIsStableAcrossCheckouts(t *testing.T) {
+	var outs []string
+	for range 2 {
+		f := newFake(t)
+		good(t, f)
+		if err := f.run("codegen", "python"); err != nil {
+			t.Fatal(err)
+		}
+		outs = append(outs, f.out.String())
+	}
+	if outs[0] != outs[1] || !strings.Contains(outs[0], "# Source:      .ezc/manifest.yaml\n") {
+		t.Fatalf("outputs differ or lack the stable source:\n%s", outs[0][:200])
+	}
+}
+
+func TestCodegenExplicitManifestSourceAsTyped(t *testing.T) {
+	f := newFake(t)
+	write(t, filepath.Join(f.wd, "sub", "other.yaml"), m1)
+	if err := f.run("codegen", "python", "-m", "sub/other.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.out.String(), "# Source:      sub/other.yaml\n") {
+		t.Fatalf("got %q", f.out.String()[:200])
+	}
+}
+
+func TestRelativeOutputIsUnderTheWorkingDirectory(t *testing.T) {
+	f := newFake(t)
+	if err := f.run("manifest", "schema", "-o", "out/s.json"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.wd, "out", "s.json")); err != nil {
+		t.Fatal(err)
+	}
+	if f.errOut.String() != "wrote out/s.json\n" {
+		t.Fatalf("stderr %q", f.errOut.String())
 	}
 }

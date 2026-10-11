@@ -43,11 +43,12 @@ func firstArg(args []string) string {
 
 // envCheck is `ezc env`: resolve, then validate against the manifest.
 func envCheck(sys System, arg, manifestPath string, verbose bool) error {
-	repo, manifestPath, explicit, err := manifestTarget(sys, manifestPath)
+	tgt, err := manifestTarget(sys, manifestPath)
 	if err != nil {
 		return err
 	}
-	m, err := loadManifest(manifestPath, explicit)
+	repo := tgt.Repo
+	m, err := loadManifest(tgt.Path, tgt.Explicit)
 	if err != nil {
 		return err
 	}

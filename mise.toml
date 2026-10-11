@@ -26,6 +26,6 @@ depends = ["cli:build"]
 run = '''
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
-./cli/bin/ezc manifest schema -o "$tmp" 2>/dev/null
+./cli/bin/ezc manifest schema -o "$tmp" >/dev/null || exit 1
 diff -u cli/schema/v1/manifest.schema.json "$tmp" || { echo "cli/schema/v1/manifest.schema.json is stale — run: mise run schema:build" >&2; exit 1; }
 '''
