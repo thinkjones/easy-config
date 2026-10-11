@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -94,11 +95,22 @@ func realEnv(t *testing.T) backendtest.Env {
 	if err := os.Mkdir(noPolicy, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	b := New(r.opts)
+	public, err := b.PublicKey(r.keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := os.ReadFile(r.keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return backendtest.Env{
-		Backend:     New(r.opts),
+		Backend:     b,
 		Dir:         r.dir,
 		NoPolicyDir: noPolicy,
 		Lock:        func() { writeKey(t, r.keyFile) },
+		Public:      public,
+		Private:     private,
 	}
 }
 
@@ -697,6 +709,7 @@ func TestEveryOperationThatRunsSopsNamesAMissingTool(t *testing.T) {
 		"create":  func() error { return b.Set(fresh, "A", "v") },
 		"Unset":   func() error { return b.Unset(file, "A") },
 		"Edit":    func() error { return b.Edit(file, "nano") },
+		"Rewrap":  func() error { return b.Rewrap(file) },
 	}
 	for name, op := range ops {
 		err := op()
@@ -915,5 +928,88 @@ func TestSetLeavesOtherStoredValuesAlone(t *testing.T) {
 	}
 	if want := []string{"B"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("ChangedNames = %v, want %v", got, want)
+	}
+}
+
+func TestRewrapRunsUpdatekeysInTheFilesFolder(t *testing.T) {
+	r := &recorder{}
+	b, dir := recorded(t, r, []string{"HOME=/h"})
+	file := filepath.Join(dir, "common.enc.yaml")
+	for _, name := range []string{PolicyFile, "common.enc.yaml"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("A: ENC[x]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Rewrap(file); err != nil {
+		t.Fatalf("Rewrap: %v", err)
+	}
+	if len(r.cmds) != 1 {
+		t.Fatalf("ran %d commands, want 1", len(r.cmds))
+	}
+	c := r.cmds[0]
+	if want := []string{"updatekeys", "--yes", "common.enc.yaml"}; !slices.Equal(c.Args, want) {
+		t.Errorf("Args = %v, want %v", c.Args, want)
+	}
+	if c.Dir != dir {
+		t.Errorf("Dir = %q, want %q", c.Dir, dir)
+	}
+	for _, s := range append(slices.Clone(c.Args), c.Env...) {
+		if strings.Contains(s, "AGE-SECRET-KEY") {
+			t.Errorf("key text in the command: %q", s)
+		}
+	}
+}
+
+func TestRewrapWithoutPolicyRunsNothing(t *testing.T) {
+	r := &recorder{}
+	b, dir := recorded(t, r, nil)
+	file := filepath.Join(dir, "common.enc.yaml")
+	if err := os.WriteFile(file, []byte("A: ENC[x]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Rewrap(file); !errors.Is(err, backend.ErrNoPolicy) {
+		t.Fatalf("Rewrap error = %v, want ErrNoPolicy", err)
+	}
+	if len(r.cmds) != 0 {
+		t.Errorf("ran %d commands", len(r.cmds))
+	}
+}
+
+func TestRewrapFailureNeverPassesStderr(t *testing.T) {
+	r := &recorder{stderr: "boom s3cr3t-value", err: errors.New("exit status 1")}
+	b, dir := recorded(t, r, nil)
+	file := filepath.Join(dir, "common.enc.yaml")
+	for _, name := range []string{PolicyFile, "common.enc.yaml"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("A: ENC[x]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := b.Rewrap(file)
+	if err == nil || strings.Contains(err.Error(), "s3cr3t-value") {
+		t.Fatalf("Rewrap error = %v", err)
+	}
+}
+
+func TestRewrapWithAKeyThatCannotOpenTheFileIsNoKey(t *testing.T) {
+	e := realEnv(t)
+	file := filepath.Join(e.Dir, "common.enc.yaml")
+	if err := e.Backend.Set(file, "A", "s3cr3t-value"); err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := e.Backend.NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A policy the file already matches is a no-op that needs no key.
+	if err := e.Backend.WritePolicy(e.Dir, []string{e.Public, second}); err != nil {
+		t.Fatal(err)
+	}
+	e.Lock()
+	err = e.Backend.Rewrap(file)
+	if !errors.Is(err, backend.ErrNoKey) {
+		t.Fatalf("Rewrap error = %v, want ErrNoKey", err)
+	}
+	if strings.Contains(err.Error(), "s3cr3t-value") {
+		t.Error("the error holds a value")
 	}
 }

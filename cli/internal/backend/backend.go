@@ -32,6 +32,16 @@ type Backend interface {
 	// WritePolicy writes the backend's policy file in dir for these recipients, replacing one that is there.
 	// No recipients is an error.
 	WritePolicy(dir string, recipients []string) error
+	// Recipients returns the public keys the file is encrypted for, sorted. It needs no key and no tool.
+	Recipients(path string) ([]string, error)
+	// Rewrap re-encrypts the file's data key for the policy in its folder. It needs the key and the tool, and
+	// fails with ErrNoKey, ErrNoTool or ErrNoPolicy as Set does.
+	Rewrap(path string) error
+	// CanDecrypt is nil when that private key alone opens the file. It needs no tool; its error names the
+	// file, never the key.
+	CanDecrypt(path string, private []byte) error
+	// ValidRecipient is nil for a well-formed public key.
+	ValidRecipient(key string) error
 	// ToolHint is one line saying how to install the backend's tool; "" when it needs none.
 	ToolHint(goos string) string
 	// BrewFormula is the Homebrew formula that installs the tool; "" when there is none.
