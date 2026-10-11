@@ -137,6 +137,16 @@ func (j joinFix) storeAsCloned(f *fake) {
 	}
 }
 
+// joinUser is the user of f's config.toml; "" when it has none or there is no config.
+func joinUser(t *testing.T, f *fake) string {
+	t.Helper()
+	c, _, err := config.Load(setupConfig(f))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c.User
+}
+
 // joinPushes are the git commands f ran that push.
 func joinPushes(f *fake) []proc.Command {
 	var out []proc.Command
@@ -342,6 +352,60 @@ func TestJoinAlreadyARecipient(t *testing.T) {
 	if got := j.join(c, "--name", "sam"); !strings.HasSuffix(got, "✓ gene can already read this store.\n") {
 		t.Fatalf("stdout:\n%s", got)
 	}
+	if b, c := joinUser(t, j.b), joinUser(t, c); b != "gene" || c != "gene" {
+		t.Fatalf("users %q and %q, want the registry's name for the key", b, c)
+	}
+}
+
+func TestJoinAlreadyARecipientAsAMachine(t *testing.T) {
+	a := newFake(t)
+	x := accessStoreWith(t, a, map[string]recipients.Recipient{
+		"gene":        accessEntry(accessGene),
+		"gene-laptop": {Key: accessSam, Kind: recipients.KindMachine, Owner: "gene", Added: "2026-10-01", AddedBy: "gene"},
+	}, accessGene, accessSam)
+	f := newFake(t)
+	write(t, setupKeyFile(f), "FAKE-KEY-bb02\n")
+	out, _, err := joinRun(t, f, "join", x.bare, "--name", "sam")
+	if err != nil || !strings.HasSuffix(out, "✓ gene-laptop can already read this store.\n") {
+		t.Fatalf("%v\nstdout:\n%s", err, out)
+	}
+	if got := joinUser(t, f); got != "gene" {
+		t.Fatalf("user %q, want the machine's owner", got)
+	}
+}
+
+func TestJoinNeverChangesTheConfigsUser(t *testing.T) {
+	j := joinMachines(t)
+	if err := config.Save(setupConfig(j.b), config.Config{User: "samantha"}); err != nil {
+		t.Fatal(err)
+	}
+	note := "! " + setupConfig(j.b) + " names you samantha, not sam, and was left as it is.\n"
+	if got := j.join(j.b, "--name", "sam"); !strings.HasSuffix(got, "+ pushed your request: "+joinBranch+"\n"+note+joinClosing) {
+		t.Fatalf("stdout:\n%s", got)
+	}
+	// Waiting, and then a recipient under the name asked for: the config's user still stays.
+	if got := j.join(j.b, "--name", "sam"); !strings.HasSuffix(got, "✓ your request is waiting: "+joinBranch+"\n"+note+joinClosing) {
+		t.Fatalf("stdout:\n%s", got)
+	}
+	accessWant(t, j.a, "✓ add sam\n✓ pushed to "+j.x.bare+"\n", "user", "add", "sam", setupPublicKey(t, j.b))
+	if _, _, err := joinRun(t, j.b, "store", "pull"); err != nil {
+		t.Fatal(err)
+	}
+	if got := j.join(j.b); !strings.HasSuffix(got, "✓ sam can already read this store.\n"+note) {
+		t.Fatalf("stdout:\n%s", got)
+	}
+	if got := joinUser(t, j.b); got != "samantha" {
+		t.Fatalf("user %q", got)
+	}
+}
+
+func TestJoinAHostNameThatIsNotPlain(t *testing.T) {
+	j := joinMachines(t)
+	j.b.hostname = "sam's laptop: \x1b[2J\nkey: other"
+	j.join(j.b, "--name", "sam")
+	if q := j.request(j.b); q.Host != j.b.hostname || q.Key != setupPublicKey(t, j.b) {
+		t.Fatalf("request %+v", q)
+	}
 }
 
 func TestJoinANameThatIsTaken(t *testing.T) {
@@ -356,6 +420,24 @@ func TestJoinANameThatIsTaken(t *testing.T) {
 			t.Fatalf("branches %q", got)
 		}
 		j.storeAsCloned(j.b)
+		// The name that was refused is not this machine's user; the one that goes through is.
+		if got := joinUser(t, j.b); got != "" {
+			t.Fatalf("user %q after a refused name", got)
+		}
+		_, _, err = joinRun(t, j.b, "join", j.x.bare)
+		wantUsage(t, err, "ezc join: say --name <name>")
+		want := "✓ the store: " + setupStore(j.b) + "\n" +
+			"✓ your key: ~/.config/sops/age/keys.txt\n" +
+			"✓ the config: " + setupConfig(j.b) + "\n" +
+			"+ pushed your request: ezc/join-gene-2\n" +
+			"+ wrote " + setupConfig(j.b) + "\n" +
+			"\nAsk someone who can read the store to run: ezc user approve gene-2\nThen run ezc store pull.\n"
+		if got := j.join(j.b, "--name", "gene-2"); got != want {
+			t.Fatalf("stdout:\n%s\nwant:\n%s", got, want)
+		}
+		if got := joinUser(t, j.b); got != "gene-2" {
+			t.Fatalf("user %q", got)
+		}
 	})
 	t.Run("by a request that is waiting", func(t *testing.T) {
 		j := joinMachines(t)
@@ -370,6 +452,9 @@ func TestJoinANameThatIsTaken(t *testing.T) {
 			t.Fatal("the waiting request was touched")
 		}
 		j.storeAsCloned(c)
+		if got := joinUser(t, c); got != "" {
+			t.Fatalf("user %q after a refused name", got)
+		}
 		// Another name goes through.
 		if got := j.join(c, "--name", "sam-2"); !strings.Contains(got, "+ pushed your request: ezc/join-sam-2\n") {
 			t.Fatalf("stdout:\n%s", got)
@@ -393,6 +478,9 @@ func TestJoinANameThatIsTaken(t *testing.T) {
 		}
 		if got := j.request(c).Key; got != setupPublicKey(t, c) {
 			t.Fatalf("the waiting request's key is %q", got)
+		}
+		if b, c := joinUser(t, j.b), joinUser(t, c); b != "" || c != "sam" {
+			t.Fatalf("users %q and %q", b, c)
 		}
 		j.storeAsCloned(j.b)
 	})
@@ -682,14 +770,21 @@ func TestJoinWhenThePushFails(t *testing.T) {
 		t.Fatalf("branches %q", got)
 	}
 	j.storeAsCloned(j.b)
+	if got := joinUser(t, j.b); got != "" {
+		t.Fatalf("user %q after a push that failed", got)
+	}
 
 	// Run again, it goes through with what the first run made.
 	j.b.gitFail = ""
 	want := "✓ the store: " + setupStore(j.b) + "\n" +
 		"✓ your key: ~/.config/sops/age/keys.txt\n" +
 		"✓ the config: " + setupConfig(j.b) + "\n" +
-		"+ pushed your request: " + joinBranch + "\n" + joinClosing
-	if got := j.join(j.b); got != want {
+		"+ pushed your request: " + joinBranch + "\n" +
+		"+ wrote " + setupConfig(j.b) + "\n" + joinClosing
+	if got := j.join(j.b, "--name", "sam"); got != want {
 		t.Fatalf("stdout:\n%s\nwant:\n%s", got, want)
+	}
+	if got := joinUser(t, j.b); got != "sam" {
+		t.Fatalf("user %q", got)
 	}
 }

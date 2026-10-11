@@ -201,7 +201,7 @@ ezc join --print                                                 # only print th
 
 - It clones the store into ezc's home. A store that is already there must be a clone of the same repo, level with its remote: neither behind it nor holding commits it lacks.
 - It creates your key when the machine has none, with the same notice to back the file up, and never replaces one that is there.
-- It writes `config.toml`, filling in only the fields that are empty.
+- It writes `config.toml`, filling in only the fields that are empty. Your name is saved as its `user` last, once the request is pushed or found waiting, so a name that was refused is never saved; a key that can already read the store gets the name `recipients.yaml` gives it (a machine: its owner). A `user` that is already there is never changed: when it differs, a `!` line says so.
 - It writes `.ezc/requests/<name>.yaml` (your name, your public key, `user` or `machine` and the owner, this machine's host name and the date), commits it on a new branch `ezc/join-<name>`, pushes that branch and puts the store back on its own branch with the file gone. The store's main branch is not changed, here or on the remote.
 - When `gh` is installed and the store is on GitHub, it opens a pull request for the branch and prints its URL. The pull request is only a way to see the request: it is not meant to be merged. When it cannot be opened the command says so on a `!` line and still succeeds, because the request is on its branch.
 

@@ -207,29 +207,50 @@ func runJoin(sys System, o joinFlags, source string) error {
 		fmt.Fprintf(sys.Stdout, "✓ your key: %s\n", tilde(sys, kf))
 	}
 
-	// Config: what it says already stays; what it lacks is filled in. A machine's user is its owner.
-	user := name
-	if o.kind == recipients.KindMachine {
-		user = o.owner
-	}
+	// Config: what it says already stays; what it lacks is filled in. The user waits until the name is settled.
 	filled := cfg
 	for _, field := range []struct {
 		have  *string
 		value string
 	}{
-		{&filled.User, user}, {&filled.Backend, be.Name()}, {&filled.KeyFile, kf}, {&filled.Store.Remote, gitstore.ShowURL(remote)},
+		{&filled.Backend, be.Name()}, {&filled.KeyFile, kf}, {&filled.Store.Remote, gitstore.ShowURL(remote)},
 	} {
 		if *field.have == "" {
 			*field.have = field.value
 		}
 	}
-	if found && filled.User == cfg.User && filled.Backend == cfg.Backend && filled.KeyFile == cfg.KeyFile && filled.Store == cfg.Store {
-		fmt.Fprintf(sys.Stdout, "✓ the config: %s\n", p.Config())
-	} else {
+	wrote := !found || filled.Backend != cfg.Backend || filled.KeyFile != cfg.KeyFile || filled.Store != cfg.Store
+	if wrote {
 		if err := config.Save(p.Config(), filled); err != nil {
 			return err
 		}
 		fmt.Fprintf(sys.Stdout, "+ wrote %s\n", p.Config())
+	} else {
+		fmt.Fprintf(sys.Stdout, "✓ the config: %s\n", p.Config())
+	}
+	// settle saves who this machine is in the store, once the store or a request of this key says so: a
+	// name that was refused is never saved, and a user the config already names is never replaced.
+	settle := func(user string) error {
+		switch {
+		case filled.User == user:
+			return nil
+		case filled.User != "":
+			fmt.Fprintf(sys.Stdout, "! %s names you %s, not %s, and was left as it is.\n", p.Config(), filled.User, user)
+			return nil
+		}
+		filled.User = user
+		if err := config.Save(p.Config(), filled); err != nil {
+			return err
+		}
+		if !wrote {
+			fmt.Fprintf(sys.Stdout, "+ wrote %s\n", p.Config())
+		}
+		return nil
+	}
+	// A machine's user is its owner.
+	user := name
+	if o.kind == recipients.KindMachine {
+		user = o.owner
 	}
 
 	reg, registered, err := recipients.Load(p.StoreEzc())
@@ -241,7 +262,11 @@ func runJoin(sys System, o joinFlags, source string) error {
 	}
 	if who := reg.NameOf(public); who != "" {
 		fmt.Fprintf(sys.Stdout, "✓ %s can already read this store.\n", who)
-		return nil
+		// The registry's word for this key, whatever name was asked for.
+		if entry := reg.Recipients[who]; entry.Kind == recipients.KindMachine {
+			who = entry.Owner
+		}
+		return settle(who)
 	}
 	taken := fmt.Errorf("The store already has a recipient named %s. Pick another name with --name.", name)
 	if _, is := reg.Recipients[name]; is {
@@ -265,7 +290,11 @@ func runJoin(sys System, o joinFlags, source string) error {
 		if !mine(data) {
 			return taken
 		}
-		fmt.Fprint(sys.Stdout, "✓ your request is in the store\n", closing)
+		fmt.Fprintln(sys.Stdout, "✓ your request is in the store")
+		if err := settle(user); err != nil {
+			return err
+		}
+		fmt.Fprint(sys.Stdout, closing)
 		return nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("%s: cannot read this file", path)
@@ -282,7 +311,11 @@ func runJoin(sys System, o joinFlags, source string) error {
 		if err != nil || !mine(data) {
 			return taken
 		}
-		fmt.Fprintf(sys.Stdout, "✓ your request is waiting: %s\n%s", branch, closing)
+		fmt.Fprintf(sys.Stdout, "✓ your request is waiting: %s\n", branch)
+		if err := settle(user); err != nil {
+			return err
+		}
+		fmt.Fprint(sys.Stdout, closing)
 		return nil
 	}
 
@@ -310,6 +343,9 @@ func runJoin(sys System, o joinFlags, source string) error {
 		return fmt.Errorf("Your request could not be pushed (%s). Run ezc join again.", gitReason(err))
 	}
 	fmt.Fprintf(sys.Stdout, "+ pushed your request: %s\n", branch)
+	if err := settle(user); err != nil {
+		return err
+	}
 
 	if gh := (ghcli.GH{Run: sys.Exec, LookPath: sys.LookPath, Environ: sys.Environ()}); gh.Installed() && (github || onGitHub(remote)) {
 		title := "ezc: " + name + " asks for access"
