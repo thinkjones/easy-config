@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -22,8 +23,6 @@ const (
 	syncMaxAge = 10 * time.Minute
 	// syncTimeout is how long a command waits for that fetch.
 	syncTimeout = 3 * time.Second
-
-	requestsDir = "requests"
 )
 
 // storeSync is what a command learns about the store before it uses it.
@@ -34,7 +33,7 @@ type storeSync struct {
 	Err      error     // why Status could not be read; the store's state is then not known
 	Fetched  time.Time // the last fetch that worked; zero when never
 	Offline  bool      // a fetch was tried just now and failed
-	Requests []string  // names in the store's requests folder, sorted
+	Requests []string  // names of the pending access requests: on a branch of origin or in the store's requests folder, sorted
 	Due      int       // how many entries rotation-due.yaml holds
 }
 
@@ -71,7 +70,8 @@ func syncStore(sys System, maxAge, timeout time.Duration) storeSync {
 	}
 	state := readState(p.State())
 	s.Fetched = stateTime(state, "fetched")
-	if remote, err := g.Remote(dir); err == nil && remote != "" {
+	remote, err := g.Remote(dir)
+	if err == nil && remote != "" {
 		now := sys.Now()
 		// An attempt dated after now is a clock that moved; it says nothing.
 		if age := now.Sub(stateTime(state, "attempted")); age < 0 || age >= maxAge {
@@ -86,7 +86,7 @@ func syncStore(sys System, maxAge, timeout time.Duration) storeSync {
 		}
 	}
 	s.Status, s.Err = g.Status(dir)
-	s.Requests = requests(p.StoreEzc())
+	s.Requests = requests(sys, dir, err == nil && remote != "")
 	s.Due = len(dueEntries(p.StoreEzc()))
 	return s
 }
@@ -100,21 +100,110 @@ func dueEntries(storeEzc string) recipients.Due {
 	return due
 }
 
-// requests are the names of the access requests in a store's .ezc folder: its requests/*.yaml, sorted.
-// Whoever can push to the store names those files, so a name that could not be a recipient's is left out.
-func requests(storeEzc string) []string {
-	entries, err := os.ReadDir(filepath.Join(storeEzc, requestsDir))
-	if err != nil {
-		return nil
-	}
-	var names []string
-	for _, e := range entries {
-		if name, ok := strings.CutSuffix(e.Name(), ".yaml"); ok && recipients.ValidName(name) && !e.IsDir() {
-			names = append(names, name)
+// requestNames are the names somebody asks for access to the store in storeDir under: those of the request branches
+// of origin as of the last fetch (asked of git only when remote is true: it is the one git call), and those of the
+// files in the store's requests folder. Whoever can push to the store names both, and the names go to the terminal,
+// so a name that could not be a recipient's is left out. A failure is no names.
+func requestNames(sys System, storeDir string, remote bool) (branches, files []string) {
+	if remote {
+		refs, _ := storeGit(sys).RemoteBranches(storeDir, requestBranch)
+		for _, ref := range refs {
+			if name := strings.TrimPrefix(ref, requestBranch); recipients.ValidName(name) {
+				branches = append(branches, name)
+			}
 		}
 	}
+	entries, _ := os.ReadDir(filepath.Join(storeDir, ezcDir, recipients.RequestsDir))
+	for _, e := range entries {
+		if name, ok := strings.CutSuffix(e.Name(), ".yaml"); ok && recipients.ValidName(name) && !e.IsDir() {
+			files = append(files, name)
+		}
+	}
+	return branches, files
+}
+
+// requests are the names of the pending access requests of the store in storeDir, sorted: pendingRequests' names,
+// without reading a request.
+func requests(sys System, storeDir string, remote bool) []string {
+	return sortedUnion(requestNames(sys, storeDir, remote))
+}
+
+// sortedUnion is every name of a and b once, sorted.
+func sortedUnion(a, b []string) []string {
+	names := slices.Concat(a, b)
 	slices.Sort(names)
-	return names
+	return slices.Compact(names)
+}
+
+// pending is one request for access to the store, as whoever filed it wrote it: nothing in it is trusted.
+type pending struct {
+	Name   string
+	Req    recipients.Request
+	Author string // the Git author of the commit that filed it; "" when git knows none
+	Branch bool   // on a request branch of origin
+	File   bool   // in the store's working tree
+	Err    error  // why it is not a valid request
+}
+
+// pendingRequests are the requests for access to the store in storeDir: the union, by name and sorted, of the request
+// branches of origin as of the last fetch and of the files in the working tree's requests folder. Of a branch only
+// its request file is read. A name that fails ValidName is left out entirely; a request that cannot be read or fails
+// ParseRequest, or that its branch and the working tree hold differently, is kept with Err.
+func pendingRequests(sys System, storeDir string) []pending {
+	g, valid := storeGit(sys), backendFor(sys).ValidRecipient
+	branches, files := requestNames(sys, storeDir, true)
+	// The author of a request that is only in the working tree is asked of origin's copy of the store's branch.
+	branch := ""
+	var all []pending
+	for _, name := range sortedUnion(branches, files) {
+		q := pending{Name: name, Branch: slices.Contains(branches, name), File: slices.Contains(files, name)}
+		rel := ezcDir + "/" + recipients.RequestPath(name)
+		if q.Branch {
+			data, err := g.Show(storeDir, requestBranch+name, rel)
+			switch {
+			case errors.Is(err, fs.ErrNotExist):
+				q.Err = errors.New("its branch holds no request")
+			case err != nil:
+				q.Err = errors.New("it cannot be read from its branch")
+			default:
+				q.Req, q.Err = recipients.ParseRequest(name, data, valid)
+			}
+			q.Author, _ = g.LastAuthor(storeDir, requestBranch+name, rel)
+		}
+		if q.File {
+			path := filepath.Join(storeDir, filepath.FromSlash(rel))
+			var req recipients.Request
+			var err error
+			// Only a plain file is read: the store's history can hold a link to anything.
+			if info, lerr := os.Lstat(path); lerr != nil || !info.Mode().IsRegular() {
+				err = errors.New("it is not a plain file")
+			} else if data, rerr := os.ReadFile(path); rerr != nil {
+				err = errors.New("it cannot be read")
+			} else {
+				req, err = recipients.ParseRequest(name, data, valid)
+			}
+			switch {
+			case !q.Branch:
+				q.Req, q.Err = req, err
+				if branch == "" {
+					st, _ := g.Status(storeDir)
+					branch = st.Branch
+				}
+				if branch != "" {
+					q.Author, _ = g.LastAuthor(storeDir, branch, rel)
+				}
+			case q.Err == nil && err != nil:
+				q.Err = err
+			case q.Err == nil && req != q.Req:
+				q.Err = errors.New("its branch and the store hold different requests")
+			}
+		}
+		if q.Err != nil {
+			q.Req = recipients.Request{}
+		}
+		all = append(all, q)
+	}
+	return all
 }
 
 // readState is state.json as its keys; a missing or unreadable file is no keys.

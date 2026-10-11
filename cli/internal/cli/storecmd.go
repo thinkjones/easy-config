@@ -93,7 +93,7 @@ func newStoreStatusCmd(sys System) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "say how the store stands against its remote",
-		Long: `Fetch from the store's remote, then print where the store is, its remote, whether it is in sync, ahead, behind, diverged or holds uncommitted changes, when the remote was last reached, and the names of pending access requests.
+		Long: `Fetch from the store's remote, then print where the store is, its remote, whether it is in sync, ahead, behind, diverged or holds uncommitted changes, when the remote was last reached, and the names of pending access requests: those still on their branch of the remote and those in the store. ` + "`ezc user requests`" + ` shows them.
 
 Exits 0 in every state it can read. A store that is not a git repo is not synced, and is said to be.
 

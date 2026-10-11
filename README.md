@@ -37,7 +37,7 @@ Each step is described below: [Set up](#set-up), [Writing to the store](#writing
 
 ## Not there yet
 
-This is `ezc` 0.3. A second person, or a second machine with a key of its own, asks for access with `ezc join`, is added with `ezc user add` once you have their public key, and removed with `ezc user remove` (see [Access](#access)). Approving a request in one step (`ezc user approve`), bots, and setup for CI are not there yet: until then, whoever has access adds the newcomer with the `ezc user add` line that `ezc join --print` writes. A second machine can also share the first one's key file: copy `~/.config/sops/age/keys.txt` from the first machine to the same path on the second, then run `ezc setup --store owner/repo` there. Setup uses a key file that is already there and never replaces it.
+This is `ezc` 0.3. A second person, or a second machine with a key of its own, asks for access with `ezc join`, is let in with `ezc user approve` (or with `ezc user add` once you have their public key), and removed with `ezc user remove` (see [Access](#access)). Bots and setup for CI are not there yet. A second machine can also share the first one's key file: copy `~/.config/sops/age/keys.txt` from the first machine to the same path on the second, then run `ezc setup --store owner/repo` there. Setup uses a key file that is already there and never replaces it.
 
 Two things are done by hand for now: a repo that keeps secrets of its own needs the store's encryption policy copied into its `.ezc/` (see [Encryption](#encryption)), and two machines that declare a new name at the same time must resolve the conflict with git (see [Syncing the store](#syncing-the-store)). The registry and the TUI come later.
 
@@ -83,6 +83,9 @@ A store made by hand, a folder with a `.ezc/` that is already at the store's pat
 | `ezc store push` | Send the commits made here to the store's remote. Refused while the store is behind the remote or has diverged from it, holds uncommitted changes, or has no remote. |
 | `ezc store rewrap` | Write the store's encryption policy from `recipients.yaml` and re-wrap every encrypted file for exactly the keys it names, in one commit, then push. The fix when `ezc user list` names a file. See [Access](#access). |
 | `ezc user list` | List who can read the store, from `recipients.yaml`: name, kind, owner, when added and by whom, with this machine's row marked. Then name every encrypted file whose recipients are not the registry's, and exit 1 when there is one. Needs no key. |
+| `ezc user requests` | Fetch, then list the requests for access that `ezc join` filed: name, kind, owner, the whole public key, the host, the date and the Git author. One that breaks the rules is listed as not valid. See [Approving a request](#approving-a-request). |
+| `ezc user approve <name>` | Fetch, print the request filed under `name` with its whole public key, then add that key to `recipients.yaml` and re-wrap every encrypted file, in one commit named `approve <name>`, push, and delete the request's branch. The branch is never merged. |
+| `ezc user deny <name>` | Fetch, then delete the request's branch from the remote, and remove a request file that is in the store itself in a commit named `deny <name>`. Nobody's access changes. |
 | `ezc user remove <name>` | Remove a person or one machine from `recipients.yaml` and re-wrap every encrypted file without their key, in one commit named `remove <name>`, then push; then list the secrets they could read, which need new values. See [Access](#access). |
 | `ezc user add <name> <key> [--kind user\|machine] [--owner USER]` | Add a public key to `recipients.yaml`, write the policy from it and re-wrap every encrypted file of the store, in one commit, then push. `--kind machine --owner USER` adds a second key of a user who is already a recipient. See [Access](#access). |
 | `ezc store audit` | Check the store's values files against its manifest: every value declared, every `required` name set in at least one file, secrets in encrypted files and nothing else there, no value still a placeholder or the wrong shape, and no value in an encrypted file left unencrypted. Prints names, files and the fix for each, never a value; exits 1 when there is anything to fix. |
@@ -165,7 +168,7 @@ store: uncommitted changes in /Users/gene/Library/ezc/store
 store: 1 access request pending: sam
 ```
 
-A store with uncommitted changes that is also ahead, behind or diverged says both: `store: uncommitted changes in <store>; 1 commit behind origin`. Pending access requests are added to the end of the line when it already says something else. A store that is in sync prints nothing. When git cannot say how the store stands, the line is `store: cannot tell how the store stands in <store> (<why>)` and nothing else. To keep these commands fast they contact the remote at most once every 10 minutes and wait at most 3 seconds for it; in between, and when the remote cannot be reached, the line is what was last known, and a fetch that just failed adds `store: origin could not be reached; last checked 2 hours ago`. The command then carries on. `ezc env export` never contacts the remote and never prints the line, so loading a shell's environment is not slowed down or made noisy. `ezc store status`, `pull` and `push` always contact the remote and do not print the line: their own output is the answer.
+A store with uncommitted changes that is also ahead, behind or diverged says both: `store: uncommitted changes in <store>; 1 commit behind origin`. Pending access requests are the ones still on their `ezc/join-<name>` branch of the remote, as of the last fetch, and the ones in the store's `.ezc/requests/`; they are added to the end of the line when it already says something else, and `ezc user requests` shows them. A store that is in sync prints nothing. When git cannot say how the store stands, the line is `store: cannot tell how the store stands in <store> (<why>)` and nothing else. To keep these commands fast they contact the remote at most once every 10 minutes and wait at most 3 seconds for it; in between, and when the remote cannot be reached, the line is what was last known, and a fetch that just failed adds `store: origin could not be reached; last checked 2 hours ago`. The command then carries on. `ezc env export` never contacts the remote and never prints the line, so loading a shell's environment is not slowed down or made noisy. `ezc store status`, `pull` and `push` always contact the remote and do not print the line: their own output is the answer.
 
 ## Access
 
@@ -175,6 +178,9 @@ Who can read the store's secrets is written in one place, `recipients.yaml` in t
 ezc user list                                             # who can read the store
 ezc user add sam age1…                                    # let sam read it
 ezc user add sam-laptop age1… --kind machine --owner sam  # a second key of sam's
+ezc user requests                                         # who is asking to read it
+ezc user approve sam                                      # let in whoever filed the request named sam
+ezc user deny sam                                         # refuse that request
 ezc user remove sam                                       # sam can no longer read it
 ezc store status --due                                    # the secrets that need new values
 ezc store rewrap                                          # make the files match recipients.yaml again
@@ -219,6 +225,42 @@ Only the public key leaves the machine: it is in the request and may be printed.
 Run again, `ezc join` changes only what is missing and pushes nothing twice: a request of yours that is already on the remote is reported as `✓ your request is waiting: ezc/join-<name>`. When your key is already one `recipients.yaml` names, it says `✓ <name> can already read this store.` and files nothing. When the name belongs to a recipient with another key, or somebody else's request under that name is waiting, it stops with `The store already has a recipient named <name>. Pick another name with --name.`
 
 `ezc join --print` is for a store with no remote to push a request to, or for sending the request another way. It takes no repo and needs no store: it finds or creates the key and prints one line on stdout, `ezc user add <name> <key>` (with `--kind machine --owner <user>` for a machine), which someone who can read the store runs as it is.
+
+### Approving a request
+
+```sh
+ezc user requests      # fetch, and show every request
+ezc user approve sam   # let sam in
+ezc user deny sam      # or refuse
+```
+
+`ezc user requests` fetches from the remote and prints each request that is waiting:
+
+```
+sam
+  kind       user
+  owner      -
+  key        age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
+  host       sams-laptop
+  requested  2026-10-11
+  author     sam <ezc@localhost>
+```
+
+Approving is a decision to trust a key, made on text that somebody else wrote. Anyone who can push to the store's repo can file a request under any name, and the request says only what its writer typed. So the command shows you what you are about to trust, and no more than it knows:
+
+- **The key** is printed whole, never shortened, because it is the one thing that matters: whoever holds its private half reads every secret once you approve. Ask the person for their public key over a channel you already trust (they see it with `ezc join --print`) and compare it with this line. A name you recognise proves nothing.
+- **The host** and **the date** are what the requesting machine wrote into the request. They help you tell two requests apart; they are claims.
+- **The author** is the Git author of the commit that filed the request, which is whatever the requester's git was set to say. It is a claim too. On GitHub, the account that pushed the branch or opened the pull request is better evidence than this line.
+
+The name, kind and owner must hold to the same rules as an entry of `recipients.yaml`, and the key must be a valid public key; the host, the date and the author are printed with every character outside printable ASCII shown as `?` and cut at 80 characters, so a request cannot write to your terminal. A request that breaks a rule is listed as `<name>: not a valid request (<why>)` and cannot be approved. A request whose branch is not named `ezc/join-<a valid name>` is not shown anywhere.
+
+`ezc user approve <name>` fetches first and reads the request as the remote holds it at that moment, so a branch that was changed after you looked is approved as it is now, not as you saw it: the command prints the request again, key and all, before it changes anything, and that key is the one it adds. Check it. When the remote cannot be reached, nothing is approved. It then adds the entry (kind and owner from the request, today's date, you as `addedBy`), writes the policy, re-wraps every encrypted file, commits as `approve <name>` and pushes, exactly as `ezc user add` does and with the same refusals: a name that is taken, a key that is already registered, a machine whose owner is not a user.
+
+**The request's branch is never merged.** Approve reads one file from it, `.ezc/requests/<name>.yaml`, and ignores everything else it holds, so a branch that also changes `recipients.yaml` or a values file changes nothing in the store. After the push the branch is deleted from the remote, which closes its pull request. Do not merge that pull request on GitHub: a merge brings in whatever the branch holds. When somebody did merge it, the request file is in the store itself; it is listed and approved the same way and removed in the approve commit. When the branch and the store hold different requests under one name, neither is approved.
+
+When the push fails the commit stays, the branch is left and the command says so: run `ezc store push`, then `ezc user approve <name>` again, which finds the key already registered and only deletes the branch. The same second run finishes the job when only the branch could not be deleted. It ends with `Tell <name> to run ezc store pull.`: on their machine that brings the re-wrapped files, which their key now opens.
+
+`ezc user deny <name>` deletes the request's branch and, when the request file is in the store, removes it in a commit named `deny <name>` and pushes. It changes nobody's access, and it is how a request that is not valid is cleared. Like every change to who can read the store, approve and deny need this machine's key file and a key that `recipients.yaml` names.
 
 ### Removing someone
 
