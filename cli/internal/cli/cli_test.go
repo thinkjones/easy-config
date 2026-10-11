@@ -607,3 +607,167 @@ func TestRelativeOutputIsUnderTheWorkingDirectory(t *testing.T) {
 		t.Fatalf("stderr %q", f.errOut.String())
 	}
 }
+
+const m1Note = m1 + `optional:
+  NOTE: {type: str, desc: d}
+`
+
+func TestList(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"common.yaml": "NAME: n\nEXTRA: e\n"})
+	repo(t, f, map[string]string{"manifest.yaml": m1Note, "common.yaml": "NAME: r\n", "env.local.yaml": "SIZE: 3\n"})
+	if err := f.run("list"); err != nil {
+		t.Fatal(err)
+	}
+	want := "EXTRA    -    store/common.yaml\n" +
+		"NAME     str  repo/common.yaml     overrides common.yaml\n" +
+		"SIZE     int  repo/env.local.yaml\n" +
+		"APP_ENV  -    shell\n" +
+		"EZC_ENV  -    shell\n" +
+		"\n" +
+		"NOTE  str  (not set)\n"
+	if got := f.out.String(); got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestListShowsNoValues(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"common.yaml": "NAME: topsecretvalue\n"})
+	repo(t, f, map[string]string{"manifest.yaml": m1, "env.local.yaml": "SIZE: 3\n"})
+	if err := f.run("list"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(f.out.String()+f.errOut.String(), "topsecretvalue") {
+		t.Fatalf("a value leaked: %q %q", f.out.String(), f.errOut.String())
+	}
+}
+
+func TestListGlobal(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"manifest.yaml": m1, "common.yaml": "NAME: n\n", "env.local.yaml": "SIZE: 2\n"})
+	if err := f.run("list", "-g"); err != nil {
+		t.Fatal(err)
+	}
+	want := "NAME     str  store/common.yaml\n" +
+		"SIZE     int  store/env.local.yaml\n" +
+		"APP_ENV  -    shell\n" +
+		"EZC_ENV  -    shell\n"
+	if got := f.out.String(); got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestListGlobalWithoutManifest(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"common.yaml": "NAME: n\n"})
+	if err := f.run("list", "-g"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.out.String(), "NAME  -  store/common.yaml\n"; got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestListOutsideARepo(t *testing.T) {
+	f := newFake(t)
+	err := f.run("list")
+	if err == nil || !strings.Contains(err.Error(), "not in an ezc repo") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestGet(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	if err := f.run("get", "SIZE"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.out.String(); got != "3\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestGetNamedEnvironment(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	if err := f.run("get", "SIZE", "prod"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.out.String(); got != "4\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestGetSelector(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	if err := f.run("get", "EZC_ENV", "prod"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.out.String(); got != "prod\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestGetSecretNeedsReveal(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{
+		"manifest.yaml":  "schemaVersion: v1\nrequired:\n  TOKEN: {type: secret, desc: t}\n",
+		"common.yaml":    "TOKEN: t0k\n",
+		"env.local.yaml": "",
+	})
+	err := f.run("get", "TOKEN")
+	if err == nil || err.Error() != "TOKEN is a secret — add --reveal to print it." {
+		t.Fatalf("got %v", err)
+	}
+	if f.out.Len() != 0 || strings.Contains(f.errOut.String(), "t0k") {
+		t.Fatalf("leak: %q %q", f.out.String(), f.errOut.String())
+	}
+	if err := f.run("get", "TOKEN", "--reveal"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.out.String(); got != "t0k\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestGetSecretDeclaredOnlyInStore(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"manifest.yaml": "schemaVersion: v1\nrequired:\n  TOKEN: {type: secret, desc: t}\n"})
+	repo(t, f, map[string]string{"manifest.yaml": empty, "common.yaml": "TOKEN: t0k\n", "env.local.yaml": ""})
+	err := f.run("get", "TOKEN")
+	if err == nil || !strings.Contains(err.Error(), "is a secret") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestGetWithoutAnyManifest(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{"common.yaml": "A: b\n", "env.local.yaml": ""})
+	if err := f.run("get", "A"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.out.String(); got != "b\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestGetUnset(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	err := f.run("get", "NOPE")
+	if err == nil || err.Error() != "NOPE is not set in environment local." {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestGetNeedsAName(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	err := f.run("get")
+	var u *UsageError
+	if !errors.As(err, &u) {
+		t.Fatalf("want UsageError, got %v", err)
+	}
+}

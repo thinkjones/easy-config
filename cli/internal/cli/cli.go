@@ -104,6 +104,8 @@ Config
 		newRunCmd(sys),
 		newManifestCmd(sys),
 		newCodegenCmd(sys),
+		newListCmd(sys),
+		newGetCmd(sys),
 	)
 	return root
 }
