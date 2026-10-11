@@ -215,6 +215,9 @@ func Load(o Options) (Result, error) {
 			if slices.Contains(SelectorVars, pair.Name) {
 				return res, fmt.Errorf("%s: %s names the environment and comes from the shell or the command line; remove it from this file.", s.Path, pair.Name)
 			}
+			if strings.ContainsRune(pair.Value, 0) {
+				return res, fmt.Errorf("%s: %s contains a NUL byte, which an environment variable cannot hold", s.Path, pair.Name)
+			}
 			value := pair.Value
 			if !isEncrypted(s.Path) {
 				value, err = expandRefs(value, pair.Name, s.Path, o.Home, res.Env)

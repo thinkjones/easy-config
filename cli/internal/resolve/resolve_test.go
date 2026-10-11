@@ -278,3 +278,22 @@ func TestValidVariableNamesAreAccepted(t *testing.T) {
 		t.Errorf("got %v", r.Env)
 	}
 }
+
+func TestNULInAValueIsAnError(t *testing.T) {
+	_, repo := tree(t, map[string]string{"repo/common.yaml": "A: \"hunter2\\0b\"\n"})
+	_, err := Load(Options{RepoDir: repo})
+	want := filepath.Join(repo, "common.yaml") + ": A contains a NUL byte, which an environment variable cannot hold"
+	if err == nil || err.Error() != want {
+		t.Errorf("plaintext: got %v, want %s", err, want)
+	}
+
+	_, repo = tree(t, map[string]string{"repo/common.enc.yaml": "x: y\n"})
+	decrypt := func(string) ([]backend.Pair, error) {
+		return []backend.Pair{{Name: "TOKEN", Value: "hunter2\x00b"}}, nil
+	}
+	_, err = Load(Options{RepoDir: repo, Decrypt: decrypt})
+	want = filepath.Join(repo, "common.enc.yaml") + ": TOKEN contains a NUL byte, which an environment variable cannot hold"
+	if err == nil || err.Error() != want {
+		t.Errorf("decrypted: got %v, want %s", err, want)
+	}
+}
