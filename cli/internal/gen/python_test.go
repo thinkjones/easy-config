@@ -124,6 +124,8 @@ func TestDescriptionsAreSafeInDocstrings(t *testing.T) {
 		"D": `ends with \"`,
 		"E": `ends with ""`,
 		"F": `a \n that is not a newline, and """"`,
+		"G": `ends with """`,
+		"H": `see """docs"""`,
 	}
 	m := manifest.Manifest{SchemaVersion: "v1", Required: map[string]manifest.Var{}}
 	for name, desc := range descs {

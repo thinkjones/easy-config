@@ -235,13 +235,9 @@ var pythonKeywords = map[string]bool{
 }
 
 // escapeDoc makes s safe between triple quotes, where it still reads as s: a
-// backslash is doubled, a """ cannot close the docstring, and a final " cannot
-// join the closing quotes.
+// backslash is doubled and every " is escaped, so no run of quotes can close
+// the docstring or join the closing ones.
 func escapeDoc(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"""`, `\"\"\"`)
-	if strings.HasSuffix(s, `"`) {
-		s = s[:len(s)-1] + `\"`
-	}
-	return s
+	return strings.ReplaceAll(s, `"`, `\"`)
 }
