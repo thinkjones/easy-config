@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -111,5 +112,17 @@ func TestEmptyResult(t *testing.T) {
 	b, err := r.JSON()
 	if err != nil || string(b) != "{}\n" {
 		t.Errorf("JSON() = %q, %v", b, err)
+	}
+}
+
+func TestShellNamesAreIdentifiers(t *testing.T) {
+	re := regexp.MustCompile(`^export [A-Za-z_][A-Za-z0-9_]*='`)
+	for _, line := range strings.SplitAfter(Result{Env: nasty}.Shell(), "\n") {
+		if line == "" || !strings.Contains(line, "export ") {
+			continue
+		}
+		if strings.HasPrefix(line, "export ") && !re.MatchString(line) {
+			t.Errorf("line does not start with an identifier export: %q", line)
+		}
 	}
 }

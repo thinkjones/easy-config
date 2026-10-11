@@ -30,6 +30,8 @@ func (r Result) Exported() []string {
 }
 
 // Shell renders one `export NAME='value'` line per exported name, for eval.
+// Names are written unquoted; they are valid identifiers because Load rejects
+// anything else.
 func (r Result) Shell() string {
 	var b strings.Builder
 	for _, n := range r.Exported() {
@@ -38,7 +40,9 @@ func (r Result) Shell() string {
 	return b.String()
 }
 
-// Dotenv renders one NAME="value" line per exported name.
+// Dotenv renders one NAME="value" line per exported name, for dotenv loaders.
+// It must never be sourced or eval'ed by a shell (a backtick is left as is);
+// Shell is the format for that.
 func (r Result) Dotenv() string {
 	var b strings.Builder
 	for _, n := range r.Exported() {

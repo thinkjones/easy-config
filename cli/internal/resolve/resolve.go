@@ -114,6 +114,20 @@ func Envs(dirs ...string) ([]string, error) {
 	return names, nil
 }
 
+// isVarName reports whether name is a shell identifier. Emitters write names
+// unquoted, so nothing else may reach them.
+func isVarName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		if !isRefChar(name[i], i == 0) {
+			return false
+		}
+	}
+	return true
+}
+
 func isDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
@@ -195,6 +209,9 @@ func Load(o Options) (Result, error) {
 		// therefore flows one direction only, which is what makes a cycle
 		// impossible to write rather than something to detect.
 		for _, pair := range pairs {
+			if !isVarName(pair.Name) {
+				return res, fmt.Errorf("%s: %q is not a valid variable name; use letters, digits and underscores, and do not start with a digit.", s.Path, pair.Name)
+			}
 			if slices.Contains(SelectorVars, pair.Name) {
 				return res, fmt.Errorf("%s: %s names the environment and comes from the shell or the command line; remove it from this file.", s.Path, pair.Name)
 			}

