@@ -101,6 +101,7 @@ func scopeManifest(s scope) (manifest.Manifest, error) {
 func newSetCmd(sys System) *cobra.Command {
 	var (
 		global, optional bool
+		expand           bool
 		env, typ, desc   string
 		allowed          []string
 		lo, hi           int
@@ -111,6 +112,8 @@ func newSetCmd(sys System) *cobra.Command {
 		Long: `Set NAME in the repo's common.yaml, or env.ENV.yaml with --env. With -g the store's files are used instead.
 
 A secret is stored encrypted, in common.enc.yaml or env.ENV.enc.yaml, and is never given on the command line: run ` + "`ezc set NAME`" + ` and type it, or pipe it on stdin. The same goes for any variable when VALUE is left out.
+
+The value is stored literally: what you give is what loads, so a $ is written as $$ in the file. With --expand it is written as given, so that $NAME, ${NAME} and a leading ~ keep their meaning when the file is loaded; the environment is then resolved once, and a reference to a name that is not defined puts the file back as it was. A literal value cannot start with ~ or ~/, which is always expanded.
 
 A name the scope's manifest does not declare is declared by this command, as required unless --optional is given: --type and --desc are then needed, and --values, --min and --max when the type calls for them.`,
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -169,6 +172,10 @@ A name the scope's manifest does not declare is declared by this command, as req
 				}
 			}
 
+			if expand && v.IsSecret() {
+				return usagef("ezc set: --expand does not apply to a secret; secrets are stored exactly as given.")
+			}
+
 			be := backendFor(sys)
 			base := valuesBase(env)
 			file := valuesFile(base, v.IsSecret())
@@ -202,8 +209,14 @@ A name the scope's manifest does not declare is declared by this command, as req
 			case check.IsPlaceholder(value):
 				return fmt.Errorf("%s: placeholder, not a value", name)
 			}
-			if why := check.ValidateValue(v, value); why != "" {
-				return fmt.Errorf("%s: %s", name, why)
+			if _, ok := resolve.Escape(value); !ok && !v.IsSecret() && !expand {
+				return fmt.Errorf("%s: a value that starts with ~ is expanded to your home folder when loaded. Pass --expand to keep that meaning, or use `ezc edit`.", name)
+			}
+			// A reference's final text is not known here, as in the store audit.
+			if !expand || !strings.ContainsRune(value, '$') {
+				if why := check.ValidateValue(v, value); why != "" {
+					return fmt.Errorf("%s: %s", name, why)
+				}
 			}
 
 			// A new name is declared first, so a failure to declare leaves nothing behind; if the value then
@@ -217,13 +230,38 @@ A name the scope's manifest does not declare is declared by this command, as req
 					return err
 				}
 			}
-			if err := writeValue(be, filepath.Join(sc.dir, file), name, value, v.IsSecret()); err != nil {
+			undeclare := func(err error) error {
 				if !declared {
 					if rerr := valuefile.Replace(sc.manifest(), saved); rerr != nil {
 						return fmt.Errorf("%w. %s declares %s, which has no value; remove the declaration by hand", err, sc.manifest(), name)
 					}
 				}
 				return err
+			}
+			path := filepath.Join(sc.dir, file)
+			var previous []byte
+			existed := false
+			if expand {
+				if previous, err = os.ReadFile(path); err == nil {
+					existed = true
+				} else if !errors.Is(err, fs.ErrNotExist) {
+					return undeclare(err)
+				}
+			}
+			if err := writeValue(be, path, name, value, v.IsSecret(), expand); err != nil {
+				return undeclare(err)
+			}
+			if expand {
+				if err := unresolved(sys, sc, env, path, name); err != nil {
+					rerr := os.Remove(path)
+					if existed {
+						rerr = valuefile.Replace(path, previous)
+					}
+					if rerr != nil {
+						return fmt.Errorf("%w\n       %s could not be put back as it was; fix %s there with `ezc edit`", err, path, name)
+					}
+					return undeclare(fmt.Errorf("%w\n       Nothing was changed", err))
+				}
 			}
 			fmt.Fprintf(sys.Stdout, "set %s in %s\n", name, sc.show(file))
 			if !declared {
@@ -235,6 +273,7 @@ A name the scope's manifest does not declare is declared by this command, as req
 	f := cmd.Flags()
 	f.BoolVarP(&global, "global", "g", false, "write to the global store")
 	f.StringVar(&env, "env", "", "write the environment's file, not the common one")
+	f.BoolVar(&expand, "expand", false, "keep $NAME, ${NAME}, $$ and a leading ~ meaningful; not for a secret")
 	f.StringVar(&typ, "type", "", "the type to declare a new name with: "+typeList())
 	f.StringVar(&desc, "desc", "", "the description to declare a new name with")
 	f.BoolVar(&optional, "optional", false, "declare a new name optional, not required")
@@ -297,14 +336,39 @@ func valueToSet(sys System, name string, secret bool, args []string) (string, er
 	return value, nil
 }
 
-// writeValue stores the value, plaintext or through the backend.
-func writeValue(be backend.Backend, path, name, value string, secret bool) error {
-	if !secret {
+// writeValue stores the value, plaintext or through the backend. A plaintext value is written so that it
+// loads exactly as given, unless expand asks for it to be written as given.
+func writeValue(be backend.Backend, path, name, value string, secret, expand bool) error {
+	switch {
+	case !secret && expand:
 		return valuefile.Set(path, name, value)
+	case !secret:
+		return valuefile.SetLiteral(path, name, value)
 	}
 	err := be.Set(path, name, value)
 	if errors.Is(err, backend.ErrNoPolicy) {
 		err = fmt.Errorf("%w See \"Encryption\" in the README.", err)
+	}
+	return err
+}
+
+// unresolved is the resolver's error when name, as now written in the file at path, cannot be expanded.
+// It resolves the environment the write targets, else the one a command would pick; a failure that is
+// not this name's is not this command's to report.
+func unresolved(sys System, sc scope, env, path, name string) error {
+	repo := ""
+	if sc.layer == "repo" {
+		repo = sc.dir
+	}
+	_, err := load(sys, repo, envName(sys, env))
+	var ref *resolve.RefError
+	if !errors.As(err, &ref) || ref.Name != name {
+		return nil
+	}
+	a, errA := os.Stat(ref.Path)
+	b, errB := os.Stat(path)
+	if errA != nil || errB != nil || !os.SameFile(a, b) {
+		return nil
 	}
 	return err
 }

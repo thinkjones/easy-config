@@ -102,8 +102,8 @@ func expandHome(value, name, path, home string) (string, error) {
 	// Needed only when a value asks for it, so a machine with no home directory
 	// still loads any store whose values do not.
 	if home == "" {
-		return "", fmt.Errorf("%s: %s starts with a home reference (%s) but this process has no home directory.\n"+
-			"       Set HOME, or write the path out in full", path, name, prefix)
+		return "", &RefError{path, name, fmt.Sprintf("%s: %s starts with a home reference (%s) but this process has no home directory.\n"+
+			"       Set HOME, or write the path out in full", path, name, prefix)}
 	}
 	return home + rest, nil
 }
@@ -221,9 +221,38 @@ func unknownRefError(name, path string, resolved map[string]string) error {
 	if len(available) > 0 {
 		scope = "defined so far: " + strings.Join(available, ", ")
 	}
-	return fmt.Errorf("%s: %s references a name that is not defined.\n"+
+	return &RefError{path, name, fmt.Sprintf("%s: %s references a name that is not defined.\n"+
 		"       A value may only use a name set in an earlier file or an earlier line, %s.\n"+
-		"       Write $$ if you meant a literal dollar sign", path, name, scope)
+		"       Write $$ if you meant a literal dollar sign", path, name, scope)}
+}
+
+// RefError is a value that could not be expanded: Name in the file at Path references a name that is
+// not defined, or the home directory when there is none. Its text never holds the value.
+type RefError struct {
+	Path, Name string
+	msg        string
+}
+
+func (e *RefError) Error() string { return e.msg }
+
+// Escape is the text to write in a plaintext values file so that value loads exactly as given: every
+// $ doubled. ok is false when no text does: a leading ~ or ~/ is always expanded.
+func Escape(value string) (text string, ok bool) {
+	if value == "~" || strings.HasPrefix(value, "~/") {
+		return "", false
+	}
+	return strings.ReplaceAll(value, "$", "$$"), true
+}
+
+// Unescape is what text in a plaintext values file loads as when it takes nothing from its
+// surroundings. ok is false when it holds a reference or starts with a home reference.
+func Unescape(text string) (value string, ok bool) {
+	value, err := expandHome(text, "", "", "")
+	if err != nil {
+		return "", false
+	}
+	value, _, err = expandRefs(value, "", "", "", nil)
+	return value, err == nil
 }
 
 // loadYAML reads a plaintext values file.

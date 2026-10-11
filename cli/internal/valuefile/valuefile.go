@@ -24,7 +24,23 @@ import (
 // Set writes name: value in a plaintext values file, replacing the name's value or appending it,
 // creating the file when absent. Comments and order are kept. The value read back by
 // resolve.Plain is exactly value, or Set fails and the file is as it was.
-func Set(path, name, value string) error {
+func Set(path, name, value string) error { return set(path, name, value, nil) }
+
+// SetLiteral is Set for a value that must load exactly as given: it writes resolve.Escape(value), and the
+// read-back also checks that the resolver turns what was written back into value.
+func SetLiteral(path, name, value string) error {
+	text, ok := resolve.Escape(value)
+	if !ok {
+		return fmt.Errorf("%s: cannot store %s in a values file: it starts with ~, which is expanded when the file is loaded", path, name)
+	}
+	return set(path, name, text, func(read string) bool {
+		loaded, ok := resolve.Unescape(read)
+		return ok && loaded == value
+	})
+}
+
+// set is Set; loads, when given, must also accept the text read back for name.
+func set(path, name, value string, loads func(read string) bool) error {
 	// Plain reads a NUL back, but resolve.Load refuses it: no environment variable can hold one.
 	if strings.ContainsRune(value, 0) {
 		return fmt.Errorf("%s: cannot store %s in a values file: it contains a NUL byte", path, name)
@@ -44,6 +60,9 @@ func Set(path, name, value string) error {
 				got, _, err := resolve.Plain(tmp)
 				if err != nil || !slices.Equal(got, want) {
 					return errors.New("read back differently")
+				}
+				if loads != nil && !slices.ContainsFunc(got, func(p backend.Pair) bool { return p.Name == name && loads(p.Value) }) {
+					return errors.New("loads differently")
 				}
 				return nil
 			})

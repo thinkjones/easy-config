@@ -216,3 +216,25 @@ func TestPlain(t *testing.T) {
 		t.Fatalf("got %v %v", present, err)
 	}
 }
+
+func TestEscapeAndUnescape(t *testing.T) {
+	for value, want := range map[string]string{"plain": "plain", "a$b": "a$$b", "a$$b": "a$$$$b", "$HOME/x": "$$HOME/x", "${HOME}": "$${HOME}", "~user": "~user", "": ""} {
+		text, ok := Escape(value)
+		if !ok || text != want {
+			t.Errorf("Escape(%q) = %q, %v; want %q", value, text, ok, want)
+		}
+		if back, ok := Unescape(text); !ok || back != value {
+			t.Errorf("Unescape(%q) = %q, %v; want %q", text, back, ok, value)
+		}
+	}
+	for _, value := range []string{"~", "~/x"} {
+		if _, ok := Escape(value); ok {
+			t.Errorf("Escape(%q) succeeded", value)
+		}
+	}
+	for _, text := range []string{"~/x", "$HOME/x", "$NAME", "a${NAME}b", "~"} {
+		if _, ok := Unescape(text); ok {
+			t.Errorf("Unescape(%q) succeeded", text)
+		}
+	}
+}

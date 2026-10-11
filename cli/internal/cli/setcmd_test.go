@@ -706,3 +706,147 @@ func TestSetAndUnsetRejectArguments(t *testing.T) {
 	wantUsage(t, f.run("unset", "A", "b"), "give")
 	wantUsage(t, f.run("unset", "A", "--type", "str"), "invalid or unrecognised flag.")
 }
+
+func TestSetStoresWhatWasTypedLiterally(t *testing.T) {
+	for _, value := range []string{"a$b", "a$$b", "$HOME/x", "${X}", "${HOME}", "100%", "$(id)", "$", "a$", "~user/x", "x~/y"} {
+		f := newFake(t)
+		setRepo(t, f, map[string]string{"common.yaml": "X: other\n", "env.local.yaml": ""})
+		if err := f.run("set", "NAME", value); err != nil {
+			t.Fatalf("%q: set: %v", value, err)
+		}
+		f.out.Reset()
+		if err := f.run("get", "NAME"); err != nil || f.out.String() != value+"\n" {
+			t.Errorf("%q: get: %v, %q", value, err, f.out.String())
+		}
+	}
+}
+
+func TestSetWritesADollarDoubled(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{"env.local.yaml": ""})
+	f.stdin = "p$w$$\n"
+	if err := f.run("set", "NAME"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, repoFile(f, "common.yaml")); got != "NAME: p$$w$$$$\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSetRefusesALiteralLeadingTilde(t *testing.T) {
+	for _, value := range []string{"~", "~/x"} {
+		f := newFake(t)
+		setRepo(t, f, map[string]string{"env.local.yaml": ""})
+		before := snapshot(t, f)
+		err := f.run("set", "NAME", value)
+		want := "NAME: a value that starts with ~ is expanded to your home folder when loaded. Pass --expand to keep that meaning, or use `ezc edit`."
+		if err == nil || err.Error() != want {
+			t.Fatalf("%q: got %v", value, err)
+		}
+		sameSnapshot(t, before, snapshot(t, f))
+	}
+}
+
+func TestSetExpandKeepsReferences(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{"common.yaml": "HOST: h\n", "env.local.yaml": ""})
+	if err := f.run("set", "NAME", "https://$HOST/${HOST}/$$5", "--expand"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, repoFile(f, "common.yaml")); got != "HOST: h\nNAME: https://$HOST/${HOST}/$$5\n" {
+		t.Fatalf("got %q", got)
+	}
+	f.out.Reset()
+	if err := f.run("get", "NAME"); err != nil || f.out.String() != "https://h/h/$5\n" {
+		t.Fatalf("got %v, %q", err, f.out.String())
+	}
+	if err := f.run("set", "NAME", "~/x", "--expand", "--env", "local"); err != nil {
+		t.Fatal(err)
+	}
+	f.out.Reset()
+	if err := f.run("get", "NAME"); err != nil || f.out.String() != f.env["HOME"]+"/x\n" {
+		t.Fatalf("got %v, %q", err, f.out.String())
+	}
+}
+
+func TestSetExpandSkipsTheShapeCheckOnlyForAReference(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{"common.yaml": "N: 3\n", "env.local.yaml": ""})
+	if err := f.run("set", "SIZE", "$N", "--expand"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.run("set", "SIZE", "abc", "--expand"); err == nil || !strings.Contains(err.Error(), "SIZE: ") {
+		t.Fatalf("got %v", err)
+	}
+	// Without --expand the same text is a literal, and not an integer.
+	if err := f.run("set", "SIZE", "$N"); err == nil || !strings.Contains(err.Error(), "SIZE: ") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestSetExpandWithAnUnknownReferencePutsTheFileBack(t *testing.T) {
+	cases := []struct {
+		name  string
+		files map[string]string
+		args  []string
+	}{
+		{"unknown", map[string]string{"common.yaml": "# kept\nNAME: old\n", "env.local.yaml": ""}, []string{"set", "NAME", "x$NOPE-canary", "--expand"}},
+		{"forward", map[string]string{"common.yaml": "NAME: old\n", "env.local.yaml": "LATER: l\n"}, []string{"set", "NAME", "${LATER}-canary", "--expand"}},
+		{"new file", map[string]string{"env.local.yaml": ""}, []string{"set", "NAME", "$NOPE-canary", "--expand"}},
+		{"new name", map[string]string{"env.local.yaml": ""}, []string{"set", "NEW", "$NOPE-canary", "--expand", "--type", "str", "--desc", "d"}},
+		{"named environment", map[string]string{"env.prod.yaml": "A: 1\n"}, []string{"set", "NAME", "$NOPE-canary", "--expand", "--env", "prod"}},
+	}
+	for _, c := range cases {
+		f := newFake(t)
+		setRepo(t, f, c.files)
+		before := snapshot(t, f)
+		err := f.run(c.args...)
+		if err == nil || !strings.Contains(err.Error(), c.args[1]+" references a name that is not defined") || !strings.Contains(err.Error(), filepath.Join(f.wd, ezcDir)) {
+			t.Fatalf("%s: got %v", c.name, err)
+		}
+		if all := err.Error() + f.out.String() + f.errOut.String(); strings.Contains(all, "canary") || f.out.Len() != 0 {
+			t.Fatalf("%s: the value was printed, or the write reported: %q", c.name, all)
+		}
+		sameSnapshot(t, before, snapshot(t, f))
+	}
+}
+
+func TestSetExpandKeepsTheWriteWhenSomethingElseIsBroken(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{"common.yaml": "HOST: h\n", "env.local.yaml": "B: $UNDEFINED\n"})
+	if err := f.run("set", "NAME", "$HOST", "--expand"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, repoFile(f, "common.yaml")); got != "HOST: h\nNAME: $HOST\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSetExpandGlobalResolvesTheStore(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"manifest.yaml": m1, "common.yaml": "HOST: h\n"})
+	setRepo(t, f, map[string]string{"common.yaml": "REPO_ONLY: r\n", "env.local.yaml": ""})
+	if err := f.run("set", "-g", "NAME", "$HOST", "--expand"); err != nil {
+		t.Fatal(err)
+	}
+	err := f.run("set", "-g", "NAME", "$REPO_ONLY", "--expand")
+	if err == nil || !strings.Contains(err.Error(), "NAME references a name that is not defined") {
+		t.Fatalf("got %v", err)
+	}
+	if got := readFile(t, filepath.Join(f.env["EZC_HOME"], "store", ezcDir, "common.yaml")); got != "HOST: h\nNAME: $HOST\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSetExpandRefusedForASecret(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{})
+	f.tty, f.secret = true, "s"
+	before := snapshot(t, f)
+	wantUsage(t, f.run("set", "TOKEN", "--expand"), "ezc set: --expand does not apply to a secret; secrets are stored exactly as given.")
+	wantUsage(t, f.run("set", "KEY", "--expand", "--type", "secret", "--desc", "d"), "--expand does not apply to a secret")
+	if len(f.prompts) != 0 {
+		t.Fatalf("prompted: %v", f.prompts)
+	}
+	sameSnapshot(t, before, snapshot(t, f))
+}
