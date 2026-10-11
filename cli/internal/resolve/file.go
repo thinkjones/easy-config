@@ -127,9 +127,12 @@ func expandHome(value, name, path, home string) (string, error) {
 //
 // HOME is the one name resolvable without being declared, because it is what
 // makes the shared store portable in the first place.
-func expandRefs(value, name, path, home string, resolved map[string]string) (string, error) {
+//
+// refs are the resolved names the value referenced, in the order met; the home
+// directory standing in for an undeclared HOME is not one.
+func expandRefs(value, name, path, home string, resolved map[string]string) (expanded string, refs []string, err error) {
 	if !strings.ContainsRune(value, '$') {
-		return value, nil
+		return value, nil, nil
 	}
 	var b strings.Builder
 	for i := 0; i < len(value); {
@@ -151,14 +154,17 @@ func expandRefs(value, name, path, home string, resolved map[string]string) (str
 			i++
 			continue
 		}
-		sub, found := lookupRef(ref, home, resolved)
+		sub, declared, found := lookupRef(ref, home, resolved)
 		if !found {
-			return "", unknownRefError(name, path, resolved)
+			return "", nil, unknownRefError(name, path, resolved)
+		}
+		if declared {
+			refs = append(refs, ref)
 		}
 		b.WriteString(sub)
 		i = next
 	}
-	return b.String(), nil
+	return b.String(), refs, nil
 }
 
 // parseRef reads the reference beginning at value[i], which is known to be '$'.
@@ -196,14 +202,15 @@ func isRefChar(c byte, first bool) bool {
 	return false
 }
 
-func lookupRef(ref, home string, resolved map[string]string) (string, bool) {
+// lookupRef is the value ref stands for. declared says it is a resolved name, not the home directory.
+func lookupRef(ref, home string, resolved map[string]string) (value string, declared, found bool) {
 	if v, ok := resolved[ref]; ok {
-		return v, true
+		return v, true, true
 	}
 	if ref == "HOME" && home != "" {
-		return home, true
+		return home, false, true
 	}
-	return "", false
+	return "", false, false
 }
 
 // unknownRefError names what is in scope, because the overwhelmingly likely

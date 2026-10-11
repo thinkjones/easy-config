@@ -404,3 +404,58 @@ func TestEnvsReturnsOnlyValidNames(t *testing.T) {
 		t.Fatalf("got %v, %v", got, err)
 	}
 }
+
+func TestRefsRecordsWhatAValueWasBuiltFrom(t *testing.T) {
+	_, repo := tree(t, map[string]string{
+		"repo/common.yaml":    "A: a\nB: $A/b\nC: ${B}/c\nD: $$A\nE: $HOME/e\nF: ~/f\nG: x$HOME\n",
+		"repo/env.local.yaml": "",
+	})
+	r := mustResolve(t, Options{RepoDir: repo, Home: "/h"})
+	want := map[string][]string{"B": {"A"}, "C": {"A", "B"}}
+	if len(r.Refs) != len(want) {
+		t.Fatalf("got %v", r.Refs)
+	}
+	for name, refs := range want {
+		if !slices.Equal(r.Refs[name], refs) {
+			t.Errorf("%s: got %v, want %v", name, r.Refs[name], refs)
+		}
+	}
+}
+
+func TestRefsFollowTheWinningValue(t *testing.T) {
+	_, repo := tree(t, map[string]string{
+		"repo/common.yaml":    "S: s\nA: $S\nB: $A\nC: $S\n",
+		"repo/env.local.yaml": "A: plain\nC: none\n",
+	})
+	r := mustResolve(t, Options{RepoDir: repo})
+	// B was built from the A that held S, so the later A does not clear it; C's winning value references nothing.
+	if !slices.Equal(r.Refs["B"], []string{"A", "S"}) || r.Refs["A"] != nil || r.Refs["C"] != nil {
+		t.Fatalf("got %v", r.Refs)
+	}
+}
+
+func TestEncryptedMarksValuesBuiltFromAnEncryptedFile(t *testing.T) {
+	_, repo := tree(t, map[string]string{
+		"repo/common.yaml":        "P: p\n",
+		"repo/common.enc.yaml":    "x",
+		"repo/env.local.yaml":     "URL: u:$TOKEN@h\nHOP: $URL\nQ: $P\nTOKEN: plain\n",
+		"repo/env.local.enc.yaml": "x",
+	})
+	decrypt := func(path string) ([]backend.Pair, error) {
+		if strings.HasSuffix(path, "common.enc.yaml") {
+			return []backend.Pair{{Name: "TOKEN", Value: "t"}}, nil
+		}
+		return []backend.Pair{{Name: "Q", Value: "q"}}, nil
+	}
+	r := mustResolve(t, Options{RepoDir: repo, Decrypt: decrypt})
+	// TOKEN's winning value is plaintext, but URL and HOP were built from the encrypted one.
+	want := map[string]bool{"URL": true, "HOP": true, "Q": true}
+	if len(r.Encrypted) != len(want) {
+		t.Fatalf("got %v", r.Encrypted)
+	}
+	for name := range want {
+		if !r.Encrypted[name] {
+			t.Errorf("%s is not marked", name)
+		}
+	}
+}

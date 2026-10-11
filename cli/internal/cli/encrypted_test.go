@@ -127,3 +127,53 @@ func TestDefaultBackendIsSops(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func wantNeedsReveal(t *testing.T, f *fake, name, value string) {
+	t.Helper()
+	f.out.Reset()
+	err := f.run("get", name)
+	if err == nil || err.Error() != name+" is a secret — add --reveal to print it." || f.out.Len() != 0 {
+		t.Fatalf("got %v, %q", err, f.out.String())
+	}
+	if err := f.run("get", name, "--reveal"); err != nil || f.out.String() != value+"\n" {
+		t.Fatalf("got %v, %q", err, f.out.String())
+	}
+}
+
+func TestGetAValueThatReferencesAnEncryptedOneNeedsReveal(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{"env.local.yaml": "DB_URL: postgres://u:$REPO_TOKEN@h\n"})
+	secretIn(t, f, "repo", "common.enc.yaml", "REPO_TOKEN", "ZZcanary")
+	wantNeedsReveal(t, f, "DB_URL", "postgres://u:ZZcanary@h")
+}
+
+func TestGetAValueTwoHopsFromAnEncryptedOneNeedsReveal(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{"env.local.yaml": "DB_URL: postgres://u:$REPO_TOKEN@h\nDSN: ${DB_URL}/db\n"})
+	secretIn(t, f, "repo", "common.enc.yaml", "REPO_TOKEN", "ZZcanary")
+	wantNeedsReveal(t, f, "DSN", "postgres://u:ZZcanary@h/db")
+}
+
+func TestGetAValueThatReferencesADeclaredSecretInPlaintextNeedsReveal(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"manifest.yaml": "schemaVersion: v1\nrequired:\n  TOKEN: {type: secret, desc: t}\n"})
+	repo(t, f, map[string]string{"common.yaml": "TOKEN: t0k\nURL: u:$TOKEN@h\nDSN: $URL/db\n", "env.local.yaml": ""})
+	wantNeedsReveal(t, f, "URL", "u:t0k@h")
+	wantNeedsReveal(t, f, "DSN", "u:t0k@h/db")
+}
+
+func TestGetAValueBuiltFromAnEncryptedOneThatWasLaterReplacedNeedsReveal(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{"common.yaml": "URL: u:$TOKEN@h\n", "env.local.yaml": "TOKEN: plain\n"})
+	secretIn(t, f, "store", "common.enc.yaml", "TOKEN", "ZZcanary")
+	wantNeedsReveal(t, f, "URL", "u:ZZcanary@h")
+}
+
+func TestGetAValueThatReferencesANonSecretIsNotGated(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{"manifest.yaml": mToken, "common.yaml": "HOST: h\nURL: https://$HOST/x\n", "env.local.yaml": ""})
+	secretIn(t, f, "repo", "common.enc.yaml", "TOKEN", "t0k")
+	if err := f.run("get", "URL"); err != nil || f.out.String() != "https://h/x\n" {
+		t.Fatalf("got %v, %q", err, f.out.String())
+	}
+}
