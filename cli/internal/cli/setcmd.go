@@ -53,12 +53,17 @@ func scopeFor(sys System, global bool) (scope, error) {
 	return scope{"store", p.StoreEzc(), true}, nil
 }
 
-// guard is guardStoreWrite when the scope is the store; any other scope has nothing to wait for.
-func (s scope) guard(sys System) (storeSync, error) {
+// guard is guardStoreWrite and guardStoreFiles when the scope is the store; any other scope has nothing to wait for.
+// files are the ones the write may change.
+func (s scope) guard(sys System, files ...string) (storeSync, error) {
 	if !s.store {
 		return storeSync{}, nil
 	}
-	return guardStoreWrite(sys)
+	st, err := guardStoreWrite(sys)
+	if err != nil {
+		return st, err
+	}
+	return st, guardStoreFiles(sys, st, files...)
 }
 
 // commit commits, as "<what> (<files>)", those of names whose file in the scope is not as before says.
@@ -222,7 +227,12 @@ A name the scope's manifest does not declare is declared by this command, as req
 				}
 			}
 
-			st, err := sc.guard(sys)
+			// The manifest first, as in the commit's message; it is written only for a new name.
+			watched := []string{file}
+			if !declared {
+				watched = []string{manifestName, file}
+			}
+			st, err := sc.guard(sys, watched...)
 			if err != nil {
 				return err
 			}
@@ -254,7 +264,6 @@ A name the scope's manifest does not declare is declared by this command, as req
 
 			// A new name is declared first, so a failure to declare leaves nothing behind; if the value then
 			// cannot be written, the manifest is put back byte for byte.
-			watched := []string{manifestName, file}
 			before := fileStates(sc.dir, watched)
 			var saved []byte
 			if !declared {
@@ -464,11 +473,14 @@ func newUnsetCmd(sys System) *cobra.Command {
 					return fmt.Errorf("%s is still set in %s; unset it there first, or leave the declaration.", name, sc.show(other))
 				}
 			}
-			st, err := sc.guard(sys)
+			watched := files
+			if undeclare {
+				watched = append([]string{manifestName}, files...)
+			}
+			st, err := sc.guard(sys, watched...)
 			if err != nil {
 				return err
 			}
-			watched := append([]string{manifestName}, files...)
 			before := fileStates(sc.dir, watched)
 			remove := func() error {
 				removed := 0
@@ -505,7 +517,8 @@ func newUnsetCmd(sys System) *cobra.Command {
 				return nil
 			}
 			// A removal that fails part way has still removed what it said it did, and that is committed too.
-			return errors.Join(remove(), sc.commit(sys, st, "unset "+name, watched, before))
+			err = remove()
+			return errors.Join(err, sc.commit(sys, st, "unset "+name, watched, before))
 		},
 	}
 	cmd.Flags().BoolVarP(&global, "global", "g", false, "remove from the global store")

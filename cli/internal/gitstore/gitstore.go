@@ -163,17 +163,17 @@ func (g Git) SetRemote(dir, url string) error {
 	return err
 }
 
-// Commit commits exactly these paths (relative to dir; additions, changes and
-// deletions). done is false when none of them changed, which includes a path
-// git ignores. A commit that fails leaves the paths staged.
-func (g Git) Commit(dir, message string, a Author, paths ...string) (bool, error) {
+// Changed are the files at or under these paths (relative to dir) that differ
+// from the last commit or that git has never seen, staged or not; a path git
+// ignores is never among them. Nothing is changed by asking.
+func (g Git) Changed(dir string, paths ...string) ([]string, error) {
 	if len(paths) == 0 {
-		return false, nil
+		return nil, nil
 	}
 	args := append([]string{"status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--"}, paths...)
 	out, err := g.run(dir, 0, args...)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	var changed []string
 	for _, entry := range strings.Split(string(out), "\x00") {
@@ -182,13 +182,24 @@ func (g Git) Commit(dir, message string, a Author, paths ...string) (bool, error
 			changed = append(changed, entry[3:])
 		}
 	}
+	return changed, nil
+}
+
+// Commit commits exactly these paths (relative to dir; additions, changes and
+// deletions). done is false when none of them changed, which includes a path
+// git ignores. A commit that fails leaves the paths staged.
+func (g Git) Commit(dir, message string, a Author, paths ...string) (bool, error) {
+	changed, err := g.Changed(dir, paths...)
+	if err != nil {
+		return false, err
+	}
 	if len(changed) == 0 {
 		return false, nil
 	}
 	if _, err := g.run(dir, 0, append([]string{"add", "--all", "--"}, changed...)...); err != nil {
 		return false, err
 	}
-	args = nil
+	var args []string
 	if !g.hasIdentity(dir) {
 		args = []string{"-c", "user.name=" + a.Name, "-c", "user.email=" + authorEmail}
 	}

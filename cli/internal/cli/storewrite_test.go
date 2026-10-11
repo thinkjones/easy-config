@@ -311,7 +311,7 @@ func TestEditGlobalNoChangeNoCommit(t *testing.T) {
 	}
 }
 
-// A file saved but not valid is left for `ezc edit` to fix, uncommitted; the edit that fixes it is the commit.
+// A file saved but not valid is left as saved, uncommitted, and is then a file with uncommitted changes like any other.
 func TestEditGlobalInvalidResultIsNotCommitted(t *testing.T) {
 	f := newFake(t)
 	x := storeWriteStore(t, f)
@@ -320,12 +320,134 @@ func TestEditGlobalInvalidResultIsNotCommitted(t *testing.T) {
 	if got := x.subjects(); got != nil {
 		t.Fatalf("commits %q", got)
 	}
-	storeWriteEditor(f, "NAME: fixed\n")
-	f.errOut.Reset()
-	if err := f.run("edit", "-g"); err != nil {
+	f.execs = nil
+	if err := f.run("edit", "-g"); err == nil || err.Error() != storeWriteDirty("common.yaml", x) || len(f.execs) != 0 {
+		t.Fatalf("got %v, editor ran %d times", err, len(f.execs))
+	}
+}
+
+// storeWriteDirty is the refusal of a write to a file that has uncommitted changes.
+func storeWriteDirty(file string, x storeWriteFix) string {
+	return file + " has uncommitted changes in " + x.store + ". Commit or discard them with git, then run this again."
+}
+
+// A write commits whole files, so a file it may write that was changed by hand would go into a commit named after something else.
+func TestWriteRefusedOverAHandEdit(t *testing.T) {
+	for _, c := range []struct {
+		hand string   // the file changed by hand
+		args []string // the write that is refused
+	}{
+		{"common.yaml", []string{"set", "-g", "NAME", "v2"}},
+		{"common.enc.yaml", []string{"set", "-g", "TOKEN"}},
+		{"manifest.yaml", []string{"set", "-g", "NEW", "v", "--type", "str", "--desc", "d"}},
+		{"common.yaml", []string{"set", "-g", "NEW", "v", "--type", "str", "--desc", "d"}},
+		{"env.prod.yaml", []string{"set", "-g", "NAME", "v2", "--env", "prod"}},
+		{"common.yaml", []string{"unset", "-g", "NAME"}},
+		{"common.yaml", []string{"unset", "-g", "TOKEN"}},
+		{"common.enc.yaml", []string{"unset", "-g", "NAME"}},
+		{"manifest.yaml", []string{"unset", "-g", "NAME", "--undeclare"}},
+		{"common.yaml", []string{"edit", "-g"}},
+		{"common.enc.yaml", []string{"edit", "-g", "--secrets"}},
+		{"env.prod.yaml", []string{"edit", "-g", "--env", "prod"}},
+	} {
+		f := newFake(t)
+		x := storeWriteStore(t, f)
+		x.secret(f, "common.enc.yaml", "TOKEN", "t1")
+		x.commit(x.store, "env.prod.yaml", "SIZE: 4\n")
+		x.push(x.store)
+		// Appended, so the file still reads; the encrypted one gets a second name through the backend.
+		if c.hand == "common.enc.yaml" {
+			secretIn(t, f, "store", c.hand, "BYHAND", "h")
+		} else {
+			write(t, x.file(c.hand), readFile(t, x.file(c.hand))+"# by hand\n")
+		}
+		content, head := readFile(t, x.file(c.hand)), x.git("rev-parse", "HEAD")
+		storeWriteEditor(f, "NAME: edited\n")
+		f.stdin = "v\n"
+		err := f.run(c.args...)
+		if want := storeWriteDirty(c.hand, x); err == nil || err.Error() != want {
+			t.Errorf("%v over %s: got %v", c.args, c.hand, err)
+			continue
+		}
+		storeWriteExitsOne(t, err)
+		if f.out.Len() != 0 || len(f.execs) != 0 || len(f.prompts) != 0 || len(storeWriteCommitsRun(f)) != 0 {
+			t.Errorf("%v: stdout %q, editor ran %d times, %d prompts, git commit ran %d times", c.args, f.out.String(), len(f.execs), len(f.prompts), len(storeWriteCommitsRun(f)))
+		}
+		if readFile(t, x.file(c.hand)) != content || x.git("rev-parse", "HEAD") != head {
+			t.Errorf("%v: %s or the history changed", c.args, c.hand)
+		}
+		if got := x.git("status", "--porcelain", "--untracked-files=all"); got != " M .ezc/"+c.hand {
+			t.Errorf("%v: left behind:\n%s", c.args, got)
+		}
+	}
+}
+
+// A file git has never seen is uncommitted too; so is a change that was staged.
+func TestWriteRefusedOverAnUntrackedOrStagedFile(t *testing.T) {
+	f := newFake(t)
+	x := storeWriteStore(t, f)
+	write(t, x.file("env.new.yaml"), "NAME: by hand\n")
+	storeWriteEditor(f, "NAME: edited\n")
+	for _, args := range [][]string{{"set", "-g", "NAME", "v2", "--env", "new"}, {"unset", "-g", "NAME", "--env", "new"}, {"edit", "-g", "--env", "new"}} {
+		if err := f.run(args...); err == nil || err.Error() != storeWriteDirty("env.new.yaml", x) {
+			t.Errorf("%v: got %v", args, err)
+		}
+	}
+	if readFile(t, x.file("env.new.yaml")) != "NAME: by hand\n" || x.subjects() != nil || len(f.execs) != 0 {
+		t.Fatalf("the file, the history or the editor was touched")
+	}
+
+	f = newFake(t)
+	x = storeWriteStore(t, f)
+	write(t, x.file("common.yaml"), "NAME: by hand\n")
+	x.git("add", ".ezc/common.yaml")
+	if err := f.run("set", "-g", "NAME", "v2"); err == nil || err.Error() != storeWriteDirty("common.yaml", x) {
+		t.Fatalf("staged: got %v", err)
+	}
+}
+
+// Only the files this write may change count: the manifest when the name is new or goes, the values files of this base.
+func TestHandEditElsewhereDoesNotBlock(t *testing.T) {
+	f := newFake(t)
+	x := storeWriteStore(t, f)
+	x.commit(x.store, "env.prod.yaml", "SIZE: 4\n")
+	x.push(x.store)
+	manifest := readFile(t, x.file("manifest.yaml")) + "# by hand\n"
+	write(t, x.file("manifest.yaml"), manifest)
+	write(t, x.file("env.prod.yaml"), "SIZE: 5\n")
+	write(t, x.file("env.loose.yaml"), "A: b\n")
+	storeWriteEditor(f, "NAME: edited\n")
+	uncommitted := "store: uncommitted changes in " + x.store + "\n"
+	for _, args := range [][]string{{"set", "-g", "NAME", "v2"}, {"edit", "-g"}, {"unset", "-g", "NAME"}} {
+		if got := stderrOf(t, f, args...); got != uncommitted {
+			t.Errorf("%v: stderr %q", args, got)
+		}
+	}
+	if got := x.subjects(); !slices.Equal(got, []string{"set NAME (common.yaml)", "edit common.yaml", "unset NAME (common.yaml)"}) {
+		t.Fatalf("commits %q", got)
+	}
+	if got := x.git("log", "--name-only", "--format=", "origin/main..HEAD"); strings.Contains(got, "manifest") || strings.Contains(got, "env.") {
+		t.Fatalf("a hand edit was committed:\n%s", got)
+	}
+	if got := x.git("status", "--porcelain", "--untracked-files=all"); got != " M .ezc/env.prod.yaml\n M .ezc/manifest.yaml\n?? .ezc/env.loose.yaml" {
+		t.Fatalf("left behind:\n%s", got)
+	}
+	if readFile(t, x.file("manifest.yaml")) != manifest || readFile(t, x.file("env.prod.yaml")) != "SIZE: 5\n" {
+		t.Fatal("a hand edit was changed")
+	}
+}
+
+// The remote is gone: what was last known of it decides, and a store that was level takes the write.
+func TestWriteWhenTheRemoteCannotBeReached(t *testing.T) {
+	f := newFake(t)
+	x := storeWriteStore(t, f)
+	if err := os.RemoveAll(x.bare); err != nil {
 		t.Fatal(err)
 	}
-	x.wantCommit("edit common.yaml", "common.yaml")
+	if got, want := stderrOf(t, f, "set", "-g", "NAME", "v2"), "store: origin could not be reached; never checked\n"; got != want {
+		t.Fatalf("stderr %q, want %q", got, want)
+	}
+	x.wantCommit("set NAME (common.yaml)", "common.yaml")
 }
 
 func TestSetFailureCommitsNothing(t *testing.T) {
@@ -411,8 +533,8 @@ func storeWriteRefused(t *testing.T, f *fake, x storeWriteFix, want string) {
 			continue
 		}
 		storeWriteExitsOne(t, err)
-		if f.out.Len() != 0 || len(f.execs) != 0 || len(storeWriteCommitsRun(f)) != 0 {
-			t.Errorf("%v: stdout %q, editor ran %d times, git commit ran %d times", args, f.out.String(), len(f.execs), len(storeWriteCommitsRun(f)))
+		if f.out.Len() != 0 || len(f.execs) != 0 || len(f.prompts) != 0 || len(storeWriteCommitsRun(f)) != 0 {
+			t.Errorf("%v: stdout %q, editor ran %d times, %d prompts, git commit ran %d times", args, f.out.String(), len(f.execs), len(f.prompts), len(storeWriteCommitsRun(f)))
 		}
 		for name, content := range before {
 			if readFile(t, x.file(name)) != content {
@@ -438,6 +560,15 @@ func TestWriteRefusedWhileBehind(t *testing.T) {
 	storeWriteRefused(t, f, x, storeWriteBehind)
 	if !strings.Contains(f.errOut.String(), behindTwo) {
 		t.Fatalf("stderr %q", f.errOut.String())
+	}
+
+	// Uncommitted changes do not make a store less behind: behind is what the write is refused for.
+	f = newFake(t)
+	x = storeWriteStore(t, f)
+	x.theirs(2)
+	write(t, x.file("common.yaml"), "NAME: by hand\n")
+	if err := f.run("set", "-g", "NAME", "v2"); err == nil || err.Error() != storeWriteBehind {
+		t.Fatalf("behind and uncommitted: got %v", err)
 	}
 
 	f = newFake(t)

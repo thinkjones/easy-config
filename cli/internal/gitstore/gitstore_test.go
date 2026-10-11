@@ -186,6 +186,45 @@ func TestCommitOnlyNamedPaths(t *testing.T) {
 	}
 }
 
+func TestChanged(t *testing.T) {
+	g := newGit(t)
+	dir := newStore(t, g)
+	commit(t, g, dir, "same.yaml", "B: 1\n")
+	commit(t, g, dir, "staged.yaml", "C: 1\n")
+	commit(t, g, dir, "gone.yaml", "D: 1\n")
+	commit(t, g, dir, "other.yaml", "E: 1\n")
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	asked := []string{"common.yaml", "same.yaml", "staged.yaml", "gone.yaml", "new.yaml", "never-there.yaml", "*.yaml", "sub"}
+	if got, err := g.Changed(dir, asked...); err != nil || len(got) != 0 {
+		t.Fatalf("Changed in a clean store: %v, %v", got, err)
+	}
+
+	write(t, dir, "common.yaml", "A: 2\n")
+	write(t, dir, "staged.yaml", "C: 2\n")
+	raw(t, g, dir, "add", "staged.yaml")
+	if err := os.Remove(filepath.Join(dir, "gone.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "new.yaml", "F: 1\n")
+	write(t, dir, "other.yaml", "E: 2\n")
+	write(t, filepath.Join(dir, "sub"), "in.yaml", "G: 1\n")
+
+	got, err := g.Changed(dir, asked...)
+	slices.Sort(got)
+	if want := []string{"common.yaml", "gone.yaml", "new.yaml", "staged.yaml", "sub/in.yaml"}; err != nil || !slices.Equal(got, want) {
+		t.Fatalf("Changed: %v, %v, want %v", got, err, want)
+	}
+	if got, err := g.Changed(dir); err != nil || got != nil {
+		t.Fatalf("Changed with no paths: %v, %v", got, err)
+	}
+	if st := raw(t, g, dir, "status", "--porcelain"); !strings.Contains(st, "other.yaml") || !strings.Contains(st, "M  staged.yaml") {
+		t.Fatalf("Changed touched the tree or the index:\n%s", st)
+	}
+}
+
 func TestCommitNothingChanged(t *testing.T) {
 	g := newGit(t)
 	dir := newStore(t, g)
@@ -440,6 +479,8 @@ func TestNotInstalled(t *testing.T) {
 	check("SetRemote", g.SetRemote("/store", "/remote"))
 	_, err = g.Commit("/store", "m", author, "a")
 	check("Commit", err)
+	_, err = g.Changed("/store", "a")
+	check("Changed", err)
 	check("Fetch", g.Fetch("/store", time.Second))
 	_, err = g.Status("/store")
 	check("Status", err)

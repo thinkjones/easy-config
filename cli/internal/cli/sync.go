@@ -236,6 +236,28 @@ func guardStoreWrite(sys System) (storeSync, error) {
 	return s, nil
 }
 
+// guardStoreFiles is an error when one of the named files of the store's .ezc (base names) has uncommitted changes.
+// A commit takes a file whole, so a write to such a file would put what was changed by hand under its own message.
+func guardStoreFiles(sys System, s storeSync, files ...string) error {
+	if !s.Git || !s.Status.Dirty {
+		return nil
+	}
+	paths := make([]string, len(files))
+	for i, file := range files {
+		paths[i] = ezcDir + "/" + file
+	}
+	changed, err := storeGit(sys).Changed(s.Dir, paths...)
+	if err != nil {
+		return err
+	}
+	for i, path := range paths {
+		if slices.Contains(changed, path) {
+			return fmt.Errorf("%s has uncommitted changes in %s. Commit or discard them with git, then run this again.", files[i], s.Dir)
+		}
+	}
+	return nil
+}
+
 // commitStore commits the named files of the store's .ezc (base names) with message. It does nothing for a store that is not a git repo.
 // Only those files are committed: whatever else was changed in the store by hand stays uncommitted.
 func commitStore(sys System, s storeSync, message string, files ...string) error {

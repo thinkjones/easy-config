@@ -102,7 +102,7 @@ The editor must wait until you finish: for example nano, vim, or "code --wait". 
 			if err != nil {
 				return err
 			}
-			st, err := sc.guard(sys)
+			st, err := sc.guard(sys, file)
 			if err != nil {
 				return err
 			}
