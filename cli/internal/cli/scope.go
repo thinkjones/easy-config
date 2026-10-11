@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/thinkjones/easy-config/cli/internal/backend"
+	"github.com/thinkjones/easy-config/cli/internal/backend/sops"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
 	"github.com/thinkjones/easy-config/cli/internal/paths"
 	"github.com/thinkjones/easy-config/cli/internal/resolve"
@@ -88,6 +90,19 @@ func storePaths(sys System) (paths.Paths, error) {
 	return p, nil
 }
 
+// backendFor is sys.Backend, else the sops backend for this machine.
+func backendFor(sys System) backend.Backend {
+	if sys.Backend != nil {
+		return sys.Backend
+	}
+	return sops.New(sops.Options{
+		Run:      sys.Exec,
+		LookPath: sys.LookPath,
+		Environ:  sys.Environ(),
+		KeyFile:  sops.DefaultKeyFile(homeDir(sys)),
+	})
+}
+
 // load resolves the environment for repo (a .ezc directory, or "" for the store alone).
 func load(sys System, repo, env string) (resolve.Result, error) {
 	p, err := storePaths(sys)
@@ -104,6 +119,7 @@ func load(sys System, repo, env string) (resolve.Result, error) {
 		RepoDir:  repo,
 		Env:      env,
 		Home:     homeDir(sys),
+		Decrypt:  backendFor(sys).Decrypt,
 	})
 }
 

@@ -10,7 +10,7 @@ go install github.com/thinkjones/easy-config/cli/cmd/ezc@latest
 
 ## Status
 
-Part 1 of 7 is built; encrypted files arrive in part 2.
+Parts 1 and 2 of 7 are built: the environment commands, and reading encrypted files.
 
 ## Quick start
 
@@ -32,7 +32,7 @@ ezc run -- <command>               # run a command with it
 | `ezc env export [ENV] [--format shell\|json]` | Print the environment's variables on stdout. `shell` is for `eval`; `json` is one object of names to values, for any other tool. Outside a repo it exports the store alone. |
 | `ezc run [ENV] -- <command> [args…]` | Run a command with the environment added to its own. On Unix `ezc` replaces itself with the command, so signals sent to it reach the command and the exit status is the command's. Exits 127 when the command is not found, 126 when it cannot be run. |
 | `ezc list [ENV] [-g]` | List the names an environment holds, with each one's type (from the repo's manifest, else the store's) and the file that supplies it, and the manifest's names that have no value. Never prints a value. `-g` lists the store alone. |
-| `ezc get NAME [ENV] [--reveal]` | Print one value on stdout. A `secret` needs `--reveal`; a name is treated as a secret when the repo's or the store's manifest declares it one. |
+| `ezc get NAME [ENV] [--reveal]` | Print one value on stdout. A `secret` needs `--reveal`; a name is treated as a secret when the repo's or the store's manifest declares it one, and so is any value read from an encrypted file. |
 | `ezc repo init` | Create `.ezc/` in the working directory with `manifest.yaml`, `env.local.yaml` and the `env.sh` shim. Existing files are kept; an `env.sh` from an older shim is updated. Prints how to load the environment. |
 | `ezc manifest validate [-m FILE]` | Check that the manifest is well formed; prints the path and counts of required and optional variables. |
 | `ezc manifest schema [-o FILE]` | Print the manifest's JSON Schema, or write it to FILE. |
@@ -57,9 +57,9 @@ A repo's `.ezc/` folder and the global store use the same layout. Every values f
 | `manifest.yaml` | Every value declared: type, description, required or optional. |
 | `common.yaml` | Plaintext values for all environments. |
 | `env.<name>.yaml` | Plaintext values for one environment. |
+| `common.enc.yaml` | Encrypted values for all environments. |
+| `env.<name>.enc.yaml` | Encrypted values for one environment. |
 | `env.sh` | The shim mise or direnv sources. Written by `ezc repo init`; do not edit. |
-
-Encrypted `common.enc.yaml` and `env.<name>.enc.yaml` files, for secrets, arrive in part 2; today an existing one is an error.
 
 A values file is one flat YAML mapping of `NAME: value` lines. Values are read as raw text, so no type is inferred: `08540` stays `08540`.
 
@@ -81,14 +81,15 @@ A variable name, in the manifest and in a values file, is letters, digits and un
 Later wins:
 
 ```
-store  common.yaml → env.<name>.yaml
-repo   common.yaml → env.<name>.yaml
+store  common.yaml → common.enc.yaml → env.<name>.yaml → env.<name>.enc.yaml
+repo   common.yaml → common.enc.yaml → env.<name>.yaml → env.<name>.enc.yaml
 ```
 
-`<name>` is the command's argument, else `$EZC_ENV`, else `$APP_ENV`, else `local`. With no name given and no `env.local.yaml`, only the `common.yaml` files load, and `ezc` says so on stderr. A missing store is not an error: the repo's files compose alone. A store that is there but is not a folder, or cannot be read, is an error, and so is an `EZC_STORE` that names a folder which does not exist.
+`<name>` is the command's argument, else `$EZC_ENV`, else `$APP_ENV`, else `local`. With no name given and no `env.local.yaml`, only the `common` files load, and `ezc` says so on stderr. A missing store is not an error: the repo's files compose alone. A store that is there but is not a folder, or cannot be read, is an error, and so is an `EZC_STORE` that names a folder which does not exist.
 
 - Within a file, order is semantic.
 - A value may reference `$NAME` or `${NAME}` for a name already resolved, earlier in the same file or in an earlier file. `$$` is a literal `$`.
+- Values from an encrypted file are literal: no `~`, `$HOME` or `$NAME` is expanded in them. A later plaintext file can still reference them by name. A command that needs an encrypted file's key stops with an error, and prints nothing, when it has none.
 - A leading `~`, `$HOME` or `${HOME}` is expanded at load.
 - There are no defaults: a missing value fails the check. The check says what is wrong with a value (`not an integer`, `above the maximum of 9`, `not a URL (must start with http:// or https://)`) and never prints the value.
 - Shell export single-quotes every value and never emits `EZC_ENV` or `APP_ENV`.

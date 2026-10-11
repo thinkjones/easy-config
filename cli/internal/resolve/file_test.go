@@ -119,14 +119,14 @@ func TestEncryptedWithoutDecrypter(t *testing.T) {
 	}
 }
 
-func TestEncryptedUsesDecrypter(t *testing.T) {
+func TestEncryptedUsesDecrypterAndKeepsValuesLiteral(t *testing.T) {
 	p := write(t, "common.enc.yaml", "K: ciphertext\n")
 	decrypt := func(string) ([]backend.Pair, error) { return []backend.Pair{{Name: "K", Value: "~/k"}}, nil }
 	pairs, _, err := loadFile(p, "/h", decrypt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pairs) != 1 || pairs[0].Value != "/h/k" {
+	if len(pairs) != 1 || pairs[0].Value != "~/k" {
 		t.Errorf("got %v", pairs)
 	}
 }
@@ -198,5 +198,21 @@ func TestDocumentEndMarker(t *testing.T) {
 	}
 	if got := loadErr(t, "common.yaml", "A: 1\n...\nB: 2\n", ""); !strings.Contains(got, "more than one YAML document") {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestPlain(t *testing.T) {
+	p := write(t, "common.yaml", "A: ~/x\nB: $A\n")
+	pairs, present, err := Plain(p)
+	if err != nil || !present || len(pairs) != 2 || pairs[0].Value != "~/x" || pairs[1].Value != "$A" {
+		t.Fatalf("got %v %v %v", pairs, present, err)
+	}
+	pairs, present, err = Plain(p + ".missing")
+	if pairs != nil || present || err != nil {
+		t.Fatalf("absent file: got %v %v %v", pairs, present, err)
+	}
+	bad := write(t, "bad.yaml", "A: [1]\n")
+	if _, present, err := Plain(bad); err == nil || present {
+		t.Fatalf("got %v %v", present, err)
 	}
 }

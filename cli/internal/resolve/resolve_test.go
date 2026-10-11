@@ -393,3 +393,14 @@ func TestUnknownReferenceHidesTheFragment(t *testing.T) {
 		t.Errorf("got %v", err)
 	}
 }
+
+func TestEnvsReturnsOnlyValidNames(t *testing.T) {
+	_, repo := tree(t, map[string]string{
+		"repo/env.a.b.yaml": "A: 1\n", "repo/env.enc.enc.yaml": "x: y\n", "repo/env..yaml": "A: 1\n",
+		"repo/env.ok.yaml": "A: 1\n", "repo/env.fine.enc.yaml": "x: y\n",
+	})
+	got, err := Envs(repo)
+	if err != nil || !slices.Equal(got, []string{"fine", "ok"}) {
+		t.Fatalf("got %v, %v", got, err)
+	}
+}

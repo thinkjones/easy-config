@@ -166,7 +166,7 @@ func newGetCmd(sys System) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get NAME [ENV]",
 		Short: "print one variable's value; secrets need --reveal",
-		Long:  `Print NAME's value from ENV (else $EZC_ENV, $APP_ENV, then local) on stdout, and nothing else: the value verbatim followed by one newline, even when the value itself ends in one. In a repo it resolves the repo with the store; elsewhere the store alone. A secret (declared secret by the repo's manifest or the store's) is printed only with --reveal.`,
+		Long:  `Print NAME's value from ENV (else $EZC_ENV, $APP_ENV, then local) on stdout, and nothing else: the value verbatim followed by one newline, even when the value itself ends in one. In a repo it resolves the repo with the store; elsewhere the store alone. A secret (declared secret by the repo's manifest or the store's, or read from an encrypted file) is printed only with --reveal.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if err := minArgs(1, "a variable name")(cmd, args); err != nil {
 				return err
@@ -205,10 +205,14 @@ func newGetCmd(sys System) *cobra.Command {
 			if !ok {
 				return fmt.Errorf("%s is not set in environment %s.", name, res.EnvLabel())
 			}
+			secret := strings.HasSuffix(res.Origin[name], ".enc.yaml")
 			for _, m := range ms {
-				if v, ok := m.Lookup(name); ok && v.IsSecret() && !reveal {
-					return fmt.Errorf("%s is a secret — add --reveal to print it.", name)
+				if v, ok := m.Lookup(name); ok && v.IsSecret() {
+					secret = true
 				}
+			}
+			if secret && !reveal {
+				return fmt.Errorf("%s is a secret — add --reveal to print it.", name)
 			}
 			_, err = io.WriteString(sys.Stdout, value+"\n")
 			return err

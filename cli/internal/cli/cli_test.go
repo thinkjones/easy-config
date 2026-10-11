@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
 	"github.com/thinkjones/easy-config/cli/internal/proc"
 	"github.com/thinkjones/easy-config/cli/share"
@@ -30,6 +31,7 @@ type fake struct {
 	stdin     string                                     // what Stdin holds
 	tty       bool                                       // StdinIsTerminal
 	paths     map[string]string                          // what LookPath finds, by name
+	backend   *backend.Fake                              // the encryption backend; System.Backend
 }
 
 func newFake(t *testing.T) *fake {
@@ -37,6 +39,8 @@ func newFake(t *testing.T) *fake {
 	return &fake{
 		env: map[string]string{"HOME": t.TempDir(), "EZC_HOME": t.TempDir()},
 		wd:  t.TempDir(),
+
+		backend: &backend.Fake{},
 	}
 }
 
@@ -77,6 +81,7 @@ func (f *fake) sys() System {
 		},
 		ReadSecret:      func(string) (string, error) { return f.secret, f.secretErr },
 		StdinIsTerminal: func() bool { return f.tty },
+		Backend:         f.backend,
 	}
 }
 
@@ -88,6 +93,27 @@ func write(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// secretIn writes name=value to file ("common.enc.yaml") in the layer's .ezc folder ("repo" or "store"),
+// through the fake backend, creating its policy first.
+func secretIn(t *testing.T, f *fake, layer, file, name, value string) {
+	t.Helper()
+	dir := filepath.Join(f.wd, ezcDir)
+	if layer == "store" {
+		p, err := storePaths(f.sys())
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir = p.StoreEzc()
+	}
+	policy := filepath.Join(dir, backend.FakePolicy)
+	if _, err := os.Stat(policy); err != nil {
+		write(t, policy, "")
+	}
+	if err := f.backend.Set(filepath.Join(dir, file), name, value); err != nil {
 		t.Fatal(err)
 	}
 }

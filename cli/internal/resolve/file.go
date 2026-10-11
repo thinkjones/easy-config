@@ -38,18 +38,33 @@ func loadFile(path, home string, decrypt func(string) ([]backend.Pair, error)) (
 		return nil, true, err
 	}
 
-	// Both paths converge here, so a home-relative path means the same thing
-	// whether it was committed in plaintext or encrypted. Reference expansion
-	// does NOT happen here: it needs the names resolved so far, which only the
-	// caller composing the files has.
-	for i := range pairs {
-		expanded, err := expandHome(pairs[i].Value, pairs[i].Name, path, home)
-		if err != nil {
-			return nil, true, err
+	// A home-relative path in plaintext means the same wherever it was
+	// committed. A decrypted value is data and is never rewritten. Reference
+	// expansion does NOT happen here: it needs the names resolved so far, which
+	// only the caller composing the files has.
+	if !isEncrypted(path) {
+		for i := range pairs {
+			expanded, err := expandHome(pairs[i].Value, pairs[i].Name, path, home)
+			if err != nil {
+				return nil, true, err
+			}
+			pairs[i].Value = expanded
 		}
-		pairs[i].Value = expanded
 	}
 	return pairs, true, nil
+}
+
+// Plain reads one plaintext values file as written: names and raw values in file order,
+// with no home or reference expansion. A file that does not exist is (nil, false, nil).
+func Plain(path string) (pairs []backend.Pair, present bool, err error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("%s: %w", path, err)
+	}
+	pairs, err = loadYAML(path)
+	return pairs, err == nil, err
 }
 
 // expandHome resolves a leading ~ or $HOME in a value.

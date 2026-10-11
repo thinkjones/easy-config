@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/proc"
 )
 
@@ -36,6 +37,8 @@ type System struct {
 	// ReadSecret prints prompt to the terminal and reads a line without echo.
 	ReadSecret      func(prompt string) (string, error)
 	StdinIsTerminal func() bool
+	// Backend overrides the encryption backend; nil means the default backend for this machine. Tests set it.
+	Backend backend.Backend
 }
 
 // ExitError ends ezc with Code and no further message: the output already

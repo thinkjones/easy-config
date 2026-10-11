@@ -96,7 +96,7 @@ func (r Result) Overrides(name string) []string {
 }
 
 // Envs returns the sorted, de-duplicated environment names found in dirs: any
-// env.<name>.yaml or env.<name>.enc.yaml. A directory that does not exist has
+// env.<name>.yaml or env.<name>.enc.yaml whose name is a valid one. A directory that does not exist has
 // none; any other read error is returned.
 func Envs(dirs ...string) ([]string, error) {
 	seen := map[string]bool{}
@@ -117,7 +117,7 @@ func Envs(dirs ...string) ([]string, error) {
 				continue
 			}
 			name := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(n, "env."), ".yaml"), ".enc")
-			if name != "" {
+			if ValidEnvName(name) {
 				seen[name] = true
 			}
 		}
