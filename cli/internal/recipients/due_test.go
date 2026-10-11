@@ -41,3 +41,16 @@ func TestDue(t *testing.T) {
 		t.Errorf("empty Due left the file: %v", err)
 	}
 }
+
+func TestDueRoundTripsAwkwardNames(t *testing.T) {
+	dir := t.TempDir()
+	d := Due{}
+	d.Add("common.enc.yaml", "N", "null", "2026-10-11")
+	if err := d.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	back, err := LoadDue(dir)
+	if err != nil || back["common.enc.yaml/N"].Removed != "null" {
+		t.Errorf("round trip = %v, %v", back, err)
+	}
+}

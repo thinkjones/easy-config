@@ -3,6 +3,7 @@ package recipients
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -43,22 +44,9 @@ func TestWith(t *testing.T) {
 			t.Errorf("%s: receiver changed", label)
 		}
 	}
-	if _, err := r.With("sam", Recipient{Key: "k2", Kind: KindUser}); err == nil || !contains(err.Error(), "gene-mini") {
+	if _, err := r.With("sam", Recipient{Key: "k2", Kind: KindUser}); err == nil || !strings.Contains(err.Error(), "gene-mini") {
 		t.Errorf("key error does not name its holder: %v", err)
 	}
-}
-
-func contains(s, sub string) bool {
-	return len(sub) == 0 || (len(s) >= len(sub) && indexOf(s, sub) >= 0)
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }
 
 func TestWithout(t *testing.T) {
@@ -90,7 +78,7 @@ func TestWithKey(t *testing.T) {
 	if err != nil || next.Recipients["gene"].Key != "k9" || r.Recipients["gene"].Key != "k1" {
 		t.Fatalf("WithKey = %v, %v", next, err)
 	}
-	if _, err := r.WithKey("gene", "k3"); err == nil || !contains(err.Error(), "ci") {
+	if _, err := r.WithKey("gene", "k3"); err == nil || !strings.Contains(err.Error(), "ci") {
 		t.Errorf("duplicate key = %v", err)
 	}
 	if _, err := r.WithKey("nobody", "k9"); err == nil {

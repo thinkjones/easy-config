@@ -29,7 +29,9 @@ func Apply(dir string, next Registry, b Backend, encFiles []string) (err error) 
 	}
 	defer func() {
 		if err != nil {
-			restore(dir, saved, encFiles)
+			if rerr := restore(dir, saved); rerr != nil {
+				err = errors.Join(err, rerr)
+			}
 		}
 	}()
 	if err = next.Save(dir); err != nil {
@@ -86,24 +88,35 @@ func snapshotFiles(dir string, encFiles []string) (map[string][]byte, error) {
 	return saved, nil
 }
 
-// restore puts the files back as snapshotFiles saw them and removes what was not there. Dot files that
-// appeared (a policy file that did not exist) are removed too.
-func restore(dir string, saved map[string][]byte, encFiles []string) {
+// restore puts the files back as snapshotFiles saw them and removes what was not there, dot files that
+// appeared (a policy file that did not exist) included. It names each file it could not put back.
+func restore(dir string, saved map[string][]byte) error {
+	var errs []error
+	fail := func(n string) {
+		errs = append(errs, fmt.Errorf("could not restore %s: the folder is not as it was", n))
+	}
 	for n, data := range saved {
 		path := filepath.Join(dir, n)
 		if data == nil {
-			os.Remove(path)
+			if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				fail(n)
+			}
 			continue
 		}
-		os.WriteFile(path, data, 0o644)
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			fail(n)
+		}
 	}
 	if ents, err := os.ReadDir(dir); err == nil {
 		for _, e := range ents {
 			if _, had := saved[e.Name()]; !had && strings.HasPrefix(e.Name(), ".") && !e.IsDir() {
-				os.Remove(filepath.Join(dir, e.Name()))
+				if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
+					fail(e.Name())
+				}
 			}
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // Diff is how a file's recipients differ from the registry: registry names that cannot read it, and what

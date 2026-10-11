@@ -3,7 +3,6 @@ package recipients
 import (
 	"bytes"
 	"errors"
-	"fmt"
 
 	"gopkg.in/yaml.v3"
 )
@@ -40,13 +39,16 @@ func ParseRequest(name string, data []byte, valid func(key string) error) (Reque
 		return Request{}, errors.New("not a valid recipient name")
 	}
 	if err := valid(q.Key); err != nil {
-		return Request{}, fmt.Errorf("the key is not valid: %w", err)
+		return Request{}, errors.New("the key is not valid")
 	}
 	switch q.Kind {
 	case KindUser:
+		if q.Owner != "" {
+			return Request{}, errors.New("a user request has no owner")
+		}
 	case KindMachine:
-		if q.Owner == "" {
-			return Request{}, errors.New("a machine request names no owner")
+		if !ValidName(q.Owner) {
+			return Request{}, errors.New("a machine request needs a valid owner name")
 		}
 	default:
 		return Request{}, errors.New("kind must be user or machine")

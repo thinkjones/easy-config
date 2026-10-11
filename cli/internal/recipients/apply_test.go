@@ -1,6 +1,7 @@
 package recipients
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -169,5 +170,107 @@ func TestDifferences(t *testing.T) {
 	same, err := Differences(dir, old, b, encFiles)
 	if err != nil || len(same) != 0 {
 		t.Errorf("matching registry = %v, %v", same, err)
+	}
+}
+
+// failAfter writes through the real fake, then fails the step named.
+type failAfter struct {
+	*backend.Fake
+	policy bool // WritePolicy writes, then fails
+	lie    bool // Rewrap does nothing
+	hook   func()
+}
+
+func (f failAfter) WritePolicy(dir string, keys []string) error {
+	if err := f.Fake.WritePolicy(dir, keys); err != nil {
+		return err
+	}
+	if f.policy {
+		return errors.New("policy failed after writing")
+	}
+	return nil
+}
+
+func (f failAfter) Rewrap(path string) error {
+	if f.hook != nil {
+		f.hook()
+	}
+	if f.lie {
+		return nil
+	}
+	return f.Fake.Rewrap(path)
+}
+
+// bareFolder holds two encrypted files, with no registry and no policy file.
+func bareFolder(t *testing.T) (string, *backend.Fake) {
+	t.Helper()
+	b := &backend.Fake{}
+	dir := t.TempDir()
+	if err := b.WritePolicy(dir, []string{"fake1aa"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range encFiles {
+		if err := b.Set(filepath.Join(dir, f), "N", "v"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(filepath.Join(dir, backend.FakePolicy)); err != nil {
+		t.Fatal(err)
+	}
+	return dir, b
+}
+
+func TestApplyRemovesCreatedFiles(t *testing.T) {
+	_, next := twoKeys()
+	steps := map[string]func(b *backend.Fake) Backend{
+		"policy":    func(b *backend.Fake) Backend { return failAfter{Fake: b, policy: true} },
+		"rewrap":    func(b *backend.Fake) Backend { b.RewrapFail = "dev.enc.yaml"; return b },
+		"mismatch":  func(b *backend.Fake) Backend { return failAfter{Fake: b, lie: true} },
+		"first one": func(b *backend.Fake) Backend { b.RewrapFail = "common.enc.yaml"; return b },
+	}
+	for label, mk := range steps {
+		dir, b := bareFolder(t)
+		before := snapshot(t, dir)
+		if err := Apply(dir, next, mk(b), encFiles); err == nil {
+			t.Errorf("%s: no error", label)
+		}
+		if after := snapshot(t, dir); !reflect.DeepEqual(before, after) {
+			t.Errorf("%s: folder changed:\nbefore %v\nafter  %v", label, before, after)
+		}
+	}
+}
+
+func TestApplySaveFailureLeavesFolder(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores folder permissions")
+	}
+	_, next := twoKeys()
+	dir, b := bareFolder(t)
+	before := snapshot(t, dir)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o755)
+	if err := Apply(dir, next, b, encFiles); err == nil {
+		t.Fatal("expected failure")
+	}
+	os.Chmod(dir, 0o755)
+	if after := snapshot(t, dir); !reflect.DeepEqual(before, after) {
+		t.Errorf("folder changed")
+	}
+}
+
+func TestApplyReportsAFailedRollback(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores folder permissions")
+	}
+	_, next := twoKeys()
+	dir, b := bareFolder(t)
+	// The folder turns read-only once re-wrapping starts, so the registry Apply created cannot be removed.
+	bk := failAfter{Fake: b, lie: true, hook: func() { os.Chmod(dir, 0o500) }}
+	defer os.Chmod(dir, 0o755)
+	err := Apply(dir, next, bk, encFiles)
+	if err == nil || !strings.Contains(err.Error(), "could not restore "+File) || !strings.Contains(err.Error(), "common.enc.yaml") {
+		t.Fatalf("err = %v", err)
 	}
 }

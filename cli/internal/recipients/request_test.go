@@ -56,3 +56,30 @@ func TestPrintable(t *testing.T) {
 		t.Errorf("Printable(é) = %q", got)
 	}
 }
+
+func TestParseRequestOwnerRules(t *testing.T) {
+	bad := []string{
+		"name: sam\nkey: k\nkind: user\nowner: gene\nhost: h\nrequested: d\n",
+		"name: m\nkey: k\nkind: machine\nowner: \"Bad Owner\"\nhost: h\nrequested: d\n",
+	}
+	for _, b := range bad {
+		name := strings.TrimSpace(strings.SplitN(strings.SplitN(b, "\n", 2)[0], ":", 2)[1])
+		if _, err := ParseRequest(name, []byte(b), okKey); err == nil {
+			t.Errorf("accepted %q", b)
+		}
+	}
+	secret := errors.New("echo SECRETKEY")
+	_, err := ParseRequest("gene-mini", []byte(goodReq), func(string) error { return secret })
+	if err == nil || strings.Contains(err.Error(), "SECRETKEY") {
+		t.Errorf("validator text leaked: %v", err)
+	}
+}
+
+func TestPrintableMore(t *testing.T) {
+	if got := Printable("a\nb\x7f\xffc"); got != "a?b??c" {
+		t.Errorf("Printable = %q", got)
+	}
+	if got := Printable(strings.Repeat("é", 100)); got != strings.Repeat("?", 80) {
+		t.Errorf("multi-byte cut = %q", got)
+	}
+}

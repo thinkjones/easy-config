@@ -90,11 +90,13 @@ func (d Due) Clear(file, name string) bool {
 	return ok
 }
 
+var nullRE = regexp.MustCompile(`^(?i:null|true|false|yes|no|on|off|y|n)$`)
+
 var plainRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
 
 // scalar writes s as it reads best: bare when that is safe, else quoted by the encoder.
 func scalar(s string) string {
-	if plainRE.MatchString(s) {
+	if plainRE.MatchString(s) && !nullRE.MatchString(s) {
 		return s
 	}
 	out, err := yaml.Marshal(s)
