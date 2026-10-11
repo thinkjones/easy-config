@@ -234,6 +234,7 @@ func TestUserAddUsage(t *testing.T) {
 		{"ezc user add: --owner goes with --kind machine only.", []string{"sam", accessSam, "--owner", "gene"}},
 		{"ezc user add: add a bot with ezc bot add.", []string{"sam", accessSam, "--kind", "bot"}},
 		{"ezc user add: --kind is user or machine.", []string{"sam", accessSam, "--kind", "robot"}},
+		{"ezc user add: the name is lower case letters, digits and -, starting with a letter or a digit.", []string{"Sam", accessSam}},
 	} {
 		out, _, err := accessRun(f, append([]string{"user", "add"}, c.args...)...)
 		wantUsage(t, err, c.want)
@@ -260,7 +261,6 @@ func TestUserAddRefused(t *testing.T) {
 		{"that key is already registered to gene.", []string{"sam", accessGene}},
 		{"the second argument is not a valid public key.", []string{"sam", "not-a-key"}},
 		{"the second argument is not a valid public key.", []string{"sam", strings.TrimSpace(accessGenePrivate)}},
-		{`"Sam" is not a valid recipient name (lower case letters, digits and -).`, []string{"Sam", accessSam}},
 	} {
 		accessUntouched(t, f, x, c.want, append([]string{"user", "add"}, c.args...)...)
 	}
@@ -398,6 +398,11 @@ func TestUserAddPushFails(t *testing.T) {
 	out, _, err := accessRun(f, "user", "add", "sam", accessSam)
 	if err == nil || !strings.HasPrefix(err.Error(), "Committed, but the push failed (") || !strings.HasSuffix(err.Error(), "). Run ezc store push.") {
 		t.Fatalf("got %v", err)
+	}
+	var unpushed *unpushedError
+	var unchanged *unchangedError
+	if !errors.As(err, &unpushed) || unpushed.Unwrap() == nil || errors.As(err, &unchanged) {
+		t.Fatalf("want an *unpushedError and no *unchangedError, got %T", err)
 	}
 	storeWriteExitsOne(t, err)
 	if out != "✓ add sam\n" {
@@ -692,5 +697,103 @@ func TestUserAddWithoutAConfigUser(t *testing.T) {
 	}
 	if got := accessRegistry(t, filepath.Join(x.store, ezcDir)).Recipients["sam"].AddedBy; got != "gene" {
 		t.Fatalf("addedBy %q", got)
+	}
+}
+
+// A private key pasted where the name goes is printed nowhere, and nothing is fetched for it.
+func TestUserAddNeverEchoesAnArgument(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	private := strings.TrimSpace(accessGenePrivate)
+	for _, args := range [][]string{{private, accessSam}, {"sam", private}, {private, private}} {
+		head := x.git("rev-parse", "HEAD")
+		out, errOut, err := accessRun(f, append([]string{"user", "add"}, args...)...)
+		if err == nil {
+			t.Fatalf("%v: want an error", args)
+		}
+		if strings.Contains(out+errOut+err.Error(), private) {
+			t.Errorf("the private text was printed: %q %q %v", out, errOut, err)
+		}
+		if len(f.gits) != 0 || x.git("rev-parse", "HEAD") != head {
+			t.Errorf("git ran %d times", len(f.gits))
+		}
+	}
+	wantUsage(t, f.run("user", "add", private, accessSam), "ezc user add: the name is")
+}
+
+// A commit that fails leaves its files staged; when git then cannot unstage them, the error does not say nothing changed.
+func TestAccessApplySaysWhenGitCannotBePutBack(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	write(t, filepath.Join(x.store, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n")
+	if err := os.Chmod(filepath.Join(x.store, ".git", "hooks", "pre-commit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.gitFail = "reset"
+	_, _, err := accessRun(f, "user", "add", "sam", accessSam)
+	var unchanged *unchangedError
+	if err == nil || errors.As(err, &unchanged) || strings.Contains(err.Error(), "Nothing was changed") || !strings.Contains(err.Error(), "Run git status in "+x.store) {
+		t.Fatalf("got %v", err)
+	}
+	// The bytes went back all the same.
+	accessReaders(t, f, filepath.Join(x.store, ezcDir), accessGene)
+
+	// A restore that git fails at but that leaves nothing staged is a restore.
+	f = newFake(t)
+	x = accessStore(t, f)
+	f.backend.RewrapFail = "env.prod.enc.yaml"
+	f.gitFail = "reset"
+	if _, _, err = accessRun(f, "user", "add", "sam", accessSam); err == nil || !errors.As(err, &unchanged) {
+		t.Fatalf("got %v", err)
+	}
+	f.gitFail = ""
+	x.wantClean()
+}
+
+// Git ignores the store's files, so no commit can be made: no line says one was, nothing is pushed and the files go back.
+func TestAccessApplyWhenGitIgnoresTheFiles(t *testing.T) {
+	f := newFake(t)
+	accessMachine(t, f)
+	x := storeWriteFix{localStore(t, f)}
+	write(t, filepath.Join(x.store, ".gitignore"), ".ezc/\n")
+	if _, err := x.g.Commit(x.store, "ignore", gitstore.Author{}, ".gitignore"); err != nil {
+		t.Fatal(err)
+	}
+	x.bare = gittest.Bare(t)
+	if err := x.g.SetRemote(x.store, x.bare); err != nil {
+		t.Fatal(err)
+	}
+	x = x.published()
+	dir := filepath.Join(x.store, ezcDir)
+	accessFiles(t, f, dir, map[string]recipients.Recipient{"gene": accessEntry(accessGene)}, accessGene)
+	before, head := setupSnapshot(t, dir), x.git("rev-parse", "HEAD")
+
+	out, _, err := accessRun(f, "user", "add", "sam", accessSam)
+	want := "the change could not be committed: git ignores the store's files in " + dir + ". Nothing was changed."
+	if err == nil || err.Error() != want {
+		t.Fatalf("got %v", err)
+	}
+	if out != "" || x.git("rev-parse", "HEAD") != head || !mapsEqual(before, setupSnapshot(t, dir)) {
+		t.Fatalf("stdout %q, or a commit, or a changed file", out)
+	}
+	for _, c := range f.gits {
+		if slices.Contains(c.Args, "push") {
+			t.Fatal("it pushed")
+		}
+	}
+}
+
+// An encrypted file's name comes from whoever can push: one that cannot be shown stops every access command, and is shown made safe.
+func TestAccessRefusesAFileNameThatCannotBeShown(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	x.commit(x.store, "env.\x1b[31mx.enc.yaml", "garbage\n")
+	x.push(x.store)
+	want := "an encrypted file in " + filepath.Join(x.store, ezcDir) + " has a name that cannot be shown (env.?[31mx.enc.yaml). Rename it, then run this again."
+	for _, args := range [][]string{{"user", "list"}, {"user", "add", "sam", accessSam}, {"store", "rewrap"}} {
+		accessUntouched(t, f, x, want, args...)
+		if strings.Contains(f.out.String()+f.errOut.String(), "\x1b") {
+			t.Errorf("%v printed the raw name", args)
+		}
 	}
 }

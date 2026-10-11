@@ -39,6 +39,7 @@ type fake struct {
 	now       time.Time                                  // System.Now; the zero value means 2026-10-11T12:00:00Z
 	errTTY    bool                                       // StderrIsTerminal
 	noGit     bool                                       // git cannot be found
+	gitFail   string                                     // a git command with this argument fails
 
 	t    *testing.T
 	gits []proc.Command // every git command Exec ran; they are not in execs
@@ -62,6 +63,13 @@ func (f *fake) runGit(c proc.Command) ([]byte, []byte, error) {
 	f.gits = append(f.gits, c)
 	if f.noGit {
 		return nil, nil, exec.ErrNotFound
+	}
+	if f.gitFail != "" {
+		for _, arg := range c.Args {
+			if arg == f.gitFail {
+				return nil, []byte("fatal: made to fail\n"), errors.New("exit status 128")
+			}
+		}
 	}
 	if f.git == nil {
 		if _, err := exec.LookPath("git"); err != nil && os.Getenv("EZC_REQUIRE_GIT") != "1" {

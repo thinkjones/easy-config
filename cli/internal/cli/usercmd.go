@@ -102,7 +102,10 @@ Needs this machine's key file, and the key must be one recipients.yaml names. Re
 			case kind == recipients.KindUser && owner != "":
 				return usagef("%s: --owner goes with --kind machine only. Try `%s`.", cmd.CommandPath(), helpFor(cmd))
 			}
-			// The argument is not echoed: what was pasted may not be a public key.
+			// Neither argument is echoed unless it is a valid name: what was pasted may be a private key.
+			if !recipients.ValidName(name) {
+				return usagef("%s: the name is lower case letters, digits and -, starting with a letter or a digit. Try `%s`.", cmd.CommandPath(), helpFor(cmd))
+			}
 			if backendFor(sys).ValidRecipient(key) != nil {
 				return errors.New("the second argument is not a valid public key.")
 			}

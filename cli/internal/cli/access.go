@@ -55,6 +55,7 @@ func openAccess(sys System, write bool) (*access, error) {
 		a.sync = touchStore(sys)
 	}
 
+	// Decision 8: keyFileInUse is the one place that says whether the key is in a file.
 	file, inFile := keyFileInUse(sys)
 	if write && !inFile {
 		return nil, errors.New("An access change needs a key file, and this machine uses none. Run this on a machine that keeps its key in a file.")
@@ -68,6 +69,12 @@ func openAccess(sys System, write bool) (*access, error) {
 	}
 	if a.enc, err = encryptedFiles(a.dir); err != nil {
 		return nil, err
+	}
+	// Whoever can push to the store names these files, and the errors of what follows name them too.
+	for _, name := range a.enc {
+		if shown := recipients.Printable(name); shown != name {
+			return nil, fmt.Errorf("an encrypted file in %s has a name that cannot be shown (%s). Rename it, then run this again.", a.dir, shown)
+		}
 	}
 	if inFile {
 		key, err := a.b.PublicKey(file)
@@ -135,6 +142,15 @@ func (e *unchangedError) Error() string {
 
 func (e *unchangedError) Unwrap() error { return e.err }
 
+// unpushedError is an access change that was committed here and whose push failed: the commit stays.
+type unpushedError struct{ err error }
+
+func (e *unpushedError) Error() string {
+	return fmt.Sprintf("Committed, but the push failed (%s). Run ezc store push.", gitReason(e.err))
+}
+
+func (e *unpushedError) Unwrap() error { return e.err }
+
 // apply is the one path every access change takes: the sequence (recipients.Apply), c.due, c.extra, the removals,
 // one commit of the files that changed and a push when the store has a remote. A failure before the commit is
 // made puts every file back; a push that fails leaves the commit.
@@ -171,8 +187,13 @@ func (a *access) run(c change) (changed bool, err error) {
 	if a.me != "" {
 		author.Name = a.me
 	}
-	if _, err := g.Commit(a.sync.Dir, c.message, author, inEzc(written)...); err != nil {
+	done, err := g.Commit(a.sync.Dir, c.message, author, inEzc(written)...)
+	if err != nil {
 		return false, undo(fmt.Errorf("the change could not be committed: %s", gitReason(err)))
+	}
+	if !done {
+		// Git saw nothing to commit in files whose bytes changed: it ignores them.
+		return false, undo(fmt.Errorf("the change could not be committed: git ignores the store's files in %s", a.dir))
 	}
 	fmt.Fprintf(a.sys.Stdout, "✓ %s\n", c.message)
 	remote := a.sync.Status.Remote
@@ -180,7 +201,7 @@ func (a *access) run(c change) (changed bool, err error) {
 		return true, nil
 	}
 	if _, err := g.Push(a.sync.Dir); err != nil {
-		return true, fmt.Errorf("Committed, but the push failed (%s). Run ezc store push.", gitReason(err))
+		return true, &unpushedError{err}
 	}
 	fmt.Fprintf(a.sys.Stdout, "✓ pushed to %s\n", gitstore.ShowURL(remote))
 	return true, nil
@@ -215,11 +236,13 @@ func (a *access) write(c change) error {
 }
 
 // restore puts the files that differ from before back: through git when the store is a repo, so that nothing stays
-// staged, then from the bytes, which is all a plain folder has. It is an error when a file is still not as it was.
+// staged, then from the bytes, which is all a plain folder has. It is an error when a file is still not as it was,
+// or when git could not put the files back and still lists one as changed.
 func (a *access) restore(files []string, before []fileState) error {
+	var gitErr error
 	if a.sync.Git {
 		// What git cannot put back, the bytes below do.
-		_ = storeGit(a.sys).Restore(a.sync.Dir, inEzc(changedFiles(a.dir, files, before))...)
+		gitErr = storeGit(a.sys).Restore(a.sync.Dir, inEzc(changedFiles(a.dir, files, before))...)
 	}
 	left := changedFiles(a.dir, files, before)
 	for i, name := range files {
@@ -235,6 +258,12 @@ func (a *access) restore(files []string, before []fileState) error {
 	}
 	if left = changedFiles(a.dir, files, before); len(left) > 0 {
 		return fmt.Errorf("The store could not be put back as it was: look at %s in %s.", strings.Join(left, ", "), a.dir)
+	}
+	if gitErr != nil {
+		// The bytes are back, but a failed commit leaves its files staged.
+		if staged, err := storeGit(a.sys).Changed(a.sync.Dir, inEzc(files)...); err != nil || len(staged) > 0 {
+			return fmt.Errorf("The store's files are as they were, but git could not be put back (%s). Run git status in %s and unstage what it lists.", gitReason(gitErr), a.sync.Dir)
+		}
 	}
 	return nil
 }
