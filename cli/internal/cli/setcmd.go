@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -68,7 +69,7 @@ func checkEnvName(cmd string, env string) error {
 	case env == resolve.ReservedEnv:
 		return usagef("ezc %s: %s is a reserved name; it marks encrypted files (env.<name>.enc.yaml).", cmd, env)
 	}
-	return usagef("ezc %s: %q is not a valid environment name; use letters, digits, - and _.", cmd, env)
+	return usagef("ezc %s: that is not a valid environment name; use letters, digits, - and _.", cmd)
 }
 
 // holds reports whether the values file at path has name. A file that does not exist holds nothing.
@@ -84,7 +85,7 @@ func holds(be backend.Backend, path, name string) (bool, error) {
 	return slices.ContainsFunc(pairs, func(p backend.Pair) bool { return p.Name == name }), err
 }
 
-// declaration is the manifest in dir's scope; it must exist.
+// scopeManifest is the manifest in s; it must exist.
 func scopeManifest(s scope) (manifest.Manifest, error) {
 	m, found, err := manifestIfPresent(s.manifest())
 	if err == nil && !found {
@@ -122,7 +123,7 @@ A name the scope's manifest does not declare is declared by this command, as req
 			flags := cmd.Flags()
 			name := args[0]
 			if !manifest.ValidName(name) {
-				return usagef("ezc set: %q is not a valid variable name; use letters, digits and underscores, and do not start with a digit.", name)
+				return usagef("ezc set: %s", badName(name))
 			}
 			if slices.Contains(resolve.SelectorVars, name) {
 				return usagef("ezc set: %s names the environment and cannot be stored.", name)
@@ -147,11 +148,14 @@ A name the scope's manifest does not declare is declared by this command, as req
 					}
 				}
 				if typ != "" && typ != string(v.Type) {
-					return fmt.Errorf("%s is declared %s in %s; --type %s contradicts it.", name, v.Type, sc.show(manifestName), typ)
+					return fmt.Errorf("%s is declared %s in %s; a different --type contradicts it.", name, v.Type, sc.show(manifestName))
 				}
 			} else {
 				if typ == "" || desc == "" {
 					return usagef("ezc set: %s is not declared. Add --type and --desc to declare it.", name)
+				}
+				if !slices.Contains(manifest.AllTypes(), manifest.VarType(typ)) {
+					return usagef("ezc set: unknown --type; use %s.", typeList())
 				}
 				v = manifest.Var{Type: manifest.VarType(typ), Desc: desc, Values: allowed}
 				if flags.Changed("min") {
@@ -165,12 +169,32 @@ A name the scope's manifest does not declare is declared by this command, as req
 				}
 			}
 
+			be := backendFor(sys)
+			base := valuesBase(env)
+			file := valuesFile(base, v.IsSecret())
+			other := valuesFile(base, !v.IsSecret())
+			if in, err := holds(be, filepath.Join(sc.dir, other), name); err != nil {
+				return err
+			} else if in {
+				return fmt.Errorf("%s is already in %s. Moving a value across the secret boundary means it was (or will be) stored in plaintext: remove it with `ezc unset`, and give a secret a new value.", name, sc.show(other))
+			}
+			if v.IsSecret() {
+				if ok, err := be.HasPolicy(sc.dir); err != nil {
+					return err
+				} else if !ok {
+					return fmt.Errorf("%s: %w. See \"Encryption\" in the README.", sc.dir, backend.ErrNoPolicy)
+				}
+			}
+
 			value, err := valueToSet(sys, name, v.IsSecret(), args[1:])
 			if err != nil {
 				return err
 			}
 			if strings.ContainsRune(value, 0) {
 				return fmt.Errorf("%s: contains a NUL byte, which an environment variable cannot hold", name)
+			}
+			if !utf8.ValidString(value) {
+				return fmt.Errorf("%s: not valid UTF-8", name)
 			}
 			switch {
 			case strings.TrimSpace(value) == "":
@@ -182,28 +206,24 @@ A name the scope's manifest does not declare is declared by this command, as req
 				return fmt.Errorf("%s: %s", name, why)
 			}
 
-			be := backendFor(sys)
-			base := valuesBase(env)
-			file := valuesFile(base, v.IsSecret())
-			other := valuesFile(base, !v.IsSecret())
-			if in, err := holds(be, filepath.Join(sc.dir, other), name); err != nil {
-				return err
-			} else if in {
-				return fmt.Errorf("%s is already in %s. Moving a value across the secret boundary means it was (or will be) stored in plaintext: remove it with `ezc unset`, and give a secret a new value.", name, sc.show(other))
-			}
-
-			path := filepath.Join(sc.dir, file)
-			undo, err := writeValue(be, path, name, value, v.IsSecret())
-			if err != nil {
-				return err
-			}
+			// A new name is declared first, so a failure to declare leaves nothing behind; if the value then
+			// cannot be written, the manifest is put back byte for byte.
+			var saved []byte
 			if !declared {
-				if err := valuefile.Declare(sc.manifest(), name, v, optional); err != nil {
-					if uerr := undo(); uerr != nil {
-						return fmt.Errorf("%v. The value is still in %s; remove it with `ezc unset`, and declare %s in %s", err, path, name, sc.manifest())
-					}
+				if saved, err = os.ReadFile(sc.manifest()); err != nil {
 					return err
 				}
+				if err := valuefile.Declare(sc.manifest(), name, v, optional); err != nil {
+					return err
+				}
+			}
+			if err := writeValue(be, filepath.Join(sc.dir, file), name, value, v.IsSecret()); err != nil {
+				if !declared {
+					if rerr := valuefile.Replace(sc.manifest(), saved); rerr != nil {
+						return fmt.Errorf("%w. %s declares %s, which has no value; remove the declaration by hand", err, sc.manifest(), name)
+					}
+				}
+				return err
 			}
 			fmt.Fprintf(sys.Stdout, "set %s in %s\n", name, sc.show(file))
 			if !declared {
@@ -221,6 +241,7 @@ A name the scope's manifest does not declare is declared by this command, as req
 	f.StringSliceVar(&allowed, "values", nil, "the allowed values of a new enum, comma-separated")
 	f.IntVar(&lo, "min", 0, "the smallest value of a new int")
 	f.IntVar(&hi, "max", 0, "the largest value of a new int")
+	noEcho(cmd, " A value that starts with - must be piped on stdin.")
 	return cmd
 }
 
@@ -276,59 +297,49 @@ func valueToSet(sys System, name string, secret bool, args []string) (string, er
 	return value, nil
 }
 
-// writeValue stores the value, plaintext or through the backend, and returns a function that puts the file back
-// as it was before.
-func writeValue(be backend.Backend, path, name, value string, secret bool) (undo func() error, err error) {
-	had, err := holds(be, path, name)
-	if err != nil {
-		return nil, err
+// writeValue stores the value, plaintext or through the backend.
+func writeValue(be backend.Backend, path, name, value string, secret bool) error {
+	if !secret {
+		return valuefile.Set(path, name, value)
 	}
-	if secret {
-		if err := be.Set(path, name, value); err != nil {
-			if errors.Is(err, backend.ErrNoPolicy) {
-				err = fmt.Errorf("%w See \"Encryption\" in the README.", err)
-			}
-			return nil, err
-		}
-		return func() error {
-			if had {
-				return fmt.Errorf("%s held %s before", path, name)
-			}
-			return be.Unset(path, name)
-		}, nil
+	err := be.Set(path, name, value)
+	if errors.Is(err, backend.ErrNoPolicy) {
+		err = fmt.Errorf("%w See \"Encryption\" in the README.", err)
 	}
-	var prev string
-	if pairs, _, err := resolve.Plain(path); err == nil {
-		for _, p := range pairs {
-			if p.Name == name {
-				prev = p.Value
-			}
-		}
+	return err
+}
+
+// badName is the reason a name is refused; it never repeats the argument, which may be NAME=value.
+func badName(name string) string {
+	msg := "that is not a valid variable name; use letters, digits and _, not starting with a digit."
+	if strings.Contains(name, "=") {
+		msg += " NAME and VALUE are separate arguments; a secret is typed or piped."
 	}
-	if err := valuefile.Set(path, name, value); err != nil {
-		return nil, err
-	}
-	return func() error {
-		if had {
-			return valuefile.Set(path, name, prev)
-		}
-		_, err := valuefile.Unset(path, name)
-		return err
-	}, nil
+	return msg
+}
+
+// noEcho makes a flag error say nothing of the arguments, which may hold a value.
+func noEcho(cmd *cobra.Command, extra string) {
+	cmd.SetFlagErrorFunc(func(c *cobra.Command, _ error) error {
+		return usagef("%s: unrecognised flag.%s Try `%s`.", c.CommandPath(), extra, helpFor(c))
+	})
 }
 
 func newUnsetCmd(sys System) *cobra.Command {
 	var (
-		global bool
-		env    string
+		global, undeclare bool
+		env               string
 	)
 	cmd := &cobra.Command{
 		Use:   "unset NAME",
-		Short: "remove a variable's value, and its declaration when no file holds it any more",
-		Long:  `Remove NAME from the repo's common.yaml, or env.ENV.yaml with --env; a secret is removed from the encrypted file. With -g the store's files are used instead. When no values file in the scope holds NAME any more, its declaration in the scope's manifest is removed too.`,
+		Short: "remove a variable's value from the plaintext and encrypted file",
+		Long:  `Remove NAME from the repo's common.yaml and common.enc.yaml, or env.ENV.yaml and env.ENV.enc.yaml with --env, whichever hold it. With -g the store's files are used instead. The declaration in the scope's manifest stays unless --undeclare is given; that is refused while any other values file in the scope still holds NAME.`,
 		Args:  exactArgs(1, "a variable name"),
 		RunE: func(_ *cobra.Command, args []string) error {
 			name := args[0]
+			if !manifest.ValidName(name) {
+				return usagef("ezc unset: %s", badName(name))
+			}
 			if err := checkEnvName("unset", env); err != nil {
 				return err
 			}
@@ -340,15 +351,19 @@ func newUnsetCmd(sys System) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			_, declared := m.Lookup(name)
 			be := backendFor(sys)
 			base := valuesBase(env)
-			v, declared := m.Lookup(name)
 			files := []string{valuesFile(base, false), valuesFile(base, true)}
-			if declared {
-				files = []string{valuesFile(base, v.IsSecret())}
-			}
 
-			var removedFrom []string
+			if undeclare {
+				if other, err := heldInScope(be, sc.dir, name, files); err != nil {
+					return err
+				} else if other != "" {
+					return fmt.Errorf("%s is still set in %s; unset it there first, or leave the declaration.", name, sc.show(other))
+				}
+			}
+			removed := 0
 			for _, file := range files {
 				path := filepath.Join(sc.dir, file)
 				in, err := holds(be, path, name)
@@ -366,54 +381,46 @@ func newUnsetCmd(sys System) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				removedFrom = append(removedFrom, file)
-			}
-			if len(removedFrom) == 0 {
-				shown := make([]string, len(files))
-				for i, f := range files {
-					shown[i] = sc.show(f)
-				}
-				return fmt.Errorf("%s is not set in %s.", name, strings.Join(shown, " or "))
-			}
-			for _, file := range removedFrom {
+				removed++
 				fmt.Fprintf(sys.Stdout, "unset %s from %s\n", name, sc.show(file))
 			}
-			if !declared {
-				return nil
+			if removed == 0 && !(undeclare && declared) {
+				return fmt.Errorf("%s is not set in %s or %s.", name, sc.show(files[0]), sc.show(files[1]))
 			}
-			still, err := heldInScope(be, sc.dir, name)
-			if err != nil || still {
-				return err
-			}
-			if gone, err := valuefile.Undeclare(sc.manifest(), name); err != nil {
-				return err
-			} else if gone {
-				fmt.Fprintf(sys.Stdout, "removed %s from %s\n", name, sc.show(manifestName))
+			if undeclare && declared {
+				if gone, err := valuefile.Undeclare(sc.manifest(), name); err != nil {
+					return err
+				} else if gone {
+					fmt.Fprintf(sys.Stdout, "removed %s from %s\n", name, sc.show(manifestName))
+				}
 			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVarP(&global, "global", "g", false, "remove from the global store")
-	cmd.Flags().StringVar(&env, "env", "", "remove from the environment's file, not the common one")
+	cmd.Flags().StringVar(&env, "env", "", "remove from the environment's files, not the common ones")
+	cmd.Flags().BoolVar(&undeclare, "undeclare", false, "also remove the name's declaration from the manifest")
+	noEcho(cmd, "")
 	return cmd
 }
 
-// heldInScope reports whether any values file in dir (common and every environment, plain or encrypted) has name.
-func heldInScope(be backend.Backend, dir, name string) (bool, error) {
+// heldInScope is the first values file in dir (common and every environment, plain or encrypted) other than skip
+// that has name; "" when none does.
+func heldInScope(be backend.Backend, dir, name string, skip []string) (string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	for _, e := range entries {
 		n := e.Name()
 		isValues := n == "common.yaml" || n == "common.enc.yaml" ||
 			(strings.HasPrefix(n, "env.") && strings.HasSuffix(n, ".yaml") && n != "env."+resolve.ReservedEnv+".yaml")
-		if !isValues || e.IsDir() {
+		if !isValues || e.IsDir() || slices.Contains(skip, n) {
 			continue
 		}
 		if in, err := holds(be, filepath.Join(dir, n), name); err != nil || in {
-			return in, err
+			return n, err
 		}
 	}
-	return false, nil
+	return "", nil
 }

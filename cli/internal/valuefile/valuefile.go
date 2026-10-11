@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -27,6 +28,9 @@ func Set(path, name, value string) error {
 	// Plain reads a NUL back, but resolve.Load refuses it: no environment variable can hold one.
 	if strings.ContainsRune(value, 0) {
 		return fmt.Errorf("%s: cannot store %s in a values file: it contains a NUL byte", path, name)
+	}
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("%s: cannot store %s in a values file: it is not valid UTF-8", path, name)
 	}
 	before, present, err := resolve.Plain(path)
 	if err != nil {
@@ -122,6 +126,11 @@ func Unset(path, name string) (removed bool, err error) {
 	}
 	root := doc.Content[0]
 	i := keyIndex(root, name)
+	if i == 0 && root.Content[0].HeadComment != "" {
+		// A header written directly above the first key is that key's head comment; the next key inherits it.
+		next := root.Content[2]
+		next.HeadComment = strings.TrimSuffix(root.Content[0].HeadComment+"\n"+next.HeadComment, "\n")
+	}
 	root.Content = slices.Delete(root.Content, i, i+2)
 	data, err := encode(doc)
 	if err != nil {
@@ -158,7 +167,14 @@ func Declare(manifestPath, name string, v manifest.Var, optional bool) error {
 		table = "optional"
 	}
 	m := tableIn(root, table)
-	if m == nil {
+	if i := keyIndex(root, table); m == nil && i >= 0 {
+		old := root.Content[i+1]
+		if old.Kind != yaml.ScalarNode || old.Tag != "!!null" {
+			return fmt.Errorf("%s: %s is not a mapping of names, so %s cannot be added to it", manifestPath, table, name)
+		}
+		m = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", HeadComment: old.HeadComment, LineComment: old.LineComment, FootComment: old.FootComment}
+		root.Content[i+1] = m
+	} else if m == nil {
 		m = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 		root.Content = append(root.Content, keyNode(table), m)
 	}
@@ -178,6 +194,12 @@ func Declare(manifestPath, name string, v manifest.Var, optional bool) error {
 		}
 		return nil
 	})
+}
+
+// Replace puts data at path through a temporary file and a rename, keeping the file's mode. It restores a file whose
+// bytes were read earlier.
+func Replace(path string, data []byte) error {
+	return write(path, data, 0o644, func(string) error { return nil })
 }
 
 // Undeclare removes name from the manifest. It reports whether it was there.
@@ -216,7 +238,7 @@ func Undeclare(manifestPath, name string) (removed bool, err error) {
 	return false, nil
 }
 
-// table_ is the mapping under key in root, or nil.
+// tableIn is the mapping under key in root, or nil.
 func tableIn(root *yaml.Node, key string) *yaml.Node {
 	if i := keyIndex(root, key); i >= 0 && root.Content[i+1].Kind == yaml.MappingNode {
 		return root.Content[i+1]
@@ -242,11 +264,10 @@ func writeManifest(path string, doc *yaml.Node, check func(manifest.Manifest) er
 	if err != nil {
 		return err
 	}
-	mode := fs.FileMode(0o644)
-	err = write(path, data, mode, func(tmp string) error {
+	err = write(path, data, 0o644, func(tmp string) error {
 		m, err := manifest.Load(tmp)
 		if err != nil {
-			return err
+			return errors.New("it does not parse")
 		}
 		if errs := m.Validate(); len(errs) > 0 {
 			return errs[0]
@@ -258,6 +279,15 @@ func writeManifest(path string, doc *yaml.Node, check func(manifest.Manifest) er
 		return fmt.Errorf("%s: the edited manifest would not be valid: %w", path, ve.cause)
 	}
 	return err
+}
+
+// pathErr is err with the operating system's own text only: a *fs.PathError names the temporary file.
+func pathErr(path string, err error) error {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		err = pe.Err
+	}
+	return fmt.Errorf("%s: %v", path, err)
 }
 
 // errVerify marks a write abandoned because the new content did not read back as intended.
@@ -278,7 +308,7 @@ func write(path string, data []byte, newMode fs.FileMode, verify func(tmp string
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return fmt.Errorf("%s: %w", path, err)
+		return pathErr(path, err)
 	}
 	name := tmp.Name()
 	done := false
@@ -295,13 +325,13 @@ func write(path string, data []byte, newMode fs.FileMode, verify func(tmp string
 		werr = os.Chmod(name, mode)
 	}
 	if werr != nil {
-		return fmt.Errorf("%s: %w", path, werr)
+		return pathErr(path, werr)
 	}
 	if err := verify(name); err != nil {
 		return &verifyError{err}
 	}
 	if err := os.Rename(name, path); err != nil {
-		return fmt.Errorf("%s: %w", path, err)
+		return pathErr(path, err)
 	}
 	done = true
 	return nil

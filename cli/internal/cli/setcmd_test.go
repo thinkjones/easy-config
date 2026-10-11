@@ -177,15 +177,13 @@ func TestSetValidatesTheValue(t *testing.T) {
 	setRepo(t, f, map[string]string{})
 	cases := []struct{ value, want string }{
 		{"12", "SIZE: above the maximum of 9"},
-		{"replace-me", "SIZE: placeholder"},
+		{"replace-me", "SIZE: placeholder, not a value"},
 		{"", "SIZE: empty"},
 	}
 	for _, c := range cases {
 		err := f.run("set", "SIZE", c.value)
-		if err == nil || !strings.Contains(err.Error(), c.want) {
+		if err == nil || err.Error() != c.want {
 			t.Errorf("%q: got %v", c.value, err)
-		} else if c.value != "" && strings.Contains(err.Error(), c.value+" ") {
-			t.Errorf("the error carries the value: %v", err)
 		}
 	}
 	err := f.run("set", "NAME", "a\x00b")
@@ -392,36 +390,140 @@ func TestSetBadEnvName(t *testing.T) {
 	wantUsage(t, f.run("set", "NAME", "x", "--env", "a/b"), "not a valid environment name")
 }
 
-// mAliased is a valid manifest whose required and optional tables are one node, so declaring a name in
-// either reads back as declared in both: Declare fails after the value is written.
-const mAliased = "schemaVersion: v1\nrequired: &r {}\noptional: *r\n"
+// snapshot is the bytes of every file in the repo's .ezc folder, by name.
+func snapshot(t *testing.T, f *fake) map[string]string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(f.wd, ezcDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, e := range entries {
+		out[e.Name()] = readFile(t, repoFile(f, e.Name()))
+	}
+	return out
+}
 
-func TestSetDeclareFailureUndoesTheValue(t *testing.T) {
+func sameSnapshot(t *testing.T, before, after map[string]string) {
+	t.Helper()
+	if len(before) != len(after) {
+		t.Fatalf("files changed: before %d, after %d", len(before), len(after))
+	}
+	for name, content := range before {
+		if after[name] != content {
+			t.Errorf("%s changed:\n%s\n---\n%s", name, content, after[name])
+		}
+	}
+}
+
+func TestSetValueFailureRestoresTheManifest(t *testing.T) {
 	f := newFake(t)
-	setRepo(t, f, map[string]string{"manifest.yaml": mAliased, "common.yaml": "OTHER: o\n"})
+	// The values file is not one ezc may edit, which fails the write after the manifest was declared.
+	setRepo(t, f, map[string]string{"common.yaml": "A: &x 1\n"})
+	before := snapshot(t, f)
 	err := f.run("set", "NEW", "v", "--type", "str", "--desc", "d")
-	if err == nil {
-		t.Fatal("want an error")
+	if err == nil || !strings.Contains(err.Error(), "anchor") {
+		t.Fatalf("got %v", err)
 	}
-	if got := readFile(t, repoFile(f, "common.yaml")); got != "OTHER: o\n" {
-		t.Fatalf("got %q", got)
-	}
-	if readFile(t, repoFile(f, "manifest.yaml")) != mAliased {
-		t.Fatal("the manifest changed")
-	}
+	sameSnapshot(t, before, snapshot(t, f))
 	if f.out.Len() != 0 {
 		t.Fatalf("stdout %q", f.out.String())
 	}
 }
 
-func TestSetDeclareFailureUndoesTheSecret(t *testing.T) {
+func TestSetSecretWithoutKeyLeavesTheManifestAndFilesAlone(t *testing.T) {
 	f := newFake(t)
-	setRepo(t, f, map[string]string{"manifest.yaml": mAliased})
+	setRepo(t, f, map[string]string{"common.yaml": "NAME: n\n"})
+	f.backend.Locked = true
 	f.stdin = "v\n"
-	if err := f.run("set", "KEY", "--type", "secret", "--desc", "d"); err == nil {
+	before := snapshot(t, f)
+	if err := f.run("set", "KEY", "--type", "secret", "--desc", "d"); !errors.Is(err, backend.ErrNoKey) {
+		t.Fatalf("got %v", err)
+	}
+	sameSnapshot(t, before, snapshot(t, f))
+}
+
+func TestSetSecretOverAnUndeclaredStoredOneKeepsItWhenTheKeyIsMissing(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{})
+	secretIn(t, f, "repo", "common.enc.yaml", "KEY", "old")
+	f.backend.Locked = true
+	f.stdin = "new\n"
+	before := snapshot(t, f)
+	if err := f.run("set", "KEY", "--type", "secret", "--desc", "d"); !errors.Is(err, backend.ErrNoKey) {
+		t.Fatalf("got %v", err)
+	}
+	sameSnapshot(t, before, snapshot(t, f))
+}
+
+func TestSetKeepsAFileWhoseCommentsAreAllItHolds(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{"env.local.yaml": "# header\n", "common.yaml": "A: &x 1\n"})
+	before := snapshot(t, f)
+	if err := f.run("set", "NEW", "v", "--type", "str", "--desc", "d"); err == nil {
 		t.Fatal("want an error")
 	}
-	missing(t, repoFile(f, "common.enc.yaml"))
+	sameSnapshot(t, before, snapshot(t, f))
+}
+
+func TestSetArgumentsAreNeverEchoed(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{})
+	cases := [][]string{
+		{"set", "TOKEN=s3cr3t"},
+		{"unset", "TOKEN=s3cr3t"},
+		{"set", "TOKEN", "-s3cr3t"},
+		{"unset", "TOKEN", "-s3cr3t"},
+		{"set", "NAME", "s3cr3t", "x"},
+		{"unset", "NAME", "s3cr3t"},
+		{"set", "NAME", "v", "--env", "s3cr3t/x"},
+		{"set", "NEW", "v", "--type", "s3cr3t", "--desc", "d"},
+		{"set", "NAME", "v", "--min", "s3cr3t"},
+	}
+	for _, args := range cases {
+		err := f.run(args...)
+		var u *UsageError
+		if !errors.As(err, &u) {
+			t.Errorf("%v: want a UsageError, got %v", args, err)
+			continue
+		}
+		if strings.Contains(err.Error()+f.out.String()+f.errOut.String(), "s3cr3t") {
+			t.Errorf("%v: echoed: %v", args, err)
+		}
+	}
+	wantUsage(t, f.run("set", "TOKEN=x"), "NAME and VALUE are separate")
+	wantUsage(t, f.run("set", "NAME", "-x"), "must be piped on stdin")
+}
+
+func TestSetIsRefusedBeforeAskingForASecretWithoutPolicy(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{"manifest.yaml": mToken})
+	f.tty = true
+	if err := f.run("set", "TOKEN"); !errors.Is(err, backend.ErrNoPolicy) {
+		t.Fatalf("got %v", err)
+	}
+	if len(f.prompts) != 0 {
+		t.Fatalf("prompted: %q", f.prompts)
+	}
+}
+
+func TestSetInvalidUTF8Refused(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{})
+	err := f.run("set", "NAME", "\xff")
+	if err == nil || !strings.Contains(err.Error(), "NAME: not valid UTF-8") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func declared(t *testing.T, f *fake, name string) bool {
+	t.Helper()
+	m, err := manifest.Load(repoFile(f, "manifest.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ok := m.Lookup(name)
+	return ok
 }
 
 func TestUnsetPlaintext(t *testing.T) {
@@ -430,18 +532,59 @@ func TestUnsetPlaintext(t *testing.T) {
 	if err := f.run("unset", "NAME"); err != nil {
 		t.Fatal(err)
 	}
+	if got := f.out.String(); got != "unset NAME from repo/common.yaml\n" {
+		t.Fatalf("got %q", got)
+	}
+	if !declared(t, f, "NAME") {
+		t.Fatal("the declaration went")
+	}
+	if readFile(t, repoFile(f, "common.yaml")) != "OTHER: o\n" {
+		t.Fatalf("got %q", readFile(t, repoFile(f, "common.yaml")))
+	}
+}
+
+func TestUnsetUndeclare(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{"common.yaml": "NAME: n\n"})
+	if err := f.run("unset", "NAME", "--undeclare"); err != nil {
+		t.Fatal(err)
+	}
 	if got := f.out.String(); got != "unset NAME from repo/common.yaml\nremoved NAME from repo/manifest.yaml\n" {
 		t.Fatalf("got %q", got)
 	}
 	m, err := manifest.Load(repoFile(f, "manifest.yaml"))
-	if err != nil || len(m.Validate()) > 0 {
+	if err != nil || len(m.Validate()) > 0 || declared(t, f, "NAME") {
 		t.Fatalf("got %v %v", err, m.Validate())
 	}
-	if _, ok := m.Lookup("NAME"); ok {
-		t.Fatal("still declared")
+}
+
+func TestUnsetUndeclareRefusedWhileAnotherFileHoldsTheName(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{"common.yaml": "NAME: n\n", "env.prod.yaml": "NAME: p\n"})
+	before := snapshot(t, f)
+	err := f.run("unset", "NAME", "--undeclare")
+	if err == nil || !strings.Contains(err.Error(), "NAME is still set in repo/env.prod.yaml; unset it there first, or leave the declaration.") {
+		t.Fatalf("got %v", err)
 	}
-	if readFile(t, repoFile(f, "common.yaml")) != "OTHER: o\n" {
-		t.Fatalf("got %q", readFile(t, repoFile(f, "common.yaml")))
+	sameSnapshot(t, before, snapshot(t, f))
+
+	f2 := newFake(t)
+	setRepo(t, f2, map[string]string{"common.yaml": "NAME: n\n"})
+	secretIn(t, f2, "repo", "env.prod.enc.yaml", "NAME", "p")
+	err = f2.run("unset", "NAME", "--undeclare")
+	if err == nil || !strings.Contains(err.Error(), "still set in repo/env.prod.enc.yaml") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestUnsetUndeclareWithNoValueRemovesJustTheDeclaration(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{})
+	if err := f.run("unset", "NAME", "--undeclare"); err != nil {
+		t.Fatal(err)
+	}
+	if f.out.String() != "removed NAME from repo/manifest.yaml\n" || declared(t, f, "NAME") {
+		t.Fatalf("got %q", f.out.String())
 	}
 }
 
@@ -451,25 +594,8 @@ func TestUnsetKeepsDeclarationWhenStillSet(t *testing.T) {
 	if err := f.run("unset", "NAME"); err != nil {
 		t.Fatal(err)
 	}
-	if f.out.String() != "unset NAME from repo/common.yaml\n" {
+	if f.out.String() != "unset NAME from repo/common.yaml\n" || !declared(t, f, "NAME") {
 		t.Fatalf("got %q", f.out.String())
-	}
-	m, _ := manifest.Load(repoFile(f, "manifest.yaml"))
-	if _, ok := m.Lookup("NAME"); !ok {
-		t.Fatal("the declaration went")
-	}
-}
-
-func TestUnsetKeepsDeclarationWhenAnEncryptedFileHoldsIt(t *testing.T) {
-	f := newFake(t)
-	setRepo(t, f, map[string]string{"common.yaml": "NAME: n\n"})
-	secretIn(t, f, "repo", "env.prod.enc.yaml", "NAME", "p")
-	if err := f.run("unset", "NAME"); err != nil {
-		t.Fatal(err)
-	}
-	m, _ := manifest.Load(repoFile(f, "manifest.yaml"))
-	if _, ok := m.Lookup("NAME"); !ok {
-		t.Fatal("the declaration went")
 	}
 }
 
@@ -480,10 +606,42 @@ func TestUnsetSecret(t *testing.T) {
 	if err := f.run("unset", "TOKEN"); err != nil {
 		t.Fatal(err)
 	}
-	if f.out.String() != "unset TOKEN from repo/common.enc.yaml\nremoved TOKEN from repo/manifest.yaml\n" {
+	if f.out.String() != "unset TOKEN from repo/common.enc.yaml\n" {
 		t.Fatalf("got %q", f.out.String())
 	}
 	missing(t, repoFile(f, "common.enc.yaml"))
+}
+
+func TestUnsetRemovesTheLeakedPlaintextCopyOfASecret(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{"common.yaml": "TOKEN: leaked\n"})
+	f.stdin = "v\n"
+	err := f.run("set", "TOKEN")
+	if err == nil || !strings.Contains(err.Error(), "remove it with `ezc unset`") {
+		t.Fatalf("got %v", err)
+	}
+	if err := f.run("unset", "TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	missing(t, repoFile(f, "common.yaml"))
+	if err := f.run("set", "TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := stored(t, f, "common.enc.yaml", "TOKEN"); v != "v" {
+		t.Fatalf("got %q", v)
+	}
+}
+
+func TestUnsetRemovesFromBothFilesOfTheBase(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{"common.yaml": "STRAY: a\nKEEP: k\n"})
+	secretIn(t, f, "repo", "common.enc.yaml", "STRAY", "b")
+	if err := f.run("unset", "STRAY"); err != nil {
+		t.Fatal(err)
+	}
+	if f.out.String() != "unset STRAY from repo/common.yaml\nunset STRAY from repo/common.enc.yaml\n" {
+		t.Fatalf("got %q", f.out.String())
+	}
 }
 
 func TestUnsetSecretNeedsTheKey(t *testing.T) {
@@ -494,8 +652,7 @@ func TestUnsetSecretNeedsTheKey(t *testing.T) {
 	if err := f.run("unset", "TOKEN"); !errors.Is(err, backend.ErrNoKey) {
 		t.Fatalf("got %v", err)
 	}
-	m, _ := manifest.Load(repoFile(f, "manifest.yaml"))
-	if _, ok := m.Lookup("TOKEN"); !ok {
+	if !declared(t, f, "TOKEN") {
 		t.Fatal("the declaration went")
 	}
 }
@@ -520,17 +677,12 @@ func TestUnsetUndeclaredFindsEitherFile(t *testing.T) {
 func TestUnsetNotSet(t *testing.T) {
 	f := newFake(t)
 	setRepo(t, f, map[string]string{})
-	err := f.run("unset", "NOPE")
-	if err == nil || !strings.Contains(err.Error(), "NOPE is not set in repo/common.yaml") {
-		t.Fatalf("got %v", err)
-	}
-	err = f.run("unset", "NAME")
-	if err == nil || !strings.Contains(err.Error(), "NAME is not set in repo/common.yaml.") {
-		t.Fatalf("got %v", err)
-	}
-	err = f.run("unset", "TOKEN")
-	if err == nil || !strings.Contains(err.Error(), "TOKEN is not set in repo/common.enc.yaml.") {
-		t.Fatalf("got %v", err)
+	for _, name := range []string{"NOPE", "NAME", "TOKEN"} {
+		err := f.run("unset", name)
+		want := name + " is not set in repo/common.yaml or repo/common.enc.yaml."
+		if err == nil || err.Error() != want {
+			t.Errorf("got %v", err)
+		}
 	}
 }
 
@@ -540,7 +692,7 @@ func TestUnsetGlobalAndEnv(t *testing.T) {
 	if err := f.run("unset", "NAME", "-g", "--env", "prod"); err != nil {
 		t.Fatal(err)
 	}
-	if f.out.String() != "unset NAME from store/env.prod.yaml\nremoved NAME from store/manifest.yaml\n" {
+	if f.out.String() != "unset NAME from store/env.prod.yaml\n" {
 		t.Fatalf("got %q", f.out.String())
 	}
 }
@@ -552,5 +704,5 @@ func TestSetAndUnsetRejectArguments(t *testing.T) {
 	wantUsage(t, f.run("set", "A", "b", "c"), "give")
 	wantUsage(t, f.run("unset"), "give")
 	wantUsage(t, f.run("unset", "A", "b"), "give")
-	wantUsage(t, f.run("unset", "A", "--type", "str"), "unknown flag")
+	wantUsage(t, f.run("unset", "A", "--type", "str"), "unrecognised flag")
 }

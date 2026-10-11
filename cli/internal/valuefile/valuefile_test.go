@@ -279,3 +279,98 @@ func TestDeclareKeepsBounds(t *testing.T) {
 		t.Fatalf("got %+v", v)
 	}
 }
+
+func TestDeclareIntoAnEmptyTable(t *testing.T) {
+	for _, tc := range []struct {
+		name, src string
+		optional  bool
+	}{
+		{"null required", "schemaVersion: v1\nrequired:\n", false},
+		{"null optional", "schemaVersion: v1\nrequired: {}\noptional:\n", true},
+		{"flow optional", "schemaVersion: v1\nrequired: {}\noptional: {}\n", true},
+	} {
+		path := filepath.Join(t.TempDir(), "manifest.yaml")
+		put(t, path, tc.src)
+		if err := Declare(path, "A", manifest.Var{Type: manifest.TypeStr, Desc: "d"}, tc.optional); err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		m, err := manifest.Load(path)
+		table := m.Required
+		if tc.optional {
+			table = m.Optional
+		}
+		if err != nil || len(m.Validate()) > 0 || len(table) != 1 {
+			t.Errorf("%s: got %v %v\n%s", tc.name, err, m.Validate(), slurp(t, path))
+		}
+	}
+}
+
+func TestDeclareErrorsNameNeitherTempFileNorParserText(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "manifest.yaml")
+	put(t, path, "schemaVersion: v1\nrequired: [1]\n")
+	err := Declare(path, "A", manifest.Var{Type: manifest.TypeStr, Desc: "d"}, false)
+	if err == nil || !strings.Contains(err.Error(), path) || strings.Contains(err.Error(), ".tmp-") || strings.Contains(err.Error(), "unmarshal") {
+		t.Fatalf("got %v", err)
+	}
+	if slurp(t, path) != "schemaVersion: v1\nrequired: [1]\n" {
+		t.Fatal("the manifest changed")
+	}
+	put(t, path, "schemaVersion: v1\nrequired: {}\n")
+	// A name that fails validation in the written file: the error names the manifest, not the temp file.
+	err = Declare(path, "bad name", manifest.Var{Type: manifest.TypeStr, Desc: "d"}, false)
+	if err == nil || strings.Contains(err.Error(), ".tmp-") || strings.Contains(err.Error(), "unmarshal") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestWriteErrorsNameNoTempFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes anywhere")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "common.yaml")
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o755)
+	err := Set(path, "A", "1")
+	if err == nil || !strings.Contains(err.Error(), path) || strings.Contains(err.Error(), ".tmp-") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestUnsetFirstKeyKeepsItsHeader(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "env.local.yaml")
+	put(t, path, "# Values for local.\nA: 1\nB: 2\n")
+	if _, err := Unset(path, "A"); err != nil {
+		t.Fatal(err)
+	}
+	if got := slurp(t, path); !strings.Contains(got, "# Values for local.") {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSetRefusesInvalidUTF8(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "common.yaml")
+	err := Set(path, "A", "\xff")
+	if err == nil || !strings.Contains(err.Error(), "A") || !strings.Contains(err.Error(), path) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestReplaceRestoresBytes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "manifest.yaml")
+	put(t, path, "changed\n")
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Replace(path, []byte("original   bytes\n")); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(path)
+	if slurp(t, path) != "original   bytes\n" || info.Mode().Perm() != 0o600 {
+		t.Fatal("not restored")
+	}
+}
