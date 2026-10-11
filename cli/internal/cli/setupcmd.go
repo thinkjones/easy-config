@@ -11,6 +11,7 @@ import (
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/config"
+	"github.com/thinkjones/easy-config/cli/internal/gitstore"
 	"github.com/thinkjones/easy-config/cli/internal/paths"
 	"github.com/thinkjones/easy-config/cli/internal/recipients"
 	"github.com/thinkjones/easy-config/cli/internal/setup"
@@ -264,7 +265,7 @@ func runSetup(sys System, o setupFlags) error {
 		have  *string
 		value string
 	}{
-		{&filled.User, name}, {&filled.Backend, be.Name()}, {&filled.KeyFile, kf}, {&filled.Store.Remote, remote},
+		{&filled.User, name}, {&filled.Backend, be.Name()}, {&filled.KeyFile, kf}, {&filled.Store.Remote, gitstore.ShowURL(remote)},
 	} {
 		if *field.have == "" {
 			*field.have = field.value
@@ -335,10 +336,10 @@ func sameRemote(remote, source string) bool {
 	return setup.IsSlug(source) && (strings.HasSuffix(r, "/"+s) || strings.HasSuffix(r, ":"+s))
 }
 
-// remoteNote is "remote <url>" for a message, the URL without the name and password it may carry.
+// remoteNote is "remote <url>" for a message, the URL without what it may carry besides the host and the path.
 func remoteNote(remote string) string {
 	if remote == "" {
 		return "no remote"
 	}
-	return "remote " + setup.Redact(remote)
+	return "remote " + gitstore.ShowURL(remote)
 }

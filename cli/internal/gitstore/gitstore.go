@@ -112,30 +112,37 @@ func (g Git) run(dir string, timeout time.Duration, args ...string) ([]byte, err
 }
 
 // reason is the line of git's stderr that says what went wrong: its first
-// "fatal:" or "error:" line, else its first line. A URL in it keeps only its
-// scheme, host and path: a remote's URL can carry a password or a token.
+// "fatal:" or "error:" line, else its first line, with each URL as ShowURL gives it.
 func reason(stderr []byte) string {
 	first := ""
 	for _, line := range strings.Split(string(stderr), "\n") {
 		line = strings.TrimSpace(line)
 		for _, prefix := range []string{"fatal: ", "error: "} {
 			if rest, ok := strings.CutPrefix(line, prefix); ok {
-				return urlPattern.ReplaceAllStringFunc(rest, bareURL)
+				return urlPattern.ReplaceAllStringFunc(rest, ShowURL)
 			}
 		}
 		if first == "" {
 			first = line
 		}
 	}
-	return urlPattern.ReplaceAllStringFunc(first, bareURL)
+	return urlPattern.ReplaceAllStringFunc(first, ShowURL)
 }
 
 // urlPattern is a URL as git quotes one in a message, up to the space or quote that ends it.
 var urlPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s'"]+`)
 
-// bareURL is u without its user, password, query and fragment.
-func bareURL(u string) string {
-	scheme, rest, _ := strings.Cut(u, "://")
+// schemePattern is the start of a remote that is a URL.
+var schemePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
+
+// ShowURL is a remote as it may be printed or saved: a URL keeps only its scheme, host and path, because
+// its user, password, query and fragment can each carry a secret. An scp-style remote (git@host:o/r.git)
+// and a local path are returned as they are. It is the only rule for showing a remote.
+func ShowURL(remote string) string {
+	if !schemePattern.MatchString(remote) {
+		return remote
+	}
+	scheme, rest, _ := strings.Cut(remote, "://")
 	if i := strings.IndexAny(rest, "?#"); i >= 0 {
 		rest = rest[:i]
 	}

@@ -486,12 +486,41 @@ func TestSetupRefusalHidesCredentials(t *testing.T) {
 	if err := f.run("setup", "--new-local", "--name", "gene", "--yes"); err != nil {
 		t.Fatal(err)
 	}
-	if err := (gitstore.Git{Run: f.runGit}).SetRemote(setupStore(f), "https://gene:hunter2@example.invalid/acme/config.git"); err != nil {
+	if err := (gitstore.Git{Run: f.runGit}).SetRemote(setupStore(f), "https://gene:hunter2@example.invalid/acme/config.git?sig=SIGTOKEN#frag"); err != nil {
 		t.Fatal(err)
 	}
 	err := f.run("setup", "--store", "acme/other", "--yes")
-	if err == nil || strings.Contains(err.Error(), "hunter2") || !strings.Contains(err.Error(), "(remote https://example.invalid/acme/config.git)") {
-		t.Fatalf("err %v", err)
+	want := "a store is already set up at " + setupStore(f) + " (remote https://example.invalid/acme/config.git). Move it away to set up another."
+	if err == nil || err.Error() != want {
+		t.Fatalf("err %v\nwant %s", err, want)
+	}
+}
+
+// The remote saved in config.toml holds no credential either: the file is readable by everyone.
+func TestSetupConfigHoldsNoToken(t *testing.T) {
+	const remote = "https://gene:hunter2@example.invalid/acme/config.git?sig=SIGTOKEN"
+	f := setupFake(t)
+	if err := f.run("setup", "--new-local", "--name", "gene", "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	if err := (gitstore.Git{Run: f.runGit}).SetRemote(setupStore(f), remote); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(setupConfig(f)); err != nil {
+		t.Fatal(err)
+	}
+	f.out.Reset()
+	if err := f.run("setup", "--store", remote, "--name", "gene", "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	c, _, err := config.Load(setupConfig(f))
+	if err != nil || c.Store.Remote != "https://example.invalid/acme/config.git" {
+		t.Fatalf("store.remote %q, %v", c.Store.Remote, err)
+	}
+	for _, text := range []string{readFile(t, setupConfig(f)), f.out.String(), f.errOut.String()} {
+		if strings.Contains(text, "hunter2") || strings.Contains(text, "SIGTOKEN") {
+			t.Fatalf("a credential was kept:\n%s", text)
+		}
 	}
 }
 

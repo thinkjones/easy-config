@@ -405,18 +405,3 @@ func TestIsSlug(t *testing.T) {
 		}
 	}
 }
-
-func TestRedact(t *testing.T) {
-	for in, want := range map[string]string{
-		"https://gene:hunter2@example.invalid/acme/config.git": "https://example.invalid/acme/config.git",
-		"https://token@example.invalid/acme/config":            "https://example.invalid/acme/config",
-		"https://example.invalid/acme/config":                  "https://example.invalid/acme/config",
-		"git@github.com:acme/config.git":                       "git@github.com:acme/config.git",
-		"/srv/store.git":                                       "/srv/store.git",
-		"acme/config":                                          "acme/config",
-	} {
-		if got := Redact(in); got != want {
-			t.Errorf("Redact(%q) = %q, want %q", in, got, want)
-		}
-	}
-}

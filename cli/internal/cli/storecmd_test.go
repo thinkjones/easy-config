@@ -228,22 +228,15 @@ func statusesRun(f *fake) []proc.Command {
 	return out
 }
 
-func TestRemoteShownHoldsNoPassword(t *testing.T) {
-	for remote, want := range map[string]string{
-		"git@github.com:thinkjones/config.git":            "git@github.com:thinkjones/config.git",
-		"https://github.com/thinkjones/config.git":        "https://github.com/thinkjones/config.git",
-		"https://sam:t0ken@github.com/thinkjones/c.git":   "https://github.com/thinkjones/c.git",
-		"https://t0ken@github.com/thinkjones/c.git":       "https://github.com/thinkjones/c.git",
-		"ssh://git@github.com/thinkjones/c.git":           "ssh://git@github.com/thinkjones/c.git",
-		"ssh://git:t0ken@github.com:22/thinkjones/c.git":  "ssh://git@github.com:22/thinkjones/c.git",
-		"/srv/git/config.git":                             "/srv/git/config.git",
-		"https://sam:t0ken@bad host/%zz":                  "a URL that cannot be shown",
-		"":                                                "none (local only)",
-		"https://sam:t0ken@github.com/c.git?token=t0ken2": "https://github.com/c.git",
-	} {
-		if got := remoteShown(remote); got != want {
-			t.Errorf("%s: got %q, want %q", remote, got, want)
-		}
+func TestStatusRemoteHoldsNoCredential(t *testing.T) {
+	f := newFake(t)
+	x := localStore(t, f)
+	if err := x.g.SetRemote(x.store, "file://git:t0ken@"+filepath.Join(t.TempDir(), "gone.git")+"?token=t0ken2#frag"); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := storeCmdRun(f, "status")
+	if err != nil || !strings.Contains(out, "remote    file:///") || !strings.Contains(out, "gone.git\n") || strings.Contains(out, "t0ken") {
+		t.Fatalf("%v\n%s", err, out)
 	}
 }
 

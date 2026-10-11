@@ -651,3 +651,25 @@ func TestReasonKeepsNoCredentialOfAURL(t *testing.T) {
 		}
 	}
 }
+
+func TestShowURL(t *testing.T) {
+	for _, c := range []struct{ remote, want string }{
+		{"ssh://git:pw@host/x?q=1", "ssh://host/x"},
+		{"https://sam:t0ken@github.com/thinkjones/c.git?token=t0ken2#frag", "https://github.com/thinkjones/c.git"},
+		{"https://t0ken@github.com/thinkjones/c.git", "https://github.com/thinkjones/c.git"},
+		{"https://github.com/thinkjones/c.git", "https://github.com/thinkjones/c.git"},
+		{"ssh://git@github.com:22/thinkjones/c.git", "ssh://github.com:22/thinkjones/c.git"},
+		{"https://sam:t0ken@host?token=t0ken2", "https://host"},
+		{"https://sam:t0ken@bad host/%zz", "https://bad host/%zz"},
+		{"file:///srv/git/config.git", "file:///srv/git/config.git"},
+		{"git@github.com:thinkjones/config.git", "git@github.com:thinkjones/config.git"},
+		{"/srv/git/config.git", "/srv/git/config.git"},
+		{"./a/b", "./a/b"},
+		{"thinkjones/config", "thinkjones/config"},
+		{"", ""},
+	} {
+		if got := ShowURL(c.remote); got != c.want {
+			t.Errorf("ShowURL(%q) = %q, want %q", c.remote, got, c.want)
+		}
+	}
+}

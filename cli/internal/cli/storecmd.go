@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"slices"
 	"strconv"
@@ -137,37 +136,18 @@ Exits 0 in every state it can read. A store that is not a git repo is not synced
 			if len(s.Requests) > 0 {
 				requests = strings.Join(s.Requests, ", ")
 			}
+			remote := "none (local only)"
+			if st.Remote != "" {
+				remote = gitstore.ShowURL(st.Remote)
+			}
 			row("store", s.Dir)
-			row("remote", remoteShown(st.Remote))
+			row("remote", remote)
 			row("state", state)
 			row("fetched", fetched)
 			row("requests", requests)
 			return nil
 		},
 	}
-}
-
-// remoteShown is a remote as `ezc store status` prints it: without the password or token a URL can carry.
-func remoteShown(remote string) string {
-	if remote == "" {
-		return "none (local only)"
-	}
-	if !strings.Contains(remote, "://") {
-		return remote
-	}
-	u, err := url.Parse(remote)
-	if err != nil {
-		return "a URL that cannot be shown"
-	}
-	switch {
-	case u.Scheme == "http" || u.Scheme == "https":
-		// Over HTTP the user name is as often a token as a name.
-		u.User = nil
-	case u.User != nil:
-		u.User = url.User(u.User.Username())
-	}
-	u.RawQuery, u.Fragment = "", ""
-	return u.String()
 }
 
 func newStorePullCmd(sys System) *cobra.Command {
