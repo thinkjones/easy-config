@@ -176,3 +176,27 @@ func TestSpecialCharactersStillLoadVerbatim(t *testing.T) {
 		t.Errorf("got %q, want %q", pairs, want)
 	}
 }
+
+func TestBareTagBeforeQuotedValue(t *testing.T) {
+	for _, content := range []string{"PW: ! \"hunter2\"\n", "PW: ! 'hunter2'\n", "PW: ! |\n  hunter2\n"} {
+		if got := loadErr(t, "common.yaml", content, ""); !strings.Contains(got, `"PW" has a YAML tag`) {
+			t.Errorf("%q: got %q", content, got)
+		}
+	}
+}
+
+func TestBOMDoesNotHideATag(t *testing.T) {
+	if got := loadErr(t, "common.yaml", "\ufeffPW: ! hunter2\n", ""); !strings.Contains(got, "has a YAML tag") {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestDocumentEndMarker(t *testing.T) {
+	pairs := mustLoad(t, "common.yaml", "A: 1\n...\n", "")
+	if len(pairs) != 1 || pairs[0].Name != "A" || pairs[0].Value != "1" {
+		t.Errorf("got %v", pairs)
+	}
+	if got := loadErr(t, "common.yaml", "A: 1\n...\nB: 2\n", ""); !strings.Contains(got, "more than one YAML document") {
+		t.Errorf("got %q", got)
+	}
+}

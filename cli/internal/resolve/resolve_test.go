@@ -175,7 +175,7 @@ func TestReferences(t *testing.T) {
 func TestForwardReferenceIsError(t *testing.T) {
 	_, repo := tree(t, map[string]string{"repo/env.local.yaml": "A: $B/x\nB: y\n"})
 	_, err := Load(Options{RepoDir: repo, Env: "local"})
-	if err == nil || !strings.Contains(err.Error(), "A references $B, which is not defined") || !strings.Contains(err.Error(), "Write $$B if you meant a literal dollar sign") {
+	if err == nil || !strings.Contains(err.Error(), "A references a name that is not defined") || !strings.Contains(err.Error(), "Write $$ if you meant a literal dollar sign") {
 		t.Errorf("got %v", err)
 	}
 }
@@ -357,5 +357,39 @@ func TestRepoDirThatIsNotAFolder(t *testing.T) {
 	r := mustResolve(t, Options{RepoDir: filepath.Join(t.TempDir(), "absent", ".ezc")})
 	if len(r.Env) != 0 || len(r.Sources) != 0 {
 		t.Errorf("got %v, %v", r.Env, r.Sources)
+	}
+}
+
+func TestReservedEnvName(t *testing.T) {
+	_, repo := tree(t, nil)
+	_, err := Load(Options{RepoDir: repo, Env: "enc"})
+	if err == nil || !strings.Contains(err.Error(), "enc is a reserved name") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestInvalidEnvName(t *testing.T) {
+	_, repo := tree(t, nil)
+	for _, name := range []string{"../x", "a b"} {
+		_, err := Load(Options{RepoDir: repo, Env: name})
+		if err == nil || !strings.Contains(err.Error(), strconv.Quote(name)+" is not a valid environment name") {
+			t.Errorf("%q: got %v", name, err)
+		}
+	}
+}
+
+func TestEnvEncFileIsNotAnEnvironment(t *testing.T) {
+	_, repo := tree(t, map[string]string{"repo/env.enc.yaml": "x: y\n", "repo/env.local.yaml": "A: 1\n"})
+	got, err := Envs(repo)
+	if err != nil || !slices.Equal(got, []string{"local"}) {
+		t.Errorf("got %v, %v", got, err)
+	}
+}
+
+func TestUnknownReferenceHidesTheFragment(t *testing.T) {
+	store, repo := tree(t, map[string]string{"store/common.yaml": "ROOT: /r\n", "repo/env.local.yaml": "PW: P@ss$word123\n"})
+	_, err := Load(Options{StoreDir: store, RepoDir: repo, Env: "local"})
+	if err == nil || !strings.Contains(err.Error(), "PW references a name that is not defined") || !strings.Contains(err.Error(), "defined so far") || strings.Contains(err.Error(), "word123") {
+		t.Errorf("got %v", err)
 	}
 }

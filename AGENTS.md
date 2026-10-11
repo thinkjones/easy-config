@@ -13,7 +13,7 @@ The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-
 | `docs/superpowers/` | Design specs and implementation plans. Historical: never rewrite them to match the code. |
 | `LICENSE` | MIT. |
 
-`ezc`'s data is outside this repo, per user, in `EZC_HOME` (default `~/Library/ezc` on macOS, `$XDG_DATA_HOME/ezc` or `~/.local/share/ezc` on Linux). The global store is `$EZC_HOME/store`, or the folder `EZC_STORE` names.
+`ezc`'s data is outside this repo, per user, in `EZC_HOME` (default `~/Library/ezc` on macOS and `~/.local/share/ezc` on Linux; `$XDG_DATA_HOME/ezc` applies on every OS when set). The global store is `$EZC_HOME/store`, or the folder `EZC_STORE` names.
 
 In a repo, `.ezc/` holds:
 

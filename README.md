@@ -61,7 +61,18 @@ A repo's `.ezc/` folder and the global store use the same layout. Every values f
 
 Encrypted `common.enc.yaml` and `env.<name>.enc.yaml` files, for secrets, arrive in part 2; today an existing one is an error.
 
-A values file is one flat YAML mapping of `NAME: value` lines. Values are read as raw text, so no type is inferred: `08540` stays `08540`. Anything that would change or drop a value without saying so is an error naming the file and the key: a nested block or a list, an anchor (`&x`) or an alias (`*x`), a tag (`!x`; quote a value that starts with `!`, `&` or `*`), a key defined twice, a second YAML document, and a value that contains a NUL byte. A file that is not valid YAML is reported by path and line only, never with the parser's own text.
+A values file is one flat YAML mapping of `NAME: value` lines. Values are read as raw text, so no type is inferred: `08540` stays `08540`.
+
+These are rejected with an error naming the file and the key, because each would change or drop a value without saying so:
+
+- a nested block or a list
+- an anchor (`&x`) or an alias (`*x`)
+- a tag (`!x`; quote a value that starts with `!`, `&` or `*`)
+- a key defined twice
+- more than one YAML document
+- a value that contains a NUL byte
+
+A file that is not valid YAML is reported by path and line only, never with the parser's own text.
 
 A variable name, in the manifest and in a values file, is letters, digits and underscores and does not start with a digit (`^[A-Za-z_][A-Za-z0-9_]*$`). `ezc manifest validate` and the JSON Schema apply the same rule.
 

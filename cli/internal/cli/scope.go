@@ -94,12 +94,27 @@ func load(sys System, repo, env string) (resolve.Result, error) {
 	if err != nil {
 		return resolve.Result{}, err
 	}
+	// Run from inside the store, its .ezc is the repo's too; loading it as both
+	// layers would list every name twice.
+	if sameDir(repo, p.StoreEzc()) {
+		repo = ""
+	}
 	return resolve.Load(resolve.Options{
 		StoreDir: p.StoreEzc(),
 		RepoDir:  repo,
 		Env:      env,
 		Home:     homeDir(sys),
 	})
+}
+
+// sameDir reports whether a and b are the same existing directory.
+func sameDir(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
 }
 
 // target is the manifest a command works on. Source is how generated files name it: the same on every machine.

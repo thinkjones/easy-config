@@ -426,8 +426,8 @@ func TestEZC_STOREThatExistsButIsEmpty(t *testing.T) {
 func TestExportPrintsNothingOnFailure(t *testing.T) {
 	f := newFake(t)
 	repo(t, f, map[string]string{"manifest.yaml": empty, "env.local.yaml": "B: ok\nA: $NOPE\n"})
-	if err := f.run("env", "export"); err == nil || !strings.Contains(err.Error(), "NOPE") {
-		t.Fatalf("want an error naming NOPE, got %v", err)
+	if err := f.run("env", "export"); err == nil || !strings.Contains(err.Error(), "A references a name that is not defined") || strings.Contains(err.Error(), "NOPE") {
+		t.Fatalf("want an error naming A and not NOPE, got %v", err)
 	}
 	if f.out.Len() != 0 {
 		t.Fatalf("stdout %q", f.out.String())
@@ -1070,5 +1070,34 @@ func TestRepoNeedsAVerb(t *testing.T) {
 	var u *UsageError
 	if !errors.As(err, &u) || !strings.Contains(err.Error(), "say init") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestStoreIsNotItsOwnRepo(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"common.yaml": "A: 1\n"})
+	f.wd = filepath.Join(f.env["EZC_HOME"], "store")
+	for _, args := range [][]string{{"list", "-g"}, {"list"}, {"env", "export"}} {
+		f.out.Reset()
+		if err := f.run(args...); err != nil {
+			t.Fatal(err)
+		}
+		got := f.out.String()
+		if strings.Count(got, "A") != 1 || strings.Contains(got, "overrides") {
+			t.Errorf("%v: got %q", args, got)
+		}
+		if args[0] == "env" && got != "export A='1'\n" {
+			t.Errorf("got %q", got)
+		}
+	}
+}
+
+func TestEnvManifestFlagHelp(t *testing.T) {
+	f := newFake(t)
+	if err := f.run("help", "env"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.out.String(), "the values come from that manifest's folder") {
+		t.Errorf("got %q", f.out.String())
 	}
 }

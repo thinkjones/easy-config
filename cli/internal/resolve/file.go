@@ -137,7 +137,7 @@ func expandRefs(value, name, path, home string, resolved map[string]string) (str
 		}
 		sub, found := lookupRef(ref, home, resolved)
 		if !found {
-			return "", unknownRefError(ref, name, path, resolved)
+			return "", unknownRefError(name, path, resolved)
 		}
 		b.WriteString(sub)
 		i = next
@@ -192,15 +192,15 @@ func lookupRef(ref, home string, resolved map[string]string) (string, bool) {
 
 // unknownRefError names what is in scope, because the overwhelmingly likely
 // cause is a typo or an ordering mistake, and both are answered by the list.
-func unknownRefError(ref, name, path string, resolved map[string]string) error {
+func unknownRefError(name, path string, resolved map[string]string) error {
 	available := sortedKeys(resolved)
 	scope := "nothing is defined yet at this point in the file"
 	if len(available) > 0 {
 		scope = "defined so far: " + strings.Join(available, ", ")
 	}
-	return fmt.Errorf("%s: %s references $%s, which is not defined.\n"+
+	return fmt.Errorf("%s: %s references a name that is not defined.\n"+
 		"       A value may only use a name set in an earlier file or an earlier line, %s.\n"+
-		"       Write $$%s if you meant a literal dollar sign", path, name, ref, scope, ref)
+		"       Write $$ if you meant a literal dollar sign", path, name, scope)
 }
 
 // loadYAML reads a plaintext values file.
@@ -270,15 +270,13 @@ func loadYAML(path string) ([]backend.Pair, error) {
 // hasTag reports whether the scalar v was written with a tag (!x, !!str, or a
 // bare !). yaml.v3 gives every scalar an implicit tag, so Tag says nothing;
 // Style does, except for a bare !, which leaves no trace in the node. A plain
-// scalar cannot begin with !, so one whose source text does had that tag.
+// scalar cannot begin with !, and a quoted or block one begins with its quote
+// or indicator, so a node whose source text begins with ! had that tag.
 func hasTag(v *yaml.Node, src []byte) bool {
 	if v.Style&yaml.TaggedStyle != 0 {
 		return true
 	}
-	if v.Style != 0 {
-		return false // quoted or block: the ! is the value's own
-	}
-	lines := strings.Split(string(src), "\n")
+	lines := strings.Split(string(bytes.TrimPrefix(src, []byte("\ufeff"))), "\n")
 	if v.Line < 1 || v.Line > len(lines) {
 		return false
 	}

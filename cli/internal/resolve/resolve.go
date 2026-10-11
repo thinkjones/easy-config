@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -23,6 +24,14 @@ import (
 // DefaultEnv applies when no environment is named. It must be the inert one:
 // local reaches no live resource, so a forgotten selector cannot touch production.
 const DefaultEnv = "local"
+
+// ReservedEnv is not an environment name: it marks encrypted files (env.<name>.enc.yaml).
+const ReservedEnv = "enc"
+
+var envNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
+// ValidEnvName reports whether s can name an environment.
+func ValidEnvName(s string) bool { return envNamePattern.MatchString(s) && s != ReservedEnv }
 
 // SelectorVars are the variables that name the environment. They are recorded
 // in a Result and never exported.
@@ -104,6 +113,9 @@ func Envs(dirs ...string) ([]string, error) {
 			if !strings.HasPrefix(n, "env.") || !strings.HasSuffix(n, ".yaml") {
 				continue
 			}
+			if n == "env.enc.yaml" {
+				continue
+			}
 			name := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(n, "env."), ".yaml"), ".enc")
 			if name != "" {
 				seen[name] = true
@@ -154,6 +166,12 @@ func isDir(path, what string) (bool, error) {
 // typo cannot silently degrade to common-only.
 func Load(o Options) (Result, error) {
 	res := Result{Env: map[string]string{}, Origin: map[string]string{}}
+	switch {
+	case o.Env == ReservedEnv:
+		return res, fmt.Errorf("%s is a reserved name; it marks encrypted files (env.<name>.enc.yaml)", ReservedEnv)
+	case o.Env != "" && !ValidEnvName(o.Env):
+		return res, fmt.Errorf("%q is not a valid environment name; use letters, digits, - and _", o.Env)
+	}
 
 	type layer struct{ name, dir string }
 	var layers []layer
