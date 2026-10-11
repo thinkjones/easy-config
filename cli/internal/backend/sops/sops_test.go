@@ -672,3 +672,52 @@ func TestNameIsJSONEncodedInTheIndex(t *testing.T) {
 		t.Errorf("indexOf = %q", got)
 	}
 }
+
+func TestEveryOperationThatRunsSopsNamesAMissingTool(t *testing.T) {
+	r := &recorder{}
+	dir := t.TempDir()
+	b := New(Options{Run: r.run, LookPath: func(string) (string, error) { return "", errors.New("not found") }})
+	file := filepath.Join(dir, "common.enc.yaml")
+	fresh := filepath.Join(dir, "env.local.enc.yaml")
+	for _, name := range []string{PolicyFile, "common.enc.yaml"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("A: ENC[x]\nB: ENC[y]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ops := map[string]func() error{
+		"Decrypt": func() error { _, err := b.Decrypt(file); return err },
+		"Set":     func() error { return b.Set(file, "A", "v") },
+		"create":  func() error { return b.Set(fresh, "A", "v") },
+		"Unset":   func() error { return b.Unset(file, "A") },
+		"Edit":    func() error { return b.Edit(file, "nano") },
+	}
+	for name, op := range ops {
+		err := op()
+		if !errors.Is(err, backend.ErrNoTool) || !strings.HasPrefix(err.Error(), "sops is not installed. Install it") {
+			t.Errorf("%s: error = %v", name, err)
+		}
+	}
+	if len(r.cmds) != 0 {
+		t.Errorf("ran %d commands", len(r.cmds))
+	}
+}
+
+func TestCreateWithNoMatchingRuleIsNoPolicy(t *testing.T) {
+	r := newReal(t)
+	policy := filepath.Join(r.dir, PolicyFile)
+	data, err := os.ReadFile(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(policy, bytes.Replace(data, []byte("path_regex: .*"), []byte("path_regex: ^other$"), 1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(r.dir, "common.enc.yaml")
+	err = New(r.opts).Set(file, "TOKEN", "t0k")
+	if want := policy + " has no rule that matches common.enc.yaml."; !errors.Is(err, backend.ErrNoPolicy) || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
+	}
+	if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the file exists: %v", err)
+	}
+}

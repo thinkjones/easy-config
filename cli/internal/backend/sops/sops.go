@@ -27,6 +27,9 @@ const (
 	envKeyFile = "SOPS_AGE_KEY_FILE"
 	envEditor  = "SOPS_EDITOR" // wins over EDITOR and VISUAL; split on spaces
 
+	// noRuleMarker is what sops prints when the policy has no creation rule whose pattern matches the file.
+	noRuleMarker = "no matching creation rules found"
+
 	// noKeyMarker is what sops prints on stderr when no key it can find opens the file: the key file holds a
 	// key that is not a recipient, does not exist, or is empty or unreadable. A corrupt file or a bad MAC prints
 	// something else, and must not be mistaken for a missing key.
@@ -62,9 +65,17 @@ type kindError struct {
 func (e *kindError) Error() string { return e.msg }
 func (e *kindError) Unwrap() error { return e.kind }
 
-func (b *sopsBackend) Check() error {
+// requireTool fails with ErrNoTool when sops is not installed.
+func (b *sopsBackend) requireTool() error {
 	if _, err := b.o.LookPath("sops"); err != nil {
 		return &kindError{"sops is not installed. Install it (brew install sops, or https://github.com/getsops/sops/releases) and run `ezc doctor`.", backend.ErrNoTool}
+	}
+	return nil
+}
+
+func (b *sopsBackend) Check() error {
+	if err := b.requireTool(); err != nil {
+		return err
 	}
 	stdout, stderr, _ := b.o.Run(proc.Command{Env: b.env(), Name: "sops", Args: []string{"set", "--help"}})
 	if !bytes.Contains(stdout, []byte("--value-stdin")) && !bytes.Contains(stderr, []byte("--value-stdin")) {
@@ -146,7 +157,7 @@ func (b *sopsBackend) Decrypt(path string) ([]backend.Pair, error) {
 	}
 	stdout, stderr, err := b.run(proc.Command{Dir: filepath.Dir(path), Args: []string{"decrypt", "--output-type", "json", filepath.Base(path)}})
 	if err != nil {
-		return nil, b.failure(path, stderr, "read")
+		return nil, b.failure(path, stderr, err, "read")
 	}
 	return flatten(path, stdout)
 }
@@ -209,7 +220,7 @@ func (b *sopsBackend) Set(path, name, value string) error {
 	index := indexOf(name)
 	_, stderr, err := b.run(proc.Command{Dir: dir, Stdin: []byte(val), Args: []string{"set", "--value-stdin", base, index}})
 	if err != nil {
-		return b.failure(path, stderr, "write")
+		return b.failure(path, stderr, err, "write")
 	}
 	return nil
 }
@@ -228,7 +239,10 @@ func (b *sopsBackend) create(path, name, value string) error {
 		Args:  []string{"encrypt", "--filename-override", base, "--input-type", "json", "--output-type", "yaml", "/dev/stdin"},
 	})
 	if err != nil {
-		return b.failure(path, stderr, "write")
+		if bytes.Contains(stderr, []byte(noRuleMarker)) {
+			return &kindError{fmt.Sprintf("%s has no rule that matches %s.", filepath.Join(dir, PolicyFile), base), backend.ErrNoPolicy}
+		}
+		return b.failure(path, stderr, err, "write")
 	}
 	if len(stdout) == 0 {
 		return fmt.Errorf("%s: sops produced no output", path)
@@ -267,7 +281,7 @@ func (b *sopsBackend) Unset(path, name string) error {
 	index := indexOf(name)
 	_, stderr, err := b.run(proc.Command{Dir: filepath.Dir(path), Args: []string{"unset", filepath.Base(path), index}})
 	if err != nil {
-		return b.failure(path, stderr, "write")
+		return b.failure(path, stderr, err, "write")
 	}
 	return nil
 }
@@ -282,6 +296,9 @@ func (b *sopsBackend) Edit(path, editor string) error {
 	c := proc.Command{Dir: filepath.Dir(path), Interactive: true, Args: []string{"edit", filepath.Base(path)}}
 	c.Env = b.env(envEditor + "=" + editor)
 	c.Name = "sops"
+	if err := b.requireTool(); err != nil {
+		return err
+	}
 	_, _, err := b.o.Run(c)
 	if err != nil {
 		return fmt.Errorf("%s: sops edit failed: %w", path, err)
@@ -295,8 +312,11 @@ func indexOf(name string) string {
 	return string(b)
 }
 
-// run runs sops with the key file in its environment.
+// run runs sops with the key file in its environment. With no sops installed it runs nothing and fails with ErrNoTool.
 func (b *sopsBackend) run(c proc.Command) (stdout, stderr []byte, err error) {
+	if err := b.requireTool(); err != nil {
+		return nil, nil, err
+	}
 	c.Name = "sops"
 	c.Env = b.env()
 	return b.o.Run(c)
@@ -341,8 +361,11 @@ func (b *sopsBackend) keyFromEnv() string {
 // failure turns a failed sops run into an error. sops's own text is never passed on: its messages can quote
 // a decrypted value (a value whose recorded type was edited makes it print the text it failed to convert), and
 // a file can be edited by someone with no key. The failure is classified by what stderr says and answered
-// with a fixed sentence. verb is "read" or "write".
-func (b *sopsBackend) failure(path string, stderr []byte, verb string) error {
+// with a fixed sentence. verb is "read" or "write". A run that never started for want of the tool says so.
+func (b *sopsBackend) failure(path string, stderr []byte, err error, verb string) error {
+	if errors.Is(err, backend.ErrNoTool) {
+		return err
+	}
 	if isNoKey(stderr) {
 		source := "Your key file is " + b.o.KeyFile + "."
 		if v := b.keyFromEnv(); v != "" {

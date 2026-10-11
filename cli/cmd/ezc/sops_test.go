@@ -22,7 +22,8 @@ type e2e struct {
 	home    string
 	ezcHome string
 	repo    string
-	key     string
+	key     string // the key file
+	pub     string // its public key, which the repo's policy encrypts to
 	path    string
 }
 
@@ -72,8 +73,8 @@ func newE2E(t *testing.T, pathDirs ...string) *e2e {
 	}
 	e.key = filepath.Join(e.home, ".config", "sops", "age", "keys.txt")
 	e.path = strings.Join(append(pathDirs, filepath.Dir(sops), "/usr/bin", "/bin"), string(os.PathListSeparator))
-	pub := writeAgeKey(t, e.key)
-	e.writePolicy(filepath.Join(e.repo, ".ezc"), pub)
+	e.pub = writeAgeKey(t, e.key)
+	e.writePolicy(filepath.Join(e.repo, ".ezc"), e.pub)
 	return e
 }
 
@@ -230,8 +231,7 @@ func TestStoreAuditEndToEnd(t *testing.T) {
 	if err := os.MkdirAll(store, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	pub := writeAgeKey(t, e.key)
-	e.writePolicy(store, pub)
+	e.writePolicy(store, e.pub)
 	if err := os.WriteFile(filepath.Join(store, "manifest.yaml"), []byte("schemaVersion: v1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -252,5 +252,46 @@ func TestStoreAuditEndToEnd(t *testing.T) {
 	all := stdout + stderr
 	if code != 1 || !strings.Contains(all, "STRAY") || strings.Contains(all, "stray-plain-value") || strings.Contains(all, e2eSecret) {
 		t.Fatalf("audit of a store with an undeclared value: exit %d\n%s", code, all)
+	}
+}
+
+func TestNoToolEndToEnd(t *testing.T) {
+	e := newE2E(t)
+	e.mustRun(e.repo, "", "repo", "init")
+	e.setSecret(e2eSecret)
+	e.path = t.TempDir() // nothing is installed here
+
+	for _, args := range [][]string{{"env"}, {"env", "export"}, {"list"}, {"get", "API_TOKEN", "--reveal"}, {"run", "--", "true"}, {"set", "OTHER", "--type", "secret", "--desc", "d"}} {
+		stdout, stderr, code := e.run(e.repo, "v", args...)
+		if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "ezc: sops is not installed. Install it") || strings.Contains(stderr, "could not") {
+			t.Errorf("%v: exit %d\nstdout: %s\nstderr: %s", args, code, stdout, stderr)
+		}
+	}
+	stdout, stderr, code := e.run(e.repo, "", "doctor")
+	if code != 1 || !strings.Contains(stdout, "sops is not installed") || strings.Contains(stdout+stderr, "could not") {
+		t.Fatalf("doctor: exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+}
+
+func TestPolicyThatMatchesNothingEndToEnd(t *testing.T) {
+	e := newE2E(t)
+	e.mustRun(e.repo, "", "repo", "init")
+	dir := filepath.Join(e.repo, ".ezc")
+	if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte("creation_rules:\n  - path_regex: ^other$\n    age: "+e.pub+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, "manifest.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code := e.run(e.repo, e2eSecret, "set", "API_TOKEN", "--type", "secret", "--desc", "token")
+	// The folder is named as the process sees it, which on macOS is under /private.
+	want := filepath.Join(dir, ".sops.yaml") + " has no rule that matches common.enc.yaml. See \"Encryption\" in the README.\n"
+	if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "ezc: ") || !strings.HasSuffix(stderr, want) || strings.Count(stderr, "README") != 1 {
+		t.Fatalf("set: exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+	after, err := os.ReadFile(filepath.Join(dir, "manifest.yaml"))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("the manifest changed (%v)", err)
 	}
 }
