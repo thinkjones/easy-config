@@ -764,7 +764,7 @@ func TestSetRefusesALiteralLeadingTilde(t *testing.T) {
 		setRepo(t, f, map[string]string{"env.local.yaml": ""})
 		before := snapshot(t, f)
 		err := f.run("set", "NAME", value)
-		want := "NAME: a value that starts with ~ is expanded to your home folder when loaded. Pass --expand to keep that meaning, or use `ezc edit`."
+		want := "NAME: a value that starts with ~ is expanded to your home folder when loaded. Pass --expand to keep that meaning."
 		if err == nil || err.Error() != want {
 			t.Fatalf("%q: got %v", value, err)
 		}

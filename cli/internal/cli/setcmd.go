@@ -210,7 +210,7 @@ A name the scope's manifest does not declare is declared by this command, as req
 				return fmt.Errorf("%s: placeholder, not a value", name)
 			}
 			if _, ok := resolve.Escape(value); !ok && !v.IsSecret() && !expand {
-				return fmt.Errorf("%s: a value that starts with ~ is expanded to your home folder when loaded. Pass --expand to keep that meaning, or use `ezc edit`.", name)
+				return fmt.Errorf("%s: a value that starts with ~ is expanded to your home folder when loaded. Pass --expand to keep that meaning.", name)
 			}
 			// A reference's final text is not known here, as in the store audit.
 			if !expand || !strings.ContainsRune(value, '$') {
@@ -253,9 +253,11 @@ A name the scope's manifest does not declare is declared by this command, as req
 			}
 			if expand {
 				if err := unresolved(sys, sc, env, path, name); err != nil {
-					rerr := os.Remove(path)
+					var rerr error
 					if existed {
 						rerr = valuefile.Replace(path, previous)
+					} else {
+						rerr = os.Remove(path)
 					}
 					if rerr != nil {
 						return fmt.Errorf("%w\n       %s could not be put back as it was; fix %s there with `ezc edit`", err, path, name)
