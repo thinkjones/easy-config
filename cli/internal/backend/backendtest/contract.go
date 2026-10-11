@@ -37,6 +37,19 @@ func set(t *testing.T, b backend.Backend, path, name, value string) {
 	}
 }
 
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
 func wantNames(t *testing.T, got, want []string) {
 	t.Helper()
 	if len(got) == 0 && len(want) == 0 {
@@ -207,12 +220,16 @@ func Run(t *testing.T, newEnv func(t *testing.T) Env) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		entries := dirNames(t, e.Dir)
 		e.Lock()
-		if err := e.Backend.Set(file, "A", "new"); err == nil {
-			t.Fatal("Set with no key succeeded")
+		if err := e.Backend.Set(file, "A", "new"); !errors.Is(err, backend.ErrNoKey) {
+			t.Fatalf("error = %v, want ErrNoKey", err)
 		}
 		if after, _ := os.ReadFile(file); !bytes.Equal(before, after) {
 			t.Error("the file changed")
+		}
+		if got := dirNames(t, e.Dir); !reflect.DeepEqual(got, entries) {
+			t.Errorf("folder holds %v, want %v (a stray temporary file?)", got, entries)
 		}
 	})
 
