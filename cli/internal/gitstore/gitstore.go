@@ -21,6 +21,9 @@ import (
 type Git struct {
 	Run     proc.Runner
 	Environ []string // the process environment; GIT_TERMINAL_PROMPT=0 is added
+	// TokenVar names an environment variable that holds a token for the remote. Git reads it
+	// through a credential helper whose text names the variable only; the value is never an argument.
+	TokenVar string
 }
 
 // Author names the author of a commit; used only when git has no identity of its own.
@@ -68,7 +71,12 @@ var (
 	// ErrNoBranch is a store whose HEAD is on no branch, as while a rebase is open.
 	ErrNoBranch    = errors.New("the store is not on a branch")
 	ErrUnreachable = errors.New("the remote could not be reached")
+	// ErrBranchTaken is a branch the remote already has, holding other bytes than the ones to push.
+	ErrBranchTaken = errors.New("the remote already has that branch with other content")
 )
+
+// allBranches is the refspec that maps every branch of origin to its remote-tracking branch.
+const allBranches = "+refs/heads/*:refs/remotes/origin/*"
 
 // fixed is what every git call has in its environment: no password prompt,
 // messages in one language, and a path that is never a pattern.
@@ -174,9 +182,25 @@ func (g Git) Init(dir string) error {
 	return err
 }
 
+// remote is args for a git command that can reach a remote: with TokenVar set, the first helper
+// setting drops every inherited credential helper and the second reads the token from the variable.
+func (g Git) remote(args ...string) []string {
+	if g.TokenVar == "" {
+		return args
+	}
+	helper := `!f() { echo username=x-access-token; echo "password=$` + g.TokenVar + `"; }; f`
+	return append([]string{"-c", "credential.helper=", "-c", "credential.helper=" + helper}, args...)
+}
+
 // Clone clones source into dir.
 func (g Git) Clone(source, dir string) error {
-	_, err := g.run("", 0, "clone", "--", source, dir)
+	_, err := g.run("", 0, g.remote("clone", "--", source, dir)...)
+	return err
+}
+
+// CloneShallow clones source into dir with only its latest commit.
+func (g Git) CloneShallow(source, dir string) error {
+	_, err := g.run("", 0, g.remote("clone", "--depth", "1", "--", source, dir)...)
 	return err
 }
 
@@ -260,13 +284,14 @@ func (g Git) hasIdentity(dir string) bool {
 }
 
 // Fetch updates what is known of origin; a store with no origin has nothing
-// to fetch. A timeout or a network failure wraps ErrUnreachable.
+// to fetch. It fetches every branch (a shallow clone tracks only one) and drops
+// remote-tracking branches the remote no longer has. A timeout or a network failure wraps ErrUnreachable.
 func (g Git) Fetch(dir string, timeout time.Duration) error {
 	remote, err := g.Remote(dir)
 	if err != nil || remote == "" {
 		return err
 	}
-	_, err = g.run(dir, timeout, "fetch", "--quiet", "origin")
+	_, err = g.run(dir, timeout, g.remote("fetch", "--quiet", "--prune", "origin", allBranches)...)
 	if err != nil && !errors.Is(err, ErrNotInstalled) {
 		return fmt.Errorf("%w: %v", ErrUnreachable, err)
 	}
@@ -360,7 +385,7 @@ func (g Git) Push(dir string) (int, error) {
 	if st.Ahead == 0 {
 		return 0, nil
 	}
-	if _, err := g.run(dir, 0, "push", "--quiet", "--set-upstream", "origin", st.Branch); err != nil {
+	if _, err := g.run(dir, 0, g.remote("push", "--quiet", "--set-upstream", "origin", st.Branch)...); err != nil {
 		return 0, err
 	}
 	return st.Ahead, nil
