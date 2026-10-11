@@ -17,14 +17,17 @@ import (
 )
 
 const (
-	refusedBehind   = "the store is 2 commits behind origin. Run `ezc store pull` first: a change made now could not be merged."
-	refusedDiverged = "the store has diverged from origin. Run `ezc store pull` first: a change made now could not be merged."
+	storeWriteBehind   = "the store is 2 commits behind origin. Run `ezc store pull` first: a change made now could not be merged."
+	storeWriteDiverged = "the store has diverged from origin. Run `ezc store pull` first: a change made now could not be merged."
 )
 
-// writeStore is a store that is a git repo with a remote and a second clone, holding mToken, a policy and NAME.
-func writeStore(t *testing.T, f *fake) gitFix {
+// storeWriteFix is a gitFix with what these tests ask of the store's history.
+type storeWriteFix struct{ gitFix }
+
+// storeWriteStore is a store that is a git repo with a remote and a second clone, holding mToken, a policy and NAME.
+func storeWriteStore(t *testing.T, f *fake) storeWriteFix {
 	t.Helper()
-	x := localStore(t, f)
+	x := storeWriteFix{localStore(t, f)}
 	x.commit(x.store, "manifest.yaml", mToken)
 	x.commit(x.store, backend.FakePolicy, "")
 	x.bare = gittest.Bare(t)
@@ -35,7 +38,7 @@ func writeStore(t *testing.T, f *fake) gitFix {
 }
 
 // published pushes the store and makes the other clone a new one, level with it.
-func (x gitFix) published() gitFix {
+func (x storeWriteFix) published() storeWriteFix {
 	x.t.Helper()
 	x.push(x.store)
 	x.other = filepath.Join(x.t.TempDir(), "other")
@@ -46,7 +49,7 @@ func (x gitFix) published() gitFix {
 }
 
 // git runs git in the store and returns what it printed.
-func (x gitFix) git(args ...string) string {
+func (x storeWriteFix) git(args ...string) string {
 	x.t.Helper()
 	stdout, stderr, err := x.g.Run(proc.Command{Dir: x.store, Name: "git", Args: args})
 	if err != nil {
@@ -55,10 +58,10 @@ func (x gitFix) git(args ...string) string {
 	return strings.TrimRight(string(stdout), "\n")
 }
 
-func (x gitFix) commits() string { return x.git("rev-list", "--count", "HEAD") }
+func (x storeWriteFix) commits() string { return x.git("rev-list", "--count", "HEAD") }
 
 // subjects are the messages of the commits made since the store was pushed, oldest first.
-func (x gitFix) subjects() []string {
+func (x storeWriteFix) subjects() []string {
 	out := x.git("log", "--reverse", "--format=%s", "origin/main..HEAD")
 	if out == "" {
 		return nil
@@ -67,7 +70,7 @@ func (x gitFix) subjects() []string {
 }
 
 // wantCommit fails unless exactly one commit was made since the push, with this message and these files of .ezc, and nothing is left uncommitted.
-func (x gitFix) wantCommit(message string, files ...string) {
+func (x storeWriteFix) wantCommit(message string, files ...string) {
 	x.t.Helper()
 	if got := x.subjects(); !slices.Equal(got, []string{message}) {
 		x.t.Fatalf("commits %q, want %q", got, message)
@@ -83,24 +86,24 @@ func (x gitFix) wantCommit(message string, files ...string) {
 	x.wantClean()
 }
 
-func (x gitFix) wantClean() {
+func (x storeWriteFix) wantClean() {
 	x.t.Helper()
 	if got := x.git("status", "--porcelain", "--untracked-files=all"); got != "" {
 		x.t.Fatalf("left uncommitted:\n%s", got)
 	}
 }
 
-func (x gitFix) file(name string) string { return filepath.Join(x.store, ezcDir, name) }
+func (x storeWriteFix) file(name string) string { return filepath.Join(x.store, ezcDir, name) }
 
 // secret sets name in an encrypted file of the store and commits the file.
-func (x gitFix) secret(f *fake, file, name, value string) {
+func (x storeWriteFix) secret(f *fake, file, name, value string) {
 	x.t.Helper()
 	secretIn(x.t, f, "store", file, name, value)
 	x.commit(x.store, file, readFile(x.t, x.file(file)))
 }
 
-// exitsOne fails when err is one ezc exits 2 for: any other error exits 1.
-func exitsOne(t *testing.T, err error) {
+// storeWriteExitsOne fails when err is one ezc exits 2 for: any other error exits 1.
+func storeWriteExitsOne(t *testing.T, err error) {
 	t.Helper()
 	var usage *UsageError
 	if errors.As(err, &usage) {
@@ -108,8 +111,8 @@ func exitsOne(t *testing.T, err error) {
 	}
 }
 
-// commitsRun are the git commands the fake ran that commit.
-func commitsRun(f *fake) []proc.Command {
+// storeWriteCommitsRun are the git commands the fake ran that commit.
+func storeWriteCommitsRun(f *fake) []proc.Command {
 	var out []proc.Command
 	for _, c := range f.gits {
 		if slices.Contains(c.Args, "commit") {
@@ -121,7 +124,7 @@ func commitsRun(f *fake) []proc.Command {
 
 func TestSetGlobalCommits(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	if got := stderrOf(t, f, "set", "-g", "NAME", "v2"); got != "" {
 		t.Fatalf("stderr %q", got)
 	}
@@ -136,7 +139,7 @@ func TestSetGlobalCommits(t *testing.T) {
 	// A secret: the commit names it and its file, and the history never holds the value.
 	const value = "s3cr3t-marker-value"
 	f = newFake(t)
-	x = writeStore(t, f)
+	x = storeWriteStore(t, f)
 	f.stdin = value + "\n"
 	stderrOf(t, f, "set", "-g", "TOKEN")
 	x.wantCommit("set TOKEN (common.enc.yaml)", "common.enc.yaml")
@@ -150,7 +153,7 @@ func TestSetGlobalCommits(t *testing.T) {
 
 func TestSetGlobalSameValueNoCommit(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	stderrOf(t, f, "set", "-g", "NAME", "n")
 	if got := x.subjects(); got != nil {
 		t.Fatalf("commits %q", got)
@@ -160,13 +163,13 @@ func TestSetGlobalSameValueNoCommit(t *testing.T) {
 
 func TestSetGlobalNewNameOneCommit(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	stderrOf(t, f, "set", "-g", "NEW", "v", "--type", "str", "--desc", "d")
 	x.wantCommit("set NEW (manifest.yaml, common.yaml)", "manifest.yaml", "common.yaml")
 
 	// A name whose value was already in the file: only the declaration changed.
 	f = newFake(t)
-	x = writeStore(t, f)
+	x = storeWriteStore(t, f)
 	x.commit(x.store, "env.prod.yaml", "LOOSE: v\n")
 	x.push(x.store)
 	stderrOf(t, f, "set", "-g", "LOOSE", "v", "--env", "prod", "--type", "str", "--desc", "d")
@@ -175,7 +178,7 @@ func TestSetGlobalNewNameOneCommit(t *testing.T) {
 
 func TestSetGlobalAuthorFromConfig(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	if err := config.Save(filepath.Join(f.env["EZC_HOME"], "config.toml"), config.Config{User: "sam"}); err != nil {
 		t.Fatal(err)
 	}
@@ -187,13 +190,13 @@ func TestSetGlobalAuthorFromConfig(t *testing.T) {
 
 func TestUnsetGlobalCommits(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	stderrOf(t, f, "unset", "-g", "NAME")
 	x.wantCommit("unset NAME (common.yaml)", "common.yaml")
 
 	// In both files of the base: one commit names both.
 	f = newFake(t)
-	x = writeStore(t, f)
+	x = storeWriteStore(t, f)
 	x.secret(f, "common.enc.yaml", "TOKEN", "t1")
 	x.secret(f, "common.enc.yaml", "OTHER", "o1")
 	x.commit(x.store, "common.yaml", "NAME: n\nTOKEN: leaked\n")
@@ -203,7 +206,7 @@ func TestUnsetGlobalCommits(t *testing.T) {
 
 	// Only the encrypted file held it, and it goes with its last name.
 	f = newFake(t)
-	x = writeStore(t, f)
+	x = storeWriteStore(t, f)
 	x.secret(f, "env.prod.enc.yaml", "TOKEN", "t1")
 	x.push(x.store)
 	stderrOf(t, f, "unset", "-g", "TOKEN", "--env", "prod")
@@ -213,13 +216,13 @@ func TestUnsetGlobalCommits(t *testing.T) {
 
 func TestUnsetUndeclareCommits(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	stderrOf(t, f, "unset", "-g", "NAME", "--undeclare")
 	x.wantCommit("unset NAME (manifest.yaml, common.yaml)", "manifest.yaml", "common.yaml")
 
 	// Declared with no value anywhere: the declaration alone.
 	f = newFake(t)
-	x = writeStore(t, f)
+	x = storeWriteStore(t, f)
 	stderrOf(t, f, "unset", "-g", "SIZE", "--undeclare")
 	x.wantCommit("unset SIZE (manifest.yaml)", "manifest.yaml")
 }
@@ -227,7 +230,7 @@ func TestUnsetUndeclareCommits(t *testing.T) {
 // The plaintext copy is gone and said to be before the encrypted one fails: that much is committed, and the failure reported.
 func TestUnsetGlobalPartFailureCommitsWhatWasRemoved(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	x.secret(f, "common.enc.yaml", "TOKEN", "t1")
 	x.secret(f, "common.enc.yaml", "OTHER", "o1")
 	x.commit(x.store, "common.yaml", "NAME: n\nTOKEN: leaked\n")
@@ -244,7 +247,7 @@ func TestUnsetGlobalPartFailureCommitsWhatWasRemoved(t *testing.T) {
 
 func TestUnsetGlobalNotSetCommitsNothing(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	if err := f.run("unset", "-g", "SIZE"); err == nil || !strings.Contains(err.Error(), "SIZE is not set in") {
 		t.Fatalf("got %v", err)
 	}
@@ -254,8 +257,8 @@ func TestUnsetGlobalNotSetCommitsNothing(t *testing.T) {
 	x.wantClean()
 }
 
-// storeEditor puts the fake on a terminal with an editor that writes content, or nothing when content is "".
-func storeEditor(f *fake, content string) {
+// storeWriteEditor puts the fake on a terminal with an editor that writes content, or nothing when content is "".
+func storeWriteEditor(f *fake, content string) {
 	f.tty = true
 	f.env["EDITOR"] = "nano"
 	f.paths = map[string]string{"nano": "/bin/nano"}
@@ -269,8 +272,8 @@ func storeEditor(f *fake, content string) {
 
 func TestEditGlobalCommits(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
-	storeEditor(f, "SIZE: 4\n")
+	x := storeWriteStore(t, f)
+	storeWriteEditor(f, "SIZE: 4\n")
 	if got := stderrOf(t, f, "edit", "-g", "--env", "prod"); got != "" {
 		t.Fatalf("stderr %q", got)
 	}
@@ -281,10 +284,10 @@ func TestEditGlobalCommits(t *testing.T) {
 
 	// The encrypted file, through the backend.
 	f = newFake(t)
-	x = writeStore(t, f)
+	x = storeWriteStore(t, f)
 	x.secret(f, "common.enc.yaml", "TOKEN", "t1")
 	x.push(x.store)
-	storeEditor(f, "")
+	storeWriteEditor(f, "")
 	f.backend.EditFunc = func(p []backend.Pair) []backend.Pair { return append(p, backend.Pair{Name: "B", Value: "b1-marker"}) }
 	stderrOf(t, f, "edit", "-g", "--secrets")
 	x.wantCommit("edit common.enc.yaml", "common.enc.yaml")
@@ -295,14 +298,14 @@ func TestEditGlobalCommits(t *testing.T) {
 
 func TestEditGlobalNoChangeNoCommit(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	x.secret(f, "common.enc.yaml", "TOKEN", "t1")
 	x.push(x.store)
-	storeEditor(f, "")
+	storeWriteEditor(f, "")
 	for _, args := range [][]string{{"edit", "-g"}, {"edit", "-g", "--secrets"}, {"edit", "-g", "--env", "new"}} {
 		stderrOf(t, f, args...)
-		if got := x.subjects(); got != nil || len(commitsRun(f)) != 0 {
-			t.Fatalf("%v: commits %q, git commit ran %d times", args, got, len(commitsRun(f)))
+		if got := x.subjects(); got != nil || len(storeWriteCommitsRun(f)) != 0 {
+			t.Fatalf("%v: commits %q, git commit ran %d times", args, got, len(storeWriteCommitsRun(f)))
 		}
 		x.wantClean()
 	}
@@ -311,13 +314,13 @@ func TestEditGlobalNoChangeNoCommit(t *testing.T) {
 // A file saved but not valid is left for `ezc edit` to fix, uncommitted; the edit that fixes it is the commit.
 func TestEditGlobalInvalidResultIsNotCommitted(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
-	storeEditor(f, "NAME: [\n")
+	x := storeWriteStore(t, f)
+	storeWriteEditor(f, "NAME: [\n")
 	wantExit(t, f.run("edit", "-g"), 1)
 	if got := x.subjects(); got != nil {
 		t.Fatalf("commits %q", got)
 	}
-	storeEditor(f, "NAME: fixed\n")
+	storeWriteEditor(f, "NAME: fixed\n")
 	f.errOut.Reset()
 	if err := f.run("edit", "-g"); err != nil {
 		t.Fatal(err)
@@ -327,20 +330,20 @@ func TestEditGlobalInvalidResultIsNotCommitted(t *testing.T) {
 
 func TestSetFailureCommitsNothing(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	f.backend.Locked = true
 	f.stdin = "v\n"
 	if err := f.run("set", "-g", "KEY", "--type", "secret", "--desc", "d"); !errors.Is(err, backend.ErrNoKey) {
 		t.Fatalf("got %v", err)
 	}
-	if got := x.subjects(); got != nil || len(commitsRun(f)) != 0 {
-		t.Fatalf("commits %q, git commit ran %d times", got, len(commitsRun(f)))
+	if got := x.subjects(); got != nil || len(storeWriteCommitsRun(f)) != 0 {
+		t.Fatalf("commits %q, git commit ran %d times", got, len(storeWriteCommitsRun(f)))
 	}
 	x.wantClean()
 
 	// A plaintext write that fails after the declaration, and an --expand that is put back.
 	f = newFake(t)
-	x = writeStore(t, f)
+	x = storeWriteStore(t, f)
 	x.commit(x.store, "env.prod.yaml", "A: &x 1\n")
 	x.push(x.store)
 	if err := f.run("set", "-g", "NEW", "v", "--env", "prod", "--type", "str", "--desc", "d"); err == nil || !strings.Contains(err.Error(), "anchor") {
@@ -349,15 +352,15 @@ func TestSetFailureCommitsNothing(t *testing.T) {
 	if err := f.run("set", "-g", "NEW", "$NOWHERE", "--expand", "--type", "str", "--desc", "d"); err == nil || !strings.Contains(err.Error(), "Nothing was changed") {
 		t.Fatalf("got %v", err)
 	}
-	if got := x.subjects(); got != nil || len(commitsRun(f)) != 0 {
-		t.Fatalf("commits %q, git commit ran %d times", got, len(commitsRun(f)))
+	if got := x.subjects(); got != nil || len(storeWriteCommitsRun(f)) != 0 {
+		t.Fatalf("commits %q, git commit ran %d times", got, len(storeWriteCommitsRun(f)))
 	}
 	x.wantClean()
 }
 
 func TestHandEditNotSwept(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	write(t, x.file("common.yaml"), "NAME: by hand\n")
 	write(t, x.file("env.loose.yaml"), "A: b\n")
 	got := stderrOf(t, f, "set", "-g", "OTHER", "v", "--env", "prod", "--type", "str", "--desc", "d")
@@ -378,10 +381,10 @@ func TestHandEditNotSwept(t *testing.T) {
 	}
 }
 
-// refused runs each write and fails unless it is refused with want, exit 1, having changed and committed nothing.
-func refused(t *testing.T, f *fake, x gitFix, want string) {
+// storeWriteRefused runs each write and fails unless it is refused with want, exit 1, having changed and committed nothing.
+func storeWriteRefused(t *testing.T, f *fake, x storeWriteFix, want string) {
 	t.Helper()
-	storeEditor(f, "NAME: edited\n")
+	storeWriteEditor(f, "NAME: edited\n")
 	f.backend.EditFunc = func(p []backend.Pair) []backend.Pair { return nil }
 	f.stdin = "v\n"
 	head, status := x.git("rev-parse", "HEAD"), x.git("status", "--porcelain", "--untracked-files=all")
@@ -407,9 +410,9 @@ func refused(t *testing.T, f *fake, x gitFix, want string) {
 			t.Errorf("%v: got %v", args, err)
 			continue
 		}
-		exitsOne(t, err)
-		if f.out.Len() != 0 || len(f.execs) != 0 || len(commitsRun(f)) != 0 {
-			t.Errorf("%v: stdout %q, editor ran %d times, git commit ran %d times", args, f.out.String(), len(f.execs), len(commitsRun(f)))
+		storeWriteExitsOne(t, err)
+		if f.out.Len() != 0 || len(f.execs) != 0 || len(storeWriteCommitsRun(f)) != 0 {
+			t.Errorf("%v: stdout %q, editor ran %d times, git commit ran %d times", args, f.out.String(), len(f.execs), len(storeWriteCommitsRun(f)))
 		}
 		for name, content := range before {
 			if readFile(t, x.file(name)) != content {
@@ -428,37 +431,37 @@ func refused(t *testing.T, f *fake, x gitFix, want string) {
 
 func TestWriteRefusedWhileBehind(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	x.secret(f, "common.enc.yaml", "TOKEN", "t1")
 	x = x.published()
 	x.theirs(2)
-	refused(t, f, x, refusedBehind)
+	storeWriteRefused(t, f, x, storeWriteBehind)
 	if !strings.Contains(f.errOut.String(), behindTwo) {
 		t.Fatalf("stderr %q", f.errOut.String())
 	}
 
 	f = newFake(t)
-	x = writeStore(t, f)
+	x = storeWriteStore(t, f)
 	x.theirs(1)
 	err := f.run("set", "-g", "NAME", "v2")
-	if want := strings.Replace(refusedBehind, "2 commits", "1 commit", 1); err == nil || err.Error() != want {
+	if want := strings.Replace(storeWriteBehind, "2 commits", "1 commit", 1); err == nil || err.Error() != want {
 		t.Fatalf("got %v", err)
 	}
 }
 
 func TestWriteRefusedWhileDiverged(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	x.secret(f, "common.enc.yaml", "TOKEN", "t1")
 	x = x.published()
 	x.commit(x.store, "env.mine.yaml", "A: b\n")
 	x.theirs(2)
-	refused(t, f, x, refusedDiverged)
+	storeWriteRefused(t, f, x, storeWriteDiverged)
 }
 
 func TestWriteAllowedWhileAhead(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	x.commit(x.store, "env.mine.yaml", "A: b\n")
 	got := stderrOf(t, f, "set", "-g", "NAME", "v2")
 	if want := "store: 1 commit ahead of origin — run ezc store push\n"; got != want {
@@ -472,7 +475,7 @@ func TestWriteAllowedWhileAhead(t *testing.T) {
 
 func TestLocalOnlyStoreWriteCommits(t *testing.T) {
 	f := newFake(t)
-	x := localStore(t, f)
+	x := storeWriteFix{localStore(t, f)}
 	x.commit(x.store, "manifest.yaml", mToken)
 	stderrOf(t, f, "set", "-g", "NAME", "v2")
 	if got := x.git("log", "-1", "--format=%s"); got != "set NAME (common.yaml)" || x.commits() != "3" {
@@ -483,7 +486,7 @@ func TestLocalOnlyStoreWriteCommits(t *testing.T) {
 
 func TestRepoWriteNeverCommits(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	g := x.g
 	if err := g.Init(f.wd); err != nil {
 		t.Fatal(err)
@@ -492,7 +495,7 @@ func TestRepoWriteNeverCommits(t *testing.T) {
 	if done, err := g.Commit(f.wd, "start", gitstore.Author{}, ezcDir+"/manifest.yaml", ezcDir+"/"+backend.FakePolicy); err != nil || !done {
 		t.Fatalf("commit: %v, %v", done, err)
 	}
-	storeEditor(f, "NAME: edited\n")
+	storeWriteEditor(f, "NAME: edited\n")
 	for _, args := range [][]string{{"set", "NAME", "v"}, {"set", "NEW", "v", "--type", "str", "--desc", "d"}, {"unset", "NAME"}, {"edit"}} {
 		if got := stderrOf(t, f, args...); got != "" || len(f.gits) != 0 {
 			t.Errorf("%v: stderr %q, git ran %v", args, got, f.gits)
@@ -510,7 +513,7 @@ func TestRepoWriteNeverCommits(t *testing.T) {
 // The store is the scope without -g when the working directory is inside it.
 func TestWriteInsideTheStoreCommits(t *testing.T) {
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	f.wd = x.store
 	stderrOf(t, f, "set", "NAME", "v2")
 	if f.out.String() != "set NAME in repo/common.yaml\n" {
@@ -531,13 +534,13 @@ func TestPlainFolderStoreWrites(t *testing.T) {
 	plain := t.TempDir()
 	f.env["EZC_STORE"] = plain
 	write(t, filepath.Join(plain, ezcDir, "manifest.yaml"), m1)
-	storeEditor(f, "NAME: edited\n")
+	storeWriteEditor(f, "NAME: edited\n")
 	for _, args := range [][]string{{"edit", "-g"}, {"set", "-g", "NAME", "v"}, {"set", "-g", "NEW", "v", "--type", "str", "--desc", "d"}, {"unset", "-g", "NAME"}} {
 		if got := stderrOf(t, f, args...); got != "" {
 			t.Errorf("%v: stderr %q", args, got)
 		}
 		// One question, whether the folder is a repo, and nothing after it.
-		if len(f.gits) != 1 || f.gits[0].Dir != plain || len(commitsRun(f)) != 0 {
+		if len(f.gits) != 1 || f.gits[0].Dir != plain || len(storeWriteCommitsRun(f)) != 0 {
 			t.Errorf("%v: git ran %v", args, f.gits)
 		}
 	}
@@ -552,7 +555,7 @@ func TestPlainFolderStoreWrites(t *testing.T) {
 func TestCommitMessageNeverHoldsAValue(t *testing.T) {
 	const value = "plain-marker-value"
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	stderrOf(t, f, "set", "-g", "NAME", value)
 	stderrOf(t, f, "set", "-g", "NEW", value, "--type", "str", "--desc", "d")
 	stderrOf(t, f, "unset", "-g", "NEW", "--undeclare")
@@ -562,7 +565,7 @@ func TestCommitMessageNeverHoldsAValue(t *testing.T) {
 	if got := x.git("log", "--format=%B%an%ae%cn%ce"); strings.Contains(got, value) {
 		t.Fatalf("a commit message holds the value:\n%s", got)
 	}
-	for _, c := range commitsRun(f) {
+	for _, c := range storeWriteCommitsRun(f) {
 		if strings.Contains(strings.Join(c.Args, " "), value) {
 			t.Fatalf("git was given the value: %v", c.Args)
 		}
@@ -572,7 +575,7 @@ func TestCommitMessageNeverHoldsAValue(t *testing.T) {
 func TestCommitFailureSaysWhereTheChangeIs(t *testing.T) {
 	const value = "plain-marker-value"
 	f := newFake(t)
-	x := writeStore(t, f)
+	x := storeWriteStore(t, f)
 	hook := "#!/bin/sh\ncat .ezc/common.yaml\necho 'error: refused by the hook' >&2\nexit 1\n"
 	if err := os.WriteFile(filepath.Join(x.store, ".git", "hooks", "pre-commit"), []byte(hook), 0o755); err != nil {
 		t.Fatal(err)
@@ -582,7 +585,7 @@ func TestCommitFailureSaysWhereTheChangeIs(t *testing.T) {
 	if err == nil || err.Error() != want {
 		t.Fatalf("got %v\nwant %s", err, want)
 	}
-	exitsOne(t, err)
+	storeWriteExitsOne(t, err)
 	if got := readFile(t, x.file("common.yaml")); got != "NAME: "+value+"\n" {
 		t.Fatalf("common.yaml %q", got)
 	}
