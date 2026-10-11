@@ -174,6 +174,25 @@ func TestSyncUncommitted(t *testing.T) {
 	}
 }
 
+// A reader says that the store's state cannot be read, and carries on.
+func TestSyncOffABranch(t *testing.T) {
+	f := newFake(t)
+	x := storeWriteFix{remoteStore(t, f)}
+	x.theirs(1)
+	x.git("checkout", "--quiet", "--detach")
+	want := "store: cannot tell how the store stands in " + x.store + " (the store is not on a branch)\n"
+	if got := stderrOf(t, f, "list", "-g"); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if !strings.Contains(f.out.String(), "NAME") {
+		t.Fatalf("list printed %q", f.out.String())
+	}
+	f.errTTY = true
+	if got := stderrOf(t, f, "get", "NAME"); got != "\x1b[31m"+strings.TrimSuffix(want, "\n")+"\x1b[0m\n" {
+		t.Fatalf("on a terminal: %q", got)
+	}
+}
+
 func TestSyncRequestsAppended(t *testing.T) {
 	f := newFake(t)
 	x := remoteStore(t, f)

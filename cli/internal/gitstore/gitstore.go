@@ -5,7 +5,9 @@ package gitstore
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -63,7 +65,9 @@ func (s Status) State() State {
 
 var (
 	ErrNotInstalled = errors.New("git is not installed")
-	ErrUnreachable  = errors.New("the remote could not be reached")
+	// ErrNoBranch is a store whose HEAD is on no branch, as while a rebase is open.
+	ErrNoBranch    = errors.New("the store is not on a branch")
+	ErrUnreachable = errors.New("the remote could not be reached")
 )
 
 // fixed is what every git call has in its environment: no password prompt,
@@ -143,11 +147,18 @@ func bareURL(u string) string {
 	return scheme + "://" + host
 }
 
-// IsRepo reports whether dir is the top of a work tree.
-func (g Git) IsRepo(dir string) bool {
+// IsRepo reports whether dir is the top of a work tree. Without git, a folder that holds a .git entry
+// counts as one, and the error is ErrNotInstalled: nothing more can be learnt about it.
+func (g Git) IsRepo(dir string) (bool, error) {
 	out, err := g.run(dir, 0, "rev-parse", "--is-inside-work-tree", "--show-cdup")
+	if errors.Is(err, ErrNotInstalled) {
+		if _, serr := os.Lstat(filepath.Join(dir, ".git")); serr == nil {
+			return true, ErrNotInstalled
+		}
+		return false, nil
+	}
 	// The path up to the top is empty only at the top.
-	return err == nil && string(out) == "true\n\n"
+	return err == nil && string(out) == "true\n\n", nil
 }
 
 // Init makes dir, and the folders above it, a repo on branch main.
@@ -274,7 +285,7 @@ func (g Git) Status(dir string) (Status, error) {
 		}
 	}
 	if st.Branch == "" || st.Branch == "(detached)" {
-		return Status{}, errors.New("git: the store is not on a branch")
+		return Status{}, fmt.Errorf("git: %w", ErrNoBranch)
 	}
 	if st.Remote, err = g.Remote(dir); err != nil || st.Remote == "" {
 		return st, err

@@ -111,29 +111,39 @@ func TestInitCommitStatus(t *testing.T) {
 	}
 }
 
+// isRepo is IsRepo where git runs, so it has no error to give.
+func isRepo(t *testing.T, g Git, dir string) bool {
+	t.Helper()
+	repo, err := g.IsRepo(dir)
+	if err != nil {
+		t.Fatalf("IsRepo: %v", err)
+	}
+	return repo
+}
+
 func TestIsRepo(t *testing.T) {
 	g := newGit(t)
 	dir := newStore(t, g)
-	if !g.IsRepo(dir) {
+	if !isRepo(t, g, dir) {
 		t.Fatal("a store made by Init is not a repo")
 	}
 	inside := filepath.Join(dir, "plain")
 	if err := os.Mkdir(inside, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if g.IsRepo(inside) {
+	if isRepo(t, g, inside) {
 		t.Fatal("a folder inside a repo is not the top of a work tree")
 	}
-	if g.IsRepo(filepath.Join(dir, ".git")) {
+	if isRepo(t, g, filepath.Join(dir, ".git")) {
 		t.Fatal("a .git folder is not a work tree")
 	}
-	if g.IsRepo(t.TempDir()) {
+	if isRepo(t, g, t.TempDir()) {
 		t.Fatal("a plain folder is not a repo")
 	}
-	if g.IsRepo(filepath.Join(t.TempDir(), "missing")) {
+	if isRepo(t, g, filepath.Join(t.TempDir(), "missing")) {
 		t.Fatal("a folder that does not exist is not a repo")
 	}
-	if g.IsRepo(gittest.Bare(t)) {
+	if isRepo(t, g, gittest.Bare(t)) {
 		t.Fatal("a bare repo is not a work tree")
 	}
 }
@@ -486,8 +496,16 @@ func TestNotInstalled(t *testing.T) {
 	check("Status", err)
 	_, err = g.Push("/store")
 	check("Push", err)
-	if g.IsRepo("/store") {
-		t.Error("IsRepo without git")
+	if repo, err := g.IsRepo("/store"); repo || err != nil {
+		t.Errorf("IsRepo without git, of a folder with no .git: %v, %v", repo, err)
+	}
+	// A folder that holds a .git entry is a repo that cannot be read.
+	store := t.TempDir()
+	if err := os.Mkdir(filepath.Join(store, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if repo, err := g.IsRepo(store); !repo || !errors.Is(err, ErrNotInstalled) {
+		t.Errorf("IsRepo without git, of a folder with a .git: %v, %v", repo, err)
 	}
 }
 
@@ -534,13 +552,13 @@ func TestInheritedRepoIsIgnored(t *testing.T) {
 
 	plain := t.TempDir()
 	write(t, plain, "common.yaml", "A: 1\n")
-	if inherited.IsRepo(plain) {
+	if isRepo(t, inherited, plain) {
 		t.Fatal("a plain folder is a repo because GIT_DIR names one")
 	}
 
 	store := newStore(t, inherited)
 	commit(t, inherited, store, "one.yaml", "A: 1\n")
-	if !inherited.IsRepo(store) || status(t, inherited, store).Dirty {
+	if !isRepo(t, inherited, store) || status(t, inherited, store).Dirty {
 		t.Fatal("the store is not read as its own repo")
 	}
 	if got := raw(t, g, store, "rev-list", "--count", "HEAD", "--"); got != "2" {

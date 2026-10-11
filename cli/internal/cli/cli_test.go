@@ -38,6 +38,7 @@ type fake struct {
 	backend   *backend.Fake                              // the encryption backend; System.Backend
 	now       time.Time                                  // System.Now; the zero value means 2026-10-11T12:00:00Z
 	errTTY    bool                                       // StderrIsTerminal
+	noGit     bool                                       // git cannot be found
 
 	t    *testing.T
 	gits []proc.Command // every git command Exec ran; they are not in execs
@@ -59,6 +60,9 @@ func newFake(t *testing.T) *fake {
 // runGit runs the real git, cut off from the user's config. Without git it answers as a machine that has none.
 func (f *fake) runGit(c proc.Command) ([]byte, []byte, error) {
 	f.gits = append(f.gits, c)
+	if f.noGit {
+		return nil, nil, exec.ErrNotFound
+	}
 	if f.git == nil {
 		if _, err := exec.LookPath("git"); err != nil && os.Getenv("EZC_REQUIRE_GIT") != "1" {
 			return nil, nil, exec.ErrNotFound

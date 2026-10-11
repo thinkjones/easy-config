@@ -168,7 +168,7 @@ func runSetup(sys System, o setupFlags) error {
 	plan := keepStore
 	remote := ""
 	if has {
-		if e.Git.IsRepo(p.Store()) {
+		if repo, _ := e.Git.IsRepo(p.Store()); repo {
 			if remote, err = e.Git.Remote(p.Store()); err != nil {
 				return err
 			}

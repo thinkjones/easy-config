@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -197,10 +198,34 @@ func TestStatusUnreadableIsAnError(t *testing.T) {
 	f := newFake(t)
 	x := storeWriteFix{remoteStore(t, f)}
 	x.git("checkout", "--quiet", "--detach")
-	out, _, err := storeCmdRun(f, "status")
-	if err == nil || !strings.Contains(err.Error(), "not on a branch") || out != "" {
-		t.Fatalf("got %v, stdout %q", err, out)
+	noBranch := "the store in " + x.store + " is not on a branch (a rebase may be in progress). Finish or abort it with git, then run this again."
+	for _, verb := range []string{"status", "pull", "push"} {
+		storeCmdRefused(t, f, noBranch, verb)
 	}
+	if n := len(statusesRun(f)); n != 1 {
+		t.Fatalf("push read the status %d times", n)
+	}
+	storeCmdRun(f, "status")
+	if n := len(statusesRun(f)); n != 1 {
+		t.Fatalf("status read the status %d times, want 1", n)
+	}
+
+	// A store that is a git repo is not called a plain folder because git is missing.
+	f.noGit = true
+	for _, verb := range []string{"status", "pull", "push"} {
+		storeCmdRefused(t, f, "git is not installed. Install git, then run this again.", verb)
+	}
+}
+
+// statusesRun are the git commands the fake ran that read the store's status.
+func statusesRun(f *fake) []proc.Command {
+	var out []proc.Command
+	for _, c := range f.gits {
+		if slices.Contains(c.Args, "--porcelain=v2") {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func TestRemoteShownHoldsNoPassword(t *testing.T) {

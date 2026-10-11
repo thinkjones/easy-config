@@ -9,6 +9,7 @@ import (
 
 	"github.com/thinkjones/easy-config/cli/internal/gitstore"
 	"github.com/thinkjones/easy-config/cli/internal/gitstore/gittest"
+	"github.com/thinkjones/easy-config/cli/internal/proc"
 )
 
 // doctorCmdLine is the line of doctor's output that starts with marker and label, "" when there is none.
@@ -111,6 +112,29 @@ func TestDoctorDiverged(t *testing.T) {
 	f.now = time.Date(2026, 10, 11, 13, 0, 0, 0, time.UTC)
 	wantExit(t, f.run("doctor"), 1)
 	if line := doctorCmdLine(f.out.String(), "sync"); !strings.HasPrefix(strings.TrimSpace(line), "✗ sync") || !strings.Contains(line, "diverged from origin (1 ahead, 1 behind)") {
+		t.Errorf("sync: %q\n%s", line, f.out.String())
+	}
+}
+
+func TestDoctorOffABranch(t *testing.T) {
+	f, bare := doctorCmdCloned(t)
+	doctorCmdPushElsewhere(t, bare)
+	if _, _, err := f.runGit(proc.Command{Dir: setupStore(f), Name: "git", Args: []string{"checkout", "--quiet", "--detach"}}); err != nil {
+		t.Fatal(err)
+	}
+	wantExit(t, f.run("doctor"), 1)
+	want := "✗ sync the store in " + setupStore(f) + " is not on a branch (a rebase may be in progress). Finish or abort it with git, then run this again."
+	if line := doctorCmdLine(f.out.String(), "sync"); strings.Join(strings.Fields(line), " ") != want {
+		t.Errorf("sync: %q\n%s", line, f.out.String())
+	}
+}
+
+func TestDoctorStoreWithoutGit(t *testing.T) {
+	f, _ := doctorCmdCloned(t)
+	f.noGit = true
+	wantExit(t, f.run("doctor", "--only", "store"), 1)
+	want := "✗ sync git is not installed, so a change to the store could not be committed. Install git, then run this again."
+	if line := doctorCmdLine(f.out.String(), "sync"); strings.Join(strings.Fields(line), " ") != want {
 		t.Errorf("sync: %q\n%s", line, f.out.String())
 	}
 }

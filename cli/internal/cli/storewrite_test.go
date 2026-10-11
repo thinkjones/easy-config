@@ -645,6 +645,52 @@ func TestWriteRefusedWhileDiverged(t *testing.T) {
 	storeWriteRefused(t, f, x, storeWriteDiverged)
 }
 
+// A store that is on no branch, as while a rebase is open, cannot be told from one that is behind: nothing is written.
+func TestWriteRefusedOffABranch(t *testing.T) {
+	f := newFake(t)
+	x := storeWriteStore(t, f)
+	x.secret(f, "common.enc.yaml", "TOKEN", "t1")
+	x = x.published()
+	x.commit(x.store, "env.mine.yaml", "A: b\n")
+	x.theirs(1)
+	x.git("checkout", "--quiet", "--detach")
+	storeWriteRefused(t, f, x, "the store in "+x.store+" is not on a branch (a rebase may be in progress). Finish or abort it with git, then run this again.")
+	if want := "store: cannot tell how the store stands in " + x.store + " (the store is not on a branch)\n"; f.errOut.String() != strings.Repeat(want, 9) {
+		t.Fatalf("stderr %q, want %q", f.errOut.String(), want)
+	}
+}
+
+// Without git a store that is a git repo cannot be committed to, so it is not written to either.
+func TestWriteRefusedWithoutGit(t *testing.T) {
+	f := newFake(t)
+	x := storeWriteStore(t, f)
+	x.secret(f, "common.enc.yaml", "TOKEN", "t1")
+	x = x.published()
+	head := x.git("rev-parse", "HEAD")
+	f.noGit = true
+	before := readFile(t, x.file("common.yaml"))
+	f.stdin = "v\n"
+	for _, args := range [][]string{{"set", "-g", "NAME", "v2"}, {"set", "-g", "TOKEN"}, {"unset", "-g", "NAME"}} {
+		f.errOut.Reset()
+		err := f.run(args...)
+		if want := "git is not installed, so a change to the store could not be committed. Install git, then run this again."; err == nil || err.Error() != want {
+			t.Fatalf("%v: got %v", args, err)
+		}
+		storeWriteExitsOne(t, err)
+		if want := "store: cannot tell how the store stands in " + x.store + " (git is not installed)\n"; f.errOut.String() != want {
+			t.Fatalf("%v: stderr %q, want %q", args, f.errOut.String(), want)
+		}
+	}
+	if got := stderrOf(t, f, "list", "-g"); !strings.Contains(got, "(git is not installed)") {
+		t.Fatalf("list: stderr %q", got)
+	}
+	f.noGit = false
+	if readFile(t, x.file("common.yaml")) != before || x.git("rev-parse", "HEAD") != head {
+		t.Fatal("the store was changed")
+	}
+	x.wantClean()
+}
+
 func TestWriteAllowedWhileAhead(t *testing.T) {
 	f := newFake(t)
 	x := storeWriteStore(t, f)
@@ -735,6 +781,15 @@ func TestPlainFolderStoreWrites(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(plain, ".git")); err == nil {
 		t.Fatal("the folder was made a git repo")
+	}
+
+	// Without git a plain folder is still a plain folder.
+	f.noGit = true
+	if got := stderrOf(t, f, "set", "-g", "NAME", "again"); got != "" {
+		t.Errorf("without git: stderr %q", got)
+	}
+	if got := readFile(t, filepath.Join(plain, ezcDir, "common.yaml")); got != "NEW: v\nNAME: again\n" {
+		t.Fatalf("common.yaml %q", got)
 	}
 }
 

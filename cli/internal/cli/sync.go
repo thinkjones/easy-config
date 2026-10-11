@@ -31,6 +31,7 @@ type storeSync struct {
 	Git      bool   // the store is a git repo
 	Dir      string // the store's folder, when it is one
 	Status   gitstore.Status
+	Err      error     // why Status could not be read; the store's state is then not known
 	Fetched  time.Time // the last fetch that worked; zero when never
 	Offline  bool      // a fetch was tried just now and failed
 	Requests []string  // names in the store's requests folder, sorted
@@ -52,17 +53,21 @@ func loadConfig(sys System) (config.Config, error) {
 }
 
 // syncStore fetches when the store has a remote and the last attempt is at least maxAge old, then reads the status.
-// It never fails a command: any error leaves Git false or the status as last known.
+// It never fails a command: a store that is a git repo whose status cannot be read has Err set, which stops a write and no read.
 func syncStore(sys System, maxAge, timeout time.Duration) storeSync {
 	p, err := paths.Resolve(sys.Getenv, sys.GOOS)
 	if err != nil {
 		return storeSync{}
 	}
 	g, dir := storeGit(sys), p.Store()
-	if !g.IsRepo(dir) {
+	repo, err := g.IsRepo(dir)
+	if !repo {
 		return storeSync{}
 	}
-	s := storeSync{Git: true, Dir: dir}
+	s := storeSync{Git: true, Dir: dir, Err: err}
+	if err != nil {
+		return s
+	}
 	state := readState(p.State())
 	s.Fetched = stateTime(state, "fetched")
 	if remote, err := g.Remote(dir); err == nil && remote != "" {
@@ -79,7 +84,7 @@ func syncStore(sys System, maxAge, timeout time.Duration) storeSync {
 			writeState(p.State(), state)
 		}
 	}
-	s.Status, _ = g.Status(dir)
+	s.Status, s.Err = g.Status(dir)
 	s.Requests = requests(p.StoreEzc())
 	return s
 }
@@ -150,6 +155,22 @@ func writeState(path string, state map[string]json.RawMessage) {
 	}
 }
 
+// cannotTell is the refusal for a store whose state git could not give.
+func cannotTell(dir string, err error) error {
+	switch {
+	case errors.Is(err, gitstore.ErrNoBranch):
+		return fmt.Errorf("the store in %s is not on a branch (a rebase may be in progress). Finish or abort it with git, then run this again.", dir)
+	case errors.Is(err, gitstore.ErrNotInstalled):
+		return errors.New("git is not installed, so a change to the store could not be committed. Install git, then run this again.")
+	}
+	return fmt.Errorf("cannot tell how the store in %s stands: %s.", dir, gitReason(err))
+}
+
+// gitReason is a gitstore error as part of a sentence: without its "git: " and its full stop.
+func gitReason(err error) string {
+	return strings.TrimSuffix(strings.TrimPrefix(err.Error(), "git: "), ".")
+}
+
 // indicate prints the one line to stderr when there is something to say.
 func indicate(sys System, s storeSync) {
 	if !s.Git {
@@ -161,6 +182,10 @@ func indicate(sys System, s storeSync) {
 			line = colour + line + reset
 		}
 		fmt.Fprintln(sys.Stderr, line)
+	}
+	if s.Err != nil {
+		say(red, fmt.Sprintf("store: cannot tell how the store stands in %s (%s)", s.Dir, gitReason(s.Err)))
+		return
 	}
 
 	line, colour := "", red
@@ -222,9 +247,12 @@ func touchStore(sys System) storeSync {
 	return s
 }
 
-// guardStoreWrite runs touchStore and refuses the write when the store is behind or diverged.
+// guardStoreWrite runs touchStore and refuses the write when the store is behind or diverged, or when that cannot be told.
 func guardStoreWrite(sys System) (storeSync, error) {
 	s := touchStore(sys)
+	if s.Git && s.Err != nil {
+		return s, cannotTell(s.Dir, s.Err)
+	}
 	const pull = "Run `ezc store pull` first: a change made now could not be merged."
 	// The counts, not the state: uncommitted changes do not make a store less behind.
 	switch st := s.Status; {

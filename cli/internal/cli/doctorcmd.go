@@ -119,6 +119,9 @@ func syncPhrase(sys System, s storeSync) (phrase string, state doctor.State, fix
 	if !s.Git {
 		return "", doctor.OK, ""
 	}
+	if s.Err != nil {
+		return cannotTell(s.Dir, s.Err).Error(), doctor.Broken, ""
+	}
 	st := s.Status
 	switch st.State() {
 	case gitstore.Ahead:

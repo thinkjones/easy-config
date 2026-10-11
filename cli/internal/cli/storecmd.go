@@ -57,10 +57,22 @@ func storeRepo(sys System, verb string) (paths.Paths, gitstore.Git, error) {
 	if err != nil {
 		return p, g, err
 	}
-	if !g.IsRepo(p.Store()) {
+	repo, err := g.IsRepo(p.Store())
+	switch {
+	case err != nil:
+		return p, g, storeUnread(p.Store(), err)
+	case !repo:
 		return p, g, fmt.Errorf("the store in %s is not a git repo, so there is nothing to %s.", p.Store(), verb)
 	}
 	return p, g, nil
+}
+
+// storeUnread is cannotTell for a command that only looks at the store or moves its commits: without git it has no change to lose.
+func storeUnread(dir string, err error) error {
+	if errors.Is(err, gitstore.ErrNotInstalled) {
+		return errors.New("git is not installed. Install git, then run this again.")
+	}
+	return cannotTell(dir, err)
 }
 
 // storeContacted records that origin was reached just now.
@@ -95,9 +107,8 @@ Exits 0 in every state it can read. A store that is not a git repo is not synced
 				row("state", "not a git repo, so it is not synced")
 				return nil
 			}
-			// syncStore reads a status that cannot be read as in sync; here that would be the answer.
-			if _, err := storeGit(sys).Status(s.Dir); err != nil {
-				return err
+			if s.Err != nil {
+				return storeUnread(s.Dir, s.Err)
 			}
 
 			st := s.Status
@@ -193,6 +204,8 @@ An encrypted file changed both here and on the remote cannot be merged: the remo
 				return errors.New("the store has no remote, so there is nothing to pull. `ezc setup --new-github owner/repo` gives it one.")
 			case errors.Is(err, gitstore.ErrUnreachable):
 				return errors.New(originUnreachable)
+			case errors.Is(err, gitstore.ErrNoBranch):
+				return storeUnread(dir, err)
 			case err != nil:
 				return err
 			}
@@ -276,6 +289,8 @@ Refused while the store is behind its remote or has diverged from it (run ` + "`
 			dir := p.Store()
 			st, err := g.Status(dir)
 			switch {
+			case errors.Is(err, gitstore.ErrNoBranch):
+				return storeUnread(dir, err)
 			case err != nil:
 				return err
 			case st.Remote == "":
