@@ -14,7 +14,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func isEncrypted(path string) bool { return strings.HasSuffix(path, ".enc.yaml") }
+// IsEncrypted reports whether path names an encrypted values file (*.enc.yaml).
+func IsEncrypted(path string) bool { return strings.HasSuffix(path, ".enc.yaml") }
 
 // loadFile reads one values file: plaintext through loadYAML, an *.enc.yaml
 // through decrypt. A file that does not exist is not an error; present says so.
@@ -26,9 +27,9 @@ func loadFile(path, home string, decrypt func(string) ([]backend.Pair, error)) (
 		return nil, false, fmt.Errorf("%s: %w", path, err)
 	}
 
-	if isEncrypted(path) {
+	if IsEncrypted(path) {
 		if decrypt == nil {
-			return nil, true, fmt.Errorf("%s is encrypted, and this version of ezc cannot decrypt it yet", path)
+			return nil, true, fmt.Errorf("%s is encrypted, and no decrypter was supplied", path)
 		}
 		pairs, err = decrypt(path)
 	} else {
@@ -42,7 +43,7 @@ func loadFile(path, home string, decrypt func(string) ([]backend.Pair, error)) (
 	// committed. A decrypted value is data and is never rewritten. Reference
 	// expansion does NOT happen here: it needs the names resolved so far, which
 	// only the caller composing the files has.
-	if !isEncrypted(path) {
+	if !IsEncrypted(path) {
 		for i := range pairs {
 			expanded, err := expandHome(pairs[i].Value, pairs[i].Name, path, home)
 			if err != nil {

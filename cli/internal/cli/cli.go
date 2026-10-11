@@ -119,6 +119,8 @@ Config
 		newCodegenCmd(sys),
 		newListCmd(sys),
 		newGetCmd(sys),
+		newSetCmd(sys),
+		newUnsetCmd(sys),
 		newRepoCmd(sys),
 	)
 	return root

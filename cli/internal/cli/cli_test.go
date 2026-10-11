@@ -28,6 +28,7 @@ type fake struct {
 	execFn    func(proc.Command) ([]byte, []byte, error) // the Exec response; nil is an error
 	secret    string                                     // what ReadSecret returns
 	secretErr error                                      // what ReadSecret fails with
+	prompts   []string                                   // every prompt ReadSecret was given
 	stdin     string                                     // what Stdin holds
 	tty       bool                                       // StdinIsTerminal
 	paths     map[string]string                          // what LookPath finds, by name
@@ -79,7 +80,10 @@ func (f *fake) sys() System {
 			}
 			return "", fmt.Errorf("%s: not found", name)
 		},
-		ReadSecret:      func(string) (string, error) { return f.secret, f.secretErr },
+		ReadSecret: func(prompt string) (string, error) {
+			f.prompts = append(f.prompts, prompt)
+			return f.secret, f.secretErr
+		},
 		StdinIsTerminal: func() bool { return f.tty },
 		Backend:         f.backend,
 	}

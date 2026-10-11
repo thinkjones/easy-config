@@ -16,7 +16,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strings"
 
 	"golang.org/x/term"
 
@@ -118,5 +117,5 @@ func readSecret(prompt string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimRight(string(b), "\r\n"), nil
+	return string(b), nil
 }

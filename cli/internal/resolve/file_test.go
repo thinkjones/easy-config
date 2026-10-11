@@ -114,7 +114,7 @@ func TestHomeExpansionWithoutHome(t *testing.T) {
 func TestEncryptedWithoutDecrypter(t *testing.T) {
 	p := write(t, "common.enc.yaml", "K: ciphertext\n")
 	_, _, err := loadFile(p, "/h", nil)
-	if err == nil || !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "is encrypted, and this version of ezc cannot decrypt") {
+	if err == nil || !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "is encrypted, and no decrypter was supplied") {
 		t.Errorf("got %v", err)
 	}
 }

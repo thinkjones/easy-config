@@ -33,6 +33,8 @@ ezc run -- <command>               # run a command with it
 | `ezc run [ENV] -- <command> [args…]` | Run a command with the environment added to its own. On Unix `ezc` replaces itself with the command, so signals sent to it reach the command and the exit status is the command's. Exits 127 when the command is not found, 126 when it cannot be run. |
 | `ezc list [ENV] [-g]` | List the names an environment holds, with each one's type (from the repo's manifest, else the store's) and the file that supplies it, and the manifest's names that have no value. Never prints a value. `-g` lists the store alone. |
 | `ezc get NAME [ENV] [--reveal]` | Print one value on stdout. A `secret` needs `--reveal`; a name is treated as a secret when the repo's or the store's manifest declares it one, and so is any value read from an encrypted file. |
+| `ezc set NAME [VALUE] [--env E] [-g] [--type T] [--desc D] [--optional] [--values a,b] [--min N] [--max N]` | Set a value in `common.yaml` (or `env.E.yaml`), in the repo or with `-g` in the store. A name the manifest does not declare is declared in the same step, as required unless `--optional`: give `--type` and `--desc`. The value is checked against the declared type and bounds. A secret goes to the encrypted file and is typed at a hidden prompt or piped on stdin, never given as an argument; leave VALUE out of any variable to do the same. A name already in the other file of the pair (plaintext against encrypted) is refused. Prints names and files, never the value. |
+| `ezc unset NAME [--env E] [-g]` | Remove a value, and its declaration once no values file in the scope holds the name. |
 | `ezc repo init` | Create `.ezc/` in the working directory with `manifest.yaml`, `env.local.yaml` and the `env.sh` shim. Existing files are kept; an `env.sh` from an older shim is updated. Prints how to load the environment. |
 | `ezc manifest validate [-m FILE]` | Check that the manifest is well formed; prints the path and counts of required and optional variables. |
 | `ezc manifest schema [-o FILE]` | Print the manifest's JSON Schema, or write it to FILE. |
@@ -75,6 +77,20 @@ These are rejected with an error naming the file and the key, because each would
 A file that is not valid YAML is reported by path and line only, never with the parser's own text.
 
 A variable name, in the manifest and in a values file, is letters, digits and underscores and does not start with a digit (`^[A-Za-z_][A-Za-z0-9_]*$`). `ezc manifest validate` and the JSON Schema apply the same rule.
+
+## Encryption
+
+A variable the manifest declares `secret` is stored encrypted, in `common.enc.yaml` or `env.<name>.enc.yaml`, and `ezc set` writes it there. Until `ezc setup` does this for you in a later version, a folder needs its encryption policy written by hand before a secret can be stored in it: create `.ezc/.sops.yaml` with
+
+```yaml
+creation_rules:
+  - path_regex: \.enc\.yaml$
+    age: age1...your public key...
+```
+
+The key file is `~/.config/sops/age/keys.txt`, unless `SOPS_AGE_KEY` or `SOPS_AGE_KEY_FILE` is set. Make a key with `age-keygen -o ~/.config/sops/age/keys.txt`; its public key is printed, and goes after `age:` above.
+
+A secret is typed at a hidden prompt or piped on stdin, never passed as an argument. A value cannot move across the secret boundary: `ezc set` refuses a name that is already in the other file of the pair, so remove it with `ezc unset` first.
 
 ## Resolution
 

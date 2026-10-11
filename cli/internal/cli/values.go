@@ -205,7 +205,7 @@ func newGetCmd(sys System) *cobra.Command {
 			if !ok {
 				return fmt.Errorf("%s is not set in environment %s.", name, res.EnvLabel())
 			}
-			secret := strings.HasSuffix(res.Origin[name], ".enc.yaml")
+			secret := resolve.IsEncrypted(res.Origin[name])
 			for _, m := range ms {
 				if v, ok := m.Lookup(name); ok && v.IsSecret() {
 					secret = true

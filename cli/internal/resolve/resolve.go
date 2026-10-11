@@ -248,7 +248,7 @@ func Load(o Options) (Result, error) {
 				return res, fmt.Errorf("%s: %s contains a NUL byte, which an environment variable cannot hold", s.Path, pair.Name)
 			}
 			value := pair.Value
-			if !isEncrypted(s.Path) {
+			if !IsEncrypted(s.Path) {
 				value, err = expandRefs(value, pair.Name, s.Path, o.Home, res.Env)
 				if err != nil {
 					return res, err
