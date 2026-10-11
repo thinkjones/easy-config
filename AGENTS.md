@@ -15,6 +15,17 @@ The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-
 
 `ezc`'s data is outside this repo, per user, in `EZC_HOME` (default `~/Library/ezc` on macOS, `$XDG_DATA_HOME/ezc` or `~/.local/share/ezc` on Linux). The global store is `$EZC_HOME/store`, or the folder `EZC_STORE` names.
 
+In a repo, `.ezc/` holds:
+
+| Path | What it is |
+| --- | --- |
+| `.ezc/manifest.yaml` | What the repo needs from its environment. |
+| `.ezc/common.yaml` | Plaintext values for every environment. |
+| `.ezc/env.<name>.yaml` | Plaintext values for one environment; `env.local.yaml` is the default. |
+| `.ezc/env.sh` | The shim mise or direnv sources, written by `ezc repo init` from `cli/share/env.sh`. |
+
+On a machine, `EZC_HOME` is ezc's folder and `EZC_STORE` the store's root when it is not `$EZC_HOME/store`.
+
 ## Conventions
 
 - **Commands reach the outside world only through `System`.** Packages under `cli/internal/` other than `cli` never call `os.Getenv`, `os.UserHomeDir` or `os.Exit`.

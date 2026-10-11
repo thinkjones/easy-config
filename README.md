@@ -12,6 +12,16 @@ go install github.com/thinkjones/easy-config/cli/cmd/ezc@latest
 
 Part 1 of 7 is built; encrypted files arrive in part 2.
 
+## Quick start
+
+```sh
+ezc repo init                      # creates .ezc/ in this folder
+$EDITOR .ezc/manifest.yaml         # declare what the repo needs under `required`
+$EDITOR .ezc/env.local.yaml        # give it values: NAME: value
+ezc env                            # check the environment against the manifest
+ezc run -- <command>               # run a command with it
+```
+
 ## Commands
 
 | Command | What it does |
@@ -23,6 +33,7 @@ Part 1 of 7 is built; encrypted files arrive in part 2.
 | `ezc run [ENV] -- <command> [args…]` | Run a command with the environment added to its own. |
 | `ezc list [ENV] [-g]` | List the names an environment holds, with each one's type and the file that supplies it, and the manifest's names that have no value. Never prints a value. `-g` lists the store alone. |
 | `ezc get NAME [ENV] [--reveal]` | Print one value on stdout. A `secret` needs `--reveal`; a name is treated as a secret when the repo's or the store's manifest declares it one. |
+| `ezc repo init` | Create `.ezc/` in the working directory with `manifest.yaml`, `env.local.yaml` and the `env.sh` shim. Existing files are kept; an `env.sh` from an older shim is updated. Prints how to load the environment. |
 | `ezc manifest validate [-m FILE]` | Check that the manifest is well formed; prints the path and counts of required and optional variables. |
 | `ezc manifest schema [-o FILE]` | Print the manifest's JSON Schema, or write it to FILE. |
 | `ezc codegen python [-m FILE] [-o FILE]` | Validate the manifest, then generate a pydantic config module. An invalid manifest generates nothing. |
@@ -32,5 +43,37 @@ Part 1 of 7 is built; encrypted files arrive in part 2.
 The environment is named by the argument, else `EZC_ENV`, else `APP_ENV`; with none of them, `local` applies when it exists. There are three ways in:
 
 - mise: in `mise.toml`, `[env]` then `_.source = ".ezc/env.sh"`. `ezc repo init` writes that file.
-- direnv: `eval "$(ezc env export)"` in `.envrc`.
+- direnv: `source_env .ezc/env.sh` in `.envrc`.
 - neither: `ezc run -- <command>` runs one command with the variables and leaves the shell alone.
+
+The shim never fails the shell, so a broken config does not make `cd` unusable. `ezc env` is the check that fails; make tasks depend on it.
+
+## Files
+
+A repo's `.ezc/` folder and the global store use the same layout. Only `manifest.yaml` is required.
+
+| File | What it holds |
+| --- | --- |
+| `manifest.yaml` | Every value declared: type, description, required or optional. |
+| `common.yaml` | Plaintext values for all environments. |
+| `env.<name>.yaml` | Plaintext values for one environment. |
+| `env.sh` | The shim mise or direnv sources. Written by `ezc repo init`; do not edit. |
+
+Encrypted `common.enc.yaml` and `env.<name>.enc.yaml` files, for secrets, arrive in part 2; today an existing one is an error. Everything is YAML read as raw text, so no type is inferred: `08540` stays `08540`.
+
+## Resolution
+
+Later wins:
+
+```
+store  common.yaml → env.<name>.yaml
+repo   common.yaml → env.<name>.yaml
+```
+
+`<name>` is the command's argument, else `$EZC_ENV`, else `$APP_ENV`, else `local`. With no name given and no `env.local.yaml`, only the `common.yaml` files load, and `ezc` says so on stderr. A missing store is not an error: the repo's files compose alone.
+
+- Within a file, order is semantic.
+- A value may reference `$NAME` or `${NAME}` for a name already resolved, earlier in the same file or in an earlier file. `$$` is a literal `$`.
+- A leading `~`, `$HOME` or `${HOME}` is expanded at load.
+- There are no defaults: a missing value fails the check.
+- Shell export single-quotes every value and never emits `EZC_ENV` or `APP_ENV`.

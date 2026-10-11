@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
+	"github.com/thinkjones/easy-config/cli/share"
 )
 
 // fake is a System over temp directories. home is $HOME, ezcHome is $EZC_HOME, wd is the working directory.
@@ -840,5 +842,95 @@ func TestGetNeedsAName(t *testing.T) {
 	var u *UsageError
 	if !errors.As(err, &u) {
 		t.Fatalf("want UsageError, got %v", err)
+	}
+}
+
+func TestRepoInit(t *testing.T) {
+	f := newFake(t)
+	if err := f.run("repo", "init"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"manifest.yaml", "env.local.yaml", "env.sh"} {
+		if _, err := os.Stat(filepath.Join(f.wd, ".ezc", name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := f.out.String()
+	if !strings.HasPrefix(got, "created .ezc/manifest.yaml\ncreated .ezc/env.local.yaml\ncreated .ezc/env.sh\n") || !strings.Contains(got, `_.source = ".ezc/env.sh"`) {
+		t.Fatalf("got %q", got)
+	}
+	if err := f.run("manifest", "validate"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.run("env"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepoInitKeepsExistingFiles(t *testing.T) {
+	f := newFake(t)
+	manifestPath := filepath.Join(f.wd, ".ezc", "manifest.yaml")
+	const content = "schemaVersion: v1\nrequired: {}\n# mine\n"
+	write(t, manifestPath, content)
+	if err := f.run("repo", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.out.String(), "kept .ezc/manifest.yaml\n") {
+		t.Fatalf("got %q", f.out.String())
+	}
+	if b, _ := os.ReadFile(manifestPath); string(b) != content {
+		t.Fatalf("manifest changed: %q", b)
+	}
+	f.out.Reset()
+	if err := f.run("repo", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(f.out.String(), "kept .ezc/"); got != 3 {
+		t.Fatalf("want three kept, got %q", f.out.String())
+	}
+}
+
+func TestRepoInitUpdatesAnOldShim(t *testing.T) {
+	f := newFake(t)
+	shim := filepath.Join(f.wd, ".ezc", "env.sh")
+	write(t, shim, "# ezc-shim: 0\necho old\n")
+	if err := f.run("repo", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.out.String(), "updated .ezc/env.sh\n") {
+		t.Fatalf("got %q", f.out.String())
+	}
+	if b, _ := os.ReadFile(shim); string(b) != share.EnvSh {
+		t.Fatalf("shim not rewritten: %q", b)
+	}
+}
+
+func TestRepoInitInsideAnotherRepo(t *testing.T) {
+	f := newFake(t)
+	write(t, filepath.Join(f.wd, ".ezc", "manifest.yaml"), "schemaVersion: v1\nrequired: {}\n")
+	f.wd = filepath.Join(f.wd, "sub")
+	if err := os.MkdirAll(f.wd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.run("repo", "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.wd, ".ezc", "manifest.yaml")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestShimVersionMatchesFile(t *testing.T) {
+	if !strings.HasPrefix(share.EnvSh, fmt.Sprintf("# ezc-shim: %d\n", share.ShimVersion)) {
+		t.Fatalf("shim starts %q", share.EnvSh[:20])
+	}
+}
+
+func TestRepoNeedsAVerb(t *testing.T) {
+	f := newFake(t)
+	err := f.run("repo")
+	var u *UsageError
+	if !errors.As(err, &u) || !strings.Contains(err.Error(), "say init") {
+		t.Fatalf("got %v", err)
 	}
 }

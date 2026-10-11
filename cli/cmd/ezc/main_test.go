@@ -106,3 +106,46 @@ func TestEnvAndRunEndToEnd(t *testing.T) {
 		t.Fatalf("run printf: exit %d stdout %q stderr %q", code, out, errOut)
 	}
 }
+
+func TestShimLoadsTheEnvironment(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	dir := t.TempDir()
+	env := []string{"HOME=" + t.TempDir(), "EZC_HOME=" + t.TempDir(), "PATH=" + filepath.Dir(binary) + string(os.PathListSeparator) + os.Getenv("PATH")}
+	run := func(name string, args ...string) (string, int) {
+		cmd := exec.Command(name, args...)
+		cmd.Dir = dir
+		cmd.Env = env
+		out, err := cmd.Output()
+		code := 0
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			code = exit.ExitCode()
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		return string(out), code
+	}
+	if _, code := run(binary, "repo", "init"); code != 0 {
+		t.Fatalf("repo init: exit %d", code)
+	}
+	local := filepath.Join(dir, ".ezc", "env.local.yaml")
+	f, err := os.OpenFile(local, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString("GREETING: hello\n")
+	f.Close()
+
+	if out, code := run(sh, "-c", `. .ezc/env.sh; printf %s "$GREETING"`); out != "hello" || code != 0 {
+		t.Fatalf("shim: exit %d stdout %q", code, out)
+	}
+	if err := os.WriteFile(local, []byte("GREETING: $NOPE\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := run(sh, "-c", `. .ezc/env.sh; echo ok`); out != "ok\n" || code != 0 {
+		t.Fatalf("broken config: exit %d stdout %q", code, out)
+	}
+}
