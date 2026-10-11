@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -66,15 +67,28 @@ func TestRejectedShapes(t *testing.T) {
 	cases := []struct{ name, content, want string }{
 		{"nested", "A: {b: 1}\n", `"A" is a nested block`},
 		{"list", "A: [1, 2]\n", `"A" is a list`},
-		{"alias", "A: &x v\nB: *x\n", `"B" is an anchor reference`},
+		{"alias", "&x A: v\nB: *x\n", `"B" is an anchor reference`},
+		{"anchor", "PW: &hunter2 x\n", `: "PW" has an anchor; write the value out`},
+		{"anchor alone", "PW: &hunter2\n", `: "PW" has an anchor; write the value out`},
+		{"custom tag", "PW: !hunter2bang rest\n", `: "PW" has a YAML tag; quote the value if it starts with !`},
+		{"custom tag alone", "PW: !hunter2only\n", `: "PW" has a YAML tag; quote the value if it starts with !`},
+		{"core tag", "PW: !!str hunter2\n", `: "PW" has a YAML tag; quote the value if it starts with !`},
+		{"bare tag", "A: 1\nPW: ! hunter2\n", `: "PW" has a YAML tag; quote the value if it starts with !`},
+		{"duplicate key", "A: hunter2\nB: x\nA: 2\n", `: "A" is defined twice`},
+		{"second document", "A: 1\n---\nB: hunter2\n", ": has more than one YAML document; a values file is a single mapping"},
+		{"second document, malformed", "A: 1\n---\nB: [hunter2\n", ": has more than one YAML document; a values file is a single mapping"},
 		{"null", "A:\n", `"A" has no value`},
 		{"tilde", "A: ~\n", `"A" has no value`},
 		{"not a mapping", "- a\n", "expected a flat mapping of NAME: value"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := loadErr(t, "common.yaml", c.content, ""); !strings.Contains(got, c.want) {
+			got := loadErr(t, "common.yaml", c.content, "")
+			if !strings.Contains(got, c.want) {
 				t.Errorf("got %q, want it to contain %q", got, c.want)
+			}
+			if strings.Contains(got, "hunter2") {
+				t.Errorf("value leaked: %q", got)
 			}
 		})
 	}
@@ -151,5 +165,14 @@ func TestInvalidYAML(t *testing.T) {
 		if got := invalidYAML("f.yaml", c.err).Error(); got != c.want {
 			t.Errorf("got %q, want %q", got, c.want)
 		}
+	}
+}
+
+// What the rejections above must not catch: a quoted or block value may start with ! or &.
+func TestSpecialCharactersStillLoadVerbatim(t *testing.T) {
+	pairs := mustLoad(t, "common.yaml", "---\nA: \"!quoted\"\nB: 08540\nC: yes\nD: '&literal'\nE: a!b&c\nF: |\n  !block\nÉ: \"!x\"\n", "")
+	want := []backend.Pair{{Name: "A", Value: "!quoted"}, {Name: "B", Value: "08540"}, {Name: "C", Value: "yes"}, {Name: "D", Value: "&literal"}, {Name: "E", Value: "a!b&c"}, {Name: "F", Value: "!block\n"}, {Name: "É", Value: "!x"}}
+	if !slices.Equal(pairs, want) {
+		t.Errorf("got %q, want %q", pairs, want)
 	}
 }

@@ -1,7 +1,10 @@
 package resolve
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"sort"
@@ -212,38 +215,75 @@ func unknownRefError(ref, name, path string, resolved map[string]string) error {
 // value that lands in the environment is the value on the page, whether or not
 // anyone remembered to quote it: PORT: 8080 and PORT: "8080" both yield exactly
 // "8080", and ZIP: 08540 keeps its zero.
+//
+// YAML that would change or drop a value without saying so is an error: an
+// anchor or a tag on a value, a key defined twice, a second document.
 func loadYAML(path string) ([]backend.Pair, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	dec := yaml.NewDecoder(bytes.NewReader(b))
 	var doc yaml.Node
-	if err := yaml.Unmarshal(b, &doc); err != nil {
+	if err := dec.Decode(&doc); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, nil // empty file, or comments only
+		}
 		return nil, invalidYAML(path, err)
 	}
-	var out []backend.Pair
-	if doc.Kind == 0 {
-		return out, nil // empty file, or comments only
+	// Anything after the first document, well formed or not, would be ignored.
+	if err := dec.Decode(new(yaml.Node)); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("%s: has more than one YAML document; a values file is a single mapping", path)
 	}
 	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("%s: expected a flat mapping of NAME: value", path)
 	}
+	var out []backend.Pair
+	seen := map[string]bool{}
 	root := doc.Content[0]
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		k, v := root.Content[i], root.Content[i+1]
 		switch {
+		case seen[k.Value]:
+			return nil, fmt.Errorf("%s: %q is defined twice", path, k.Value)
 		case v.Kind == yaml.MappingNode:
 			return nil, fmt.Errorf("%s: %q is a nested block; these files are flat key/value only, because they become environment variables", path, k.Value)
 		case v.Kind == yaml.SequenceNode:
 			return nil, fmt.Errorf("%s: %q is a list; these files are flat key/value only", path, k.Value)
 		case v.Kind == yaml.AliasNode:
 			return nil, fmt.Errorf("%s: %q is an anchor reference; write the value out, these files are read by more than one language", path, k.Value)
+		// An anchor or a tag is YAML syntax, so the parser takes it out of the
+		// value: a password written &abc def would load as "def".
+		case v.Anchor != "":
+			return nil, fmt.Errorf("%s: %q has an anchor; write the value out", path, k.Value)
+		case hasTag(v, b):
+			return nil, fmt.Errorf("%s: %q has a YAML tag; quote the value if it starts with !", path, k.Value)
 		case v.Tag == "!!null":
 			return nil, fmt.Errorf("%s: %q has no value. Write %s: \"\" if you mean the empty string; there are no defaults here, so a blank is always a mistake", path, k.Value, k.Value)
 		}
+		seen[k.Value] = true
 		out = append(out, backend.Pair{Name: k.Value, Value: v.Value})
 	}
 	return out, nil
+}
+
+// hasTag reports whether the scalar v was written with a tag (!x, !!str, or a
+// bare !). yaml.v3 gives every scalar an implicit tag, so Tag says nothing;
+// Style does, except for a bare !, which leaves no trace in the node. A plain
+// scalar cannot begin with !, so one whose source text does had that tag.
+func hasTag(v *yaml.Node, src []byte) bool {
+	if v.Style&yaml.TaggedStyle != 0 {
+		return true
+	}
+	if v.Style != 0 {
+		return false // quoted or block: the ! is the value's own
+	}
+	lines := strings.Split(string(src), "\n")
+	if v.Line < 1 || v.Line > len(lines) {
+		return false
+	}
+	line := []rune(lines[v.Line-1])
+	return v.Column >= 1 && v.Column <= len(line) && line[v.Column-1] == '!'
 }
 
 var yamlLine = regexp.MustCompile(`line (\d+):`)
