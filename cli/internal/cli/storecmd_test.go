@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -376,13 +375,16 @@ func TestPullReplacedUnreadableFile(t *testing.T) {
 	// A file ezc has no command for: not an environment's, or not in the store's .ezc.
 	x.commit(x.store, "notes.enc.yaml", "A: FAKE[eA==]\n")
 	x.commit(x.other, "notes.enc.yaml", "B: FAKE[eA==]\n")
+	x.commit(x.store, "../common.enc.yaml", "A: FAKE[eA==]\n")
+	x.commit(x.other, "../common.enc.yaml", "B: FAKE[eA==]\n")
 	x.push(x.other)
 
 	out, errOut, err := storeCmdRun(f, "pull")
 	wantExit(t, err, 1)
 	want := "! env.prod.enc.yaml was changed here and on the remote. The remote's version was kept; its local changes must be set again.\n" +
-		"! notes.enc.yaml was changed here and on the remote. The remote's version was kept; its local changes must be set again.\n"
-	if out != "pulled 2 commits from origin\n" || errOut != want {
+		"! notes.enc.yaml was changed here and on the remote. The remote's version was kept; its local changes must be set again.\n" +
+		"! common.enc.yaml was changed here and on the remote. The remote's version was kept; its local changes must be set again.\n"
+	if out != "pulled 3 commits from origin\n" || errOut != want {
 		t.Fatalf("stdout %q, stderr\n%s\nwant\n%s", out, errOut, want)
 	}
 }
@@ -497,9 +499,40 @@ func TestStoreCommandsPrintNoIndicator(t *testing.T) {
 	x.theirs(1)
 	for _, verb := range []string{"status", "pull", "push"} {
 		_, errOut, err := storeCmdRun(f, verb)
-		var exit *ExitError
-		if errOut != "" || errors.As(err, &exit) {
+		if errOut != "" || err != nil {
 			t.Errorf("%s: stderr %q, %v", verb, errOut, err)
 		}
+	}
+}
+
+// A push the remote refuses after a good fetch says why in git's words, without what the remote's URL carries after its path.
+func TestPushFailureHoldsNoToken(t *testing.T) {
+	const token = "QSECRET-marker"
+	f := newFake(t)
+	x := storeWriteFix{localStore(t, f)}
+	// A folder whose name ends like a query, so that the URL with a token in it is one git can reach.
+	x.bare = filepath.Join(t.TempDir(), "remote.git")
+	dir := x.bare + "?token=" + token
+	if _, stderr, err := x.g.Run(proc.Command{Name: "git", Args: []string{"init", "--bare", "--initial-branch=main", "--", dir}}); err != nil {
+		t.Fatalf("%v\n%s", err, stderr)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "hooks", "pre-receive"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := x.g.SetRemote(x.store, "file://"+dir); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, err := storeCmdRun(f, "push")
+	want := "the push to origin failed: failed to push some refs to 'file://" + x.bare + "'."
+	if err == nil || err.Error() != want || out != "" || errOut != "" {
+		t.Fatalf("got %v\nwant %s\nstdout %q, stderr %q", err, want, out, errOut)
+	}
+	storeWriteExitsOne(t, err)
+	if len(fetches(f)) != 1 {
+		t.Fatalf("fetches %v", fetches(f))
+	}
+	out, _, err = storeCmdRun(f, "status")
+	if err != nil || strings.Contains(out, token) || !strings.Contains(out, "remote    file://"+x.bare+"\n") {
+		t.Fatalf("status: %v\n%s", err, out)
 	}
 }

@@ -615,3 +615,21 @@ func TestErrorsHoldNoFileContent(t *testing.T) {
 		t.Fatalf("Push: %v", err)
 	}
 }
+
+func TestReasonKeepsNoCredentialOfAURL(t *testing.T) {
+	for stderr, want := range map[string]string{
+		"fatal: unable to access 'https://sam:t0ken@host.example/c.git/': The requested URL returned error: 403":           "unable to access 'https://host.example/c.git/': The requested URL returned error: 403",
+		"fatal: unable to access 'https://host.example/c.git?token=QSECRET/': Failed to connect":                           "unable to access 'https://host.example/c.git': Failed to connect",
+		"fatal: unable to access 'https://sam:t0ken@host.example:8443/c.git?token=QSECRET#frag/': Failed to connect":       "unable to access 'https://host.example:8443/c.git': Failed to connect",
+		"remote: denied\nerror: failed to push some refs to 'https://t0ken@host.example/c.git?token=QSECRET'":              "failed to push some refs to 'https://host.example/c.git'",
+		"fatal: Could not read from ssh://git:t0ken@host.example:22/thinkjones/c.git and http://u:p@other.example?k=v now": "Could not read from ssh://host.example:22/thinkjones/c.git and http://other.example now",
+		"warning: redirecting to https://sam:t0ken@host.example/c.git?token=QSECRET":                                       "warning: redirecting to https://host.example/c.git",
+		"fatal: 'origin' does not appear to be a git repository":                                                           "'origin' does not appear to be a git repository",
+		"fatal: Could not read from remote repository git@github.com:thinkjones/config.git":                                "Could not read from remote repository git@github.com:thinkjones/config.git",
+		"": "",
+	} {
+		if got := reason([]byte(stderr)); got != want {
+			t.Errorf("%s:\n got %q\nwant %q", stderr, got, want)
+		}
+	}
+}

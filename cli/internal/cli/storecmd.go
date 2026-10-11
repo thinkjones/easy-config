@@ -26,7 +26,7 @@ const (
 	// storePullTimeout is how long `ezc store pull` waits for the remote's commits.
 	storePullTimeout = time.Minute
 
-	unreachable = "origin could not be reached."
+	originUnreachable = "origin could not be reached."
 )
 
 func newStoreCmd(sys System) *cobra.Command {
@@ -176,14 +176,18 @@ An encrypted file changed both here and on the remote cannot be merged: the remo
 			res, err := g.Pull(dir, storePullTimeout, resolve.IsEncrypted)
 			switch {
 			case errors.Is(err, gitstore.ErrConflict):
-				file := strings.TrimSuffix(err.Error(), ": "+gitstore.ErrConflict.Error())
+				file, ok := strings.CutSuffix(err.Error(), ": "+gitstore.ErrConflict.Error())
+				if !ok {
+					// More went wrong than the conflict; the error says what.
+					return err
+				}
 				return fmt.Errorf("%s was changed here and on the remote in the same place, so nothing was pulled. Resolve it in %s with git (git pull --rebase).", file, dir)
 			case errors.Is(err, gitstore.ErrDirty):
 				return storeDirty(dir, "pull")
 			case errors.Is(err, gitstore.ErrNoRemote):
 				return errors.New("the store has no remote, so there is nothing to pull. `ezc setup --new-github owner/repo` gives it one.")
 			case errors.Is(err, gitstore.ErrUnreachable):
-				return errors.New(unreachable)
+				return errors.New(originUnreachable)
 			case err != nil:
 				return err
 			}
@@ -207,7 +211,7 @@ An encrypted file changed both here and on the remote cannot be merged: the remo
 // replacedNote says that a file took the remote's version, and the commands that make its local changes again.
 // It reads the names of an encrypted file, which are not encrypted, and never a value.
 func replacedNote(r gitstore.Replaced) string {
-	file := strings.TrimPrefix(r.Path, ezcDir+"/")
+	file, inEzc := strings.CutPrefix(r.Path, ezcDir+"/")
 	shown := file
 	if q := strconv.Quote(file); q != `"`+file+`"` {
 		shown = q
@@ -220,6 +224,9 @@ func replacedNote(r gitstore.Replaced) string {
 	if name, ok := strings.CutPrefix(strings.TrimSuffix(file, ".enc.yaml"), "env."); ok && resolve.ValidEnvName(name) {
 		env = " --env " + name
 	} else if file != "common.enc.yaml" {
+		return note + unlisted
+	}
+	if !inEzc {
 		return note + unlisted
 	}
 	changed, err := valuefile.ChangedNames(r.Base, r.Local)
@@ -272,7 +279,7 @@ Refused while the store is behind its remote or has diverged from it (run ` + "`
 				return storeDirty(dir, "push")
 			}
 			if err := g.Fetch(dir, storeFetchTimeout); errors.Is(err, gitstore.ErrUnreachable) {
-				return errors.New(unreachable)
+				return errors.New(originUnreachable)
 			} else if err != nil {
 				return err
 			}
@@ -285,7 +292,7 @@ Refused while the store is behind its remote or has diverged from it (run ` + "`
 			}
 			pushed, err := g.Push(dir)
 			if err != nil {
-				return err
+				return fmt.Errorf("the push to origin failed: %s.", strings.TrimSuffix(strings.TrimPrefix(err.Error(), "git: "), "."))
 			}
 			if pushed == 0 {
 				fmt.Fprintln(sys.Stdout, "nothing to push")

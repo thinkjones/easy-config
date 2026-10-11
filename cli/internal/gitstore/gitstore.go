@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -107,21 +108,39 @@ func (g Git) run(dir string, timeout time.Duration, args ...string) ([]byte, err
 }
 
 // reason is the line of git's stderr that says what went wrong: its first
-// "fatal:" or "error:" line, else its first line.
+// "fatal:" or "error:" line, else its first line. A URL in it keeps only its
+// scheme, host and path: a remote's URL can carry a password or a token.
 func reason(stderr []byte) string {
 	first := ""
 	for _, line := range strings.Split(string(stderr), "\n") {
 		line = strings.TrimSpace(line)
 		for _, prefix := range []string{"fatal: ", "error: "} {
 			if rest, ok := strings.CutPrefix(line, prefix); ok {
-				return rest
+				return urlPattern.ReplaceAllStringFunc(rest, bareURL)
 			}
 		}
 		if first == "" {
 			first = line
 		}
 	}
-	return first
+	return urlPattern.ReplaceAllStringFunc(first, bareURL)
+}
+
+// urlPattern is a URL as git quotes one in a message, up to the space or quote that ends it.
+var urlPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s'"]+`)
+
+// bareURL is u without its user, password, query and fragment.
+func bareURL(u string) string {
+	scheme, rest, _ := strings.Cut(u, "://")
+	if i := strings.IndexAny(rest, "?#"); i >= 0 {
+		rest = rest[:i]
+	}
+	host, path, slash := strings.Cut(rest, "/")
+	host = host[strings.LastIndex(host, "@")+1:]
+	if slash {
+		host += "/" + path
+	}
+	return scheme + "://" + host
 }
 
 // IsRepo reports whether dir is the top of a work tree.
