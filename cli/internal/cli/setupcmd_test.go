@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	backupNotice = "  Back this file up now. Without it your secrets cannot be read, and it cannot be recovered.\n"
-	nextLine     = "\nNext: ezc set -g NAME --type secret --desc \"what it is\"\n"
+	setupBackupNotice = "  Back this file up now. Without it your secrets cannot be read, and it cannot be recovered.\n"
+	setupNextLine     = "\nNext: ezc set -g NAME --type secret --desc \"what it is\"\n"
 )
 
 // setupFake is a fresh machine with git on PATH and a login name. When its test ends, nothing it printed may hold the private key.
@@ -28,7 +28,7 @@ func setupFake(t *testing.T) *fake {
 	f := newFake(t)
 	f.paths = map[string]string{"git": "/usr/bin/git"}
 	f.env["USER"] = "Gene"
-	t.Cleanup(func() { noPrivateKey(t, f) })
+	t.Cleanup(func() { setupNoPrivateKey(t, f) })
 	return f
 }
 
@@ -38,8 +38,8 @@ func setupKeyFile(f *fake) string {
 func setupStore(f *fake) string  { return filepath.Join(f.env["EZC_HOME"], "store") }
 func setupConfig(f *fake) string { return filepath.Join(f.env["EZC_HOME"], "config.toml") }
 
-// noPrivateKey fails when stdout or stderr holds a line of the key file that is not a comment.
-func noPrivateKey(t *testing.T, f *fake) {
+// setupNoPrivateKey fails when stdout or stderr holds a line of the key file that is not a comment.
+func setupNoPrivateKey(t *testing.T, f *fake) {
 	t.Helper()
 	data, err := os.ReadFile(setupKeyFile(f))
 	if err != nil {
@@ -55,16 +55,16 @@ func noPrivateKey(t *testing.T, f *fake) {
 	}
 }
 
-// freshOutput is the report of setup on a machine with nothing, making a local store.
-func freshOutput(f *fake) string {
+// setupFreshOutput is the report of setup on a machine with nothing, making a local store.
+func setupFreshOutput(f *fake) string {
 	return "✓ git\n✓ fake\n" +
-		"+ created your key: ~/.config/sops/age/keys.txt\n" + backupNotice +
+		"+ created your key: ~/.config/sops/age/keys.txt\n" + setupBackupNotice +
 		"+ created the store: " + setupStore(f) + "\n" +
-		"+ wrote " + setupConfig(f) + "\n" + nextLine
+		"+ wrote " + setupConfig(f) + "\n" + setupNextLine
 }
 
-// publicKey is the public half of the machine's key.
-func publicKey(t *testing.T, f *fake) string {
+// setupPublicKey is the public half of the machine's key.
+func setupPublicKey(t *testing.T, f *fake) string {
 	t.Helper()
 	public, err := f.backend.PublicKey(setupKeyFile(f))
 	if err != nil {
@@ -73,8 +73,8 @@ func publicKey(t *testing.T, f *fake) string {
 	return public
 }
 
-// storeGitOut runs git in the store and returns its trimmed stdout.
-func storeGitOut(t *testing.T, f *fake, args ...string) string {
+// setupGitOut runs git in the store and returns its trimmed stdout.
+func setupGitOut(t *testing.T, f *fake, args ...string) string {
 	t.Helper()
 	out, stderr, err := f.runGit(proc.Command{Dir: setupStore(f), Name: "git", Args: args})
 	if err != nil {
@@ -83,8 +83,8 @@ func storeGitOut(t *testing.T, f *fake, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// filesOf is every file under the dirs, and the files named, by path.
-func filesOf(t *testing.T, paths ...string) map[string]string {
+// setupSnapshot is every file under the dirs, and the files named, by path.
+func setupSnapshot(t *testing.T, paths ...string) map[string]string {
 	t.Helper()
 	files := map[string]string{}
 	for _, root := range paths {
@@ -103,9 +103,9 @@ func filesOf(t *testing.T, paths ...string) map[string]string {
 	return files
 }
 
-// fakeGh answers `gh repo create` by pushing the store to a new bare repo, and `gh repo clone` by cloning from.
+// setupFakeGh answers `gh repo create` by pushing the store to a new bare repo, and `gh repo clone` by cloning from.
 // It returns the bare repo `create` pushes to.
-func fakeGh(t *testing.T, f *fake, from string) string {
+func setupFakeGh(t *testing.T, f *fake, from string) string {
 	t.Helper()
 	f.paths["gh"] = "/usr/bin/gh"
 	bare := gittest.Bare(t)
@@ -129,8 +129,8 @@ func fakeGh(t *testing.T, f *fake, from string) string {
 	return bare
 }
 
-// storeRemote is a bare repo holding a store whose registry names key as gene; it returns the bare repo.
-func storeRemote(t *testing.T, key string) string {
+// setupRemote is a bare repo holding a store whose registry names key as gene; it returns the bare repo.
+func setupRemote(t *testing.T, key string) string {
 	t.Helper()
 	g := gitstore.Git{Run: gittest.WithIdentity(t)}
 	bare, work := gittest.Bare(t), filepath.Join(t.TempDir(), "work")
@@ -157,8 +157,8 @@ func storeRemote(t *testing.T, key string) string {
 	return bare
 }
 
-// ownKey writes a key file before setup runs and returns its bytes and its public half.
-func ownKey(t *testing.T, f *fake) (content, public string) {
+// setupOwnKey writes a key file before setup runs and returns its bytes and its public half.
+func setupOwnKey(t *testing.T, f *fake) (content, public string) {
 	t.Helper()
 	public, private, err := f.backend.NewKey()
 	if err != nil {
@@ -174,8 +174,8 @@ func ownKey(t *testing.T, f *fake) (content, public string) {
 	return content, public
 }
 
-// nothingMade fails when setup left a key, a store or a config.
-func nothingMade(t *testing.T, f *fake) {
+// setupNothingMade fails when setup left a key, a store or a config.
+func setupNothingMade(t *testing.T, f *fake) {
 	t.Helper()
 	for _, path := range []string{setupKeyFile(f), setupStore(f), setupConfig(f)} {
 		if _, err := os.Lstat(path); err == nil {
@@ -189,8 +189,8 @@ func TestSetupNewLocal(t *testing.T) {
 	if err := f.run("setup", "--new-local", "--name", "gene", "--yes"); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.out.String(); got != freshOutput(f) {
-		t.Fatalf("stdout:\n%s\nwant:\n%s", got, freshOutput(f))
+	if got := f.out.String(); got != setupFreshOutput(f) {
+		t.Fatalf("stdout:\n%s\nwant:\n%s", got, setupFreshOutput(f))
 	}
 	if f.errOut.Len() != 0 {
 		t.Fatalf("stderr: %s", f.errOut.String())
@@ -223,8 +223,8 @@ func TestSetupAgainChangesNothing(t *testing.T) {
 	if err := f.run(args...); err != nil {
 		t.Fatal(err)
 	}
-	before := filesOf(t, f.env["EZC_HOME"], setupKeyFile(f))
-	commit := storeGitOut(t, f, "rev-parse", "HEAD")
+	before := setupSnapshot(t, f.env["EZC_HOME"], setupKeyFile(f))
+	commit := setupGitOut(t, f, "rev-parse", "HEAD")
 
 	for _, again := range [][]string{args, {"setup"}} {
 		f.out.Reset()
@@ -235,10 +235,10 @@ func TestSetupAgainChangesNothing(t *testing.T) {
 		if got := f.out.String(); got != want {
 			t.Fatalf("%v: stdout:\n%s\nwant:\n%s", again, got, want)
 		}
-		if after := filesOf(t, f.env["EZC_HOME"], setupKeyFile(f)); !reflect.DeepEqual(after, before) {
+		if after := setupSnapshot(t, f.env["EZC_HOME"], setupKeyFile(f)); !reflect.DeepEqual(after, before) {
 			t.Fatalf("%v: files changed", again)
 		}
-		if got := storeGitOut(t, f, "rev-parse", "HEAD"); got != commit {
+		if got := setupGitOut(t, f, "rev-parse", "HEAD"); got != commit {
 			t.Fatalf("%v: a new commit", again)
 		}
 	}
@@ -246,7 +246,7 @@ func TestSetupAgainChangesNothing(t *testing.T) {
 
 func TestSetupReusesKey(t *testing.T) {
 	f := setupFake(t)
-	content, public := ownKey(t, f)
+	content, public := setupOwnKey(t, f)
 	if err := f.run("setup", "--new-local", "--name", "gene", "--yes"); err != nil {
 		t.Fatal(err)
 	}
@@ -291,12 +291,12 @@ func TestSetupNoHome(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "HOME") {
 		t.Fatalf("err %v", err)
 	}
-	nothingMade(t, f)
+	setupNothingMade(t, f)
 }
 
 func TestSetupNewGithub(t *testing.T) {
 	f := setupFake(t)
-	bare := fakeGh(t, f, "")
+	bare := setupFakeGh(t, f, "")
 	if err := f.run("setup", "--new-github", "acme/config", "--name", "gene", "--yes"); err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func TestSetupNewGithub(t *testing.T) {
 	if len(f.execs) != 1 || f.execs[0].Name != "gh" || !reflect.DeepEqual(f.execs[0].Args, want) {
 		t.Fatalf("ran %+v", f.execs)
 	}
-	remote := storeGitOut(t, f, "remote", "get-url", "origin")
+	remote := setupGitOut(t, f, "remote", "get-url", "origin")
 	c, _, err := config.Load(setupConfig(f))
 	if err != nil || remote != bare || c.Store.Remote != remote {
 		t.Fatalf("remote %q, config %q, %v", remote, c.Store.Remote, err)
@@ -330,7 +330,7 @@ func TestSetupNewGithubWithoutGh(t *testing.T) {
 	if err == nil || err.Error() != "gh is not installed; it is needed to create a GitHub repo. https://cli.github.com" {
 		t.Fatalf("err %v", err)
 	}
-	nothingMade(t, f)
+	setupNothingMade(t, f)
 }
 
 func TestSetupPublishesExistingLocalStore(t *testing.T) {
@@ -338,8 +338,8 @@ func TestSetupPublishesExistingLocalStore(t *testing.T) {
 	if err := f.run("setup", "--new-local", "--name", "gene", "--yes"); err != nil {
 		t.Fatal(err)
 	}
-	commit := storeGitOut(t, f, "rev-parse", "HEAD")
-	bare := fakeGh(t, f, "")
+	commit := setupGitOut(t, f, "rev-parse", "HEAD")
+	bare := setupFakeGh(t, f, "")
 	f.out.Reset()
 	if err := f.run("setup", "--new-github", "o/r", "--yes"); err != nil {
 		t.Fatal(err)
@@ -347,10 +347,10 @@ func TestSetupPublishesExistingLocalStore(t *testing.T) {
 	if len(f.execs) != 1 || f.execs[0].Args[2] != "o/r" {
 		t.Fatalf("ran %+v", f.execs)
 	}
-	if got := storeGitOut(t, f, "rev-parse", "HEAD"); got != commit {
+	if got := setupGitOut(t, f, "rev-parse", "HEAD"); got != commit {
 		t.Fatal("a second store was made")
 	}
-	want := "✓ git\n✓ fake\n✓ your key: ~/.config/sops/age/keys.txt\n✓ the store: " + setupStore(f) + "\n+ published the store: o/r\n+ wrote " + setupConfig(f) + "\n" + nextLine
+	want := "✓ git\n✓ fake\n✓ your key: ~/.config/sops/age/keys.txt\n✓ the store: " + setupStore(f) + "\n+ published the store: o/r\n+ wrote " + setupConfig(f) + "\n" + setupNextLine
 	if f.out.String() != want {
 		t.Fatalf("stdout:\n%s\nwant:\n%s", f.out.String(), want)
 	}
@@ -362,13 +362,13 @@ func TestSetupPublishesExistingLocalStore(t *testing.T) {
 func TestSetupClone(t *testing.T) {
 	t.Run("a recipient", func(t *testing.T) {
 		f := setupFake(t)
-		_, public := ownKey(t, f)
-		bare := storeRemote(t, public)
+		_, public := setupOwnKey(t, f)
+		bare := setupRemote(t, public)
 		args := []string{"setup", "--store", bare, "--name", "gene", "--yes"}
 		if err := f.run(args...); err != nil {
 			t.Fatal(err)
 		}
-		want := "✓ git\n✓ fake\n✓ your key: ~/.config/sops/age/keys.txt\n+ cloned the store: " + setupStore(f) + "\n+ wrote " + setupConfig(f) + "\n" + nextLine
+		want := "✓ git\n✓ fake\n✓ your key: ~/.config/sops/age/keys.txt\n+ cloned the store: " + setupStore(f) + "\n+ wrote " + setupConfig(f) + "\n" + setupNextLine
 		if f.out.String() != want {
 			t.Fatalf("stdout:\n%s\nwant:\n%s", f.out.String(), want)
 		}
@@ -383,18 +383,18 @@ func TestSetupClone(t *testing.T) {
 	})
 	t.Run("not a recipient", func(t *testing.T) {
 		f := setupFake(t)
-		bare := storeRemote(t, "fake1someoneelse")
+		bare := setupRemote(t, "fake1someoneelse")
 		if err := f.run("setup", "--store", bare, "--name", "gene", "--yes"); err != nil {
 			t.Fatal(err)
 		}
-		want := "\n! Your key cannot read this store's secrets yet. Give this public key to someone who has access:\n" + publicKey(t, f) + "\n"
+		want := "\n! Your key cannot read this store's secrets yet. Give this public key to someone who has access:\n" + setupPublicKey(t, f) + "\n"
 		if !strings.HasSuffix(f.out.String(), want) || strings.Contains(f.out.String(), "Next:") {
 			t.Fatalf("stdout:\n%s", f.out.String())
 		}
 	})
 	t.Run("a relative path", func(t *testing.T) {
 		f := setupFake(t)
-		bare := storeRemote(t, "fake1someoneelse")
+		bare := setupRemote(t, "fake1someoneelse")
 		f.wd = filepath.Dir(bare)
 		if err := f.run("setup", "--store", "./"+filepath.Base(bare), "--name", "gene", "--yes"); err != nil {
 			t.Fatal(err)
@@ -407,8 +407,8 @@ func TestSetupClone(t *testing.T) {
 
 func TestSetupCloneOwnerRepo(t *testing.T) {
 	f := setupFake(t)
-	_, public := ownKey(t, f)
-	fakeGh(t, f, storeRemote(t, public))
+	_, public := setupOwnKey(t, f)
+	setupFakeGh(t, f, setupRemote(t, public))
 	if err := f.run("setup", "--store", "acme/config", "--name", "gene", "--yes"); err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +416,7 @@ func TestSetupCloneOwnerRepo(t *testing.T) {
 	if len(f.execs) != 1 || f.execs[0].Name != "gh" || !reflect.DeepEqual(f.execs[0].Args, want) {
 		t.Fatalf("ran %+v", f.execs)
 	}
-	if !strings.HasSuffix(f.out.String(), "+ wrote "+setupConfig(f)+"\n"+nextLine) {
+	if !strings.HasSuffix(f.out.String(), "+ wrote "+setupConfig(f)+"\n"+setupNextLine) {
 		t.Fatalf("stdout:\n%s", f.out.String())
 	}
 
@@ -425,7 +425,7 @@ func TestSetupCloneOwnerRepo(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "gh is not installed") {
 		t.Fatalf("without gh: %v", err)
 	}
-	nothingMade(t, g)
+	setupNothingMade(t, g)
 }
 
 func TestSetupCloneNotAStore(t *testing.T) {
@@ -444,18 +444,18 @@ func TestSetupCloneNotAStore(t *testing.T) {
 
 func TestSetupDifferentStoreRefused(t *testing.T) {
 	f := setupFake(t)
-	bare := storeRemote(t, "fake1someoneelse")
+	bare := setupRemote(t, "fake1someoneelse")
 	if err := f.run("setup", "--store", bare, "--name", "gene", "--yes"); err != nil {
 		t.Fatal(err)
 	}
-	before := filesOf(t, f.env["EZC_HOME"], setupKeyFile(f))
-	other := storeRemote(t, "fake1someoneelse")
+	before := setupSnapshot(t, f.env["EZC_HOME"], setupKeyFile(f))
+	other := setupRemote(t, "fake1someoneelse")
 	err := f.run("setup", "--store", other, "--name", "gene", "--yes")
 	want := "a store is already set up at " + setupStore(f) + " (remote " + bare + "). Move it away to set up another."
 	if err == nil || err.Error() != want {
 		t.Fatalf("err %v\nwant %s", err, want)
 	}
-	if after := filesOf(t, f.env["EZC_HOME"], setupKeyFile(f)); !reflect.DeepEqual(after, before) {
+	if after := setupSnapshot(t, f.env["EZC_HOME"], setupKeyFile(f)); !reflect.DeepEqual(after, before) {
 		t.Fatal("files changed")
 	}
 }
@@ -498,7 +498,7 @@ func TestSetupRefusalHidesCredentials(t *testing.T) {
 func TestSetupNoChoiceNoTerminal(t *testing.T) {
 	f := setupFake(t)
 	wantUsage(t, f.run("setup", "--name", "gene"), "ezc setup: say --new-local, --new-github owner/repo or --store <repo>.")
-	nothingMade(t, f)
+	setupNothingMade(t, f)
 	if f.out.Len() != 0 {
 		t.Fatalf("stdout: %s", f.out.String())
 	}
@@ -510,25 +510,25 @@ func TestSetupTwoChoices(t *testing.T) {
 	wantUsage(t, f.run("setup", "--new-github", "o/r", "--store", "/srv/store.git"), "only one of")
 	wantUsage(t, f.run("setup", "--new-github", "not a repo"), "owner/repo")
 	wantUsage(t, f.run("setup", "--new-local", "extra"), "unexpected argument")
-	nothingMade(t, f)
+	setupNothingMade(t, f)
 }
 
 func TestSetupWithEzcStore(t *testing.T) {
 	f := setupFake(t)
 	f.env["EZC_STORE"] = t.TempDir()
 	wantUsage(t, f.run("setup", "--new-local", "--name", "gene", "--yes"), "ezc setup: unset EZC_STORE. Setup manages the store in "+setupStore(f)+".")
-	nothingMade(t, f)
+	setupNothingMade(t, f)
 }
 
 func TestSetupBadName(t *testing.T) {
 	f := setupFake(t)
 	wantUsage(t, f.run("setup", "--new-local", "--name", "Gene Jones", "--yes"), "lower case letters, digits and -")
-	nothingMade(t, f)
+	setupNothingMade(t, f)
 
 	// A login name that cannot be a recipient's name is the same error, with nothing made.
 	f.env["USER"] = "gene.jones"
 	wantUsage(t, f.run("setup", "--new-local", "--yes"), "--name")
-	nothingMade(t, f)
+	setupNothingMade(t, f)
 }
 
 func TestSetupNameFromUser(t *testing.T) {
@@ -548,8 +548,8 @@ func TestSetupPrompts(t *testing.T) {
 	if err := f.run("setup"); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.out.String(); got != freshOutput(f) {
-		t.Fatalf("stdout:\n%s\nwant:\n%s", got, freshOutput(f))
+	if got := f.out.String(); got != setupFreshOutput(f) {
+		t.Fatalf("stdout:\n%s\nwant:\n%s", got, setupFreshOutput(f))
 	}
 	for _, prompt := range []string{"Your name in this store [gene]: ", "Store: [1] new, on this machine  [2] new, on GitHub  [3] an existing one: "} {
 		if !strings.Contains(f.errOut.String(), prompt) {
@@ -563,7 +563,7 @@ func TestSetupPrompts(t *testing.T) {
 
 func TestSetupPromptsForARepo(t *testing.T) {
 	f := setupFake(t)
-	bare := fakeGh(t, f, "")
+	bare := setupFakeGh(t, f, "")
 	f.tty = true
 	f.stdin = "ada\n2\nacme/config\n\n"
 	if err := f.run("setup"); err != nil {
@@ -574,7 +574,7 @@ func TestSetupPromptsForARepo(t *testing.T) {
 	}
 
 	g := setupFake(t)
-	from := storeRemote(t, "fake1someoneelse")
+	from := setupRemote(t, "fake1someoneelse")
 	g.tty = true
 	g.stdin = "\n3\n" + from + "\n\n"
 	if err := g.run("setup"); err != nil {
@@ -590,7 +590,7 @@ func TestSetupPromptsForARepo(t *testing.T) {
 	if err := h.run("setup"); err == nil {
 		t.Fatal("no error for choice 7")
 	}
-	nothingMade(t, h)
+	setupNothingMade(t, h)
 }
 
 func TestSetupToolMissing(t *testing.T) {
@@ -605,7 +605,7 @@ func TestSetupToolMissing(t *testing.T) {
 		if f.out.String() != "✓ git\n" || len(f.execs) != 0 {
 			t.Fatalf("stdout %q, ran %v", f.out.String(), f.execs)
 		}
-		nothingMade(t, f)
+		setupNothingMade(t, f)
 	})
 	brew := func(f *fake) {
 		f.paths["brew"] = "/opt/homebrew/bin/brew"
@@ -624,7 +624,7 @@ func TestSetupToolMissing(t *testing.T) {
 		if len(f.execs) != 1 || f.execs[0].Name != "brew" || !reflect.DeepEqual(f.execs[0].Args, []string{"install", "fake-tool"}) {
 			t.Fatalf("ran %+v", f.execs)
 		}
-		if want := strings.Replace(freshOutput(f), "✓ fake", "+ fake", 1); f.out.String() != want {
+		if want := strings.Replace(setupFreshOutput(f), "✓ fake", "+ fake", 1); f.out.String() != want {
 			t.Fatalf("stdout:\n%s", f.out.String())
 		}
 	})
@@ -651,7 +651,7 @@ func TestSetupToolMissing(t *testing.T) {
 		if len(f.execs) != 0 {
 			t.Fatalf("ran %+v", f.execs)
 		}
-		nothingMade(t, f)
+		setupNothingMade(t, f)
 	})
 	t.Run("brew does not help", func(t *testing.T) {
 		f := setupFake(t)
@@ -659,7 +659,7 @@ func TestSetupToolMissing(t *testing.T) {
 		f.paths["brew"] = "/opt/homebrew/bin/brew"
 		f.execFn = func(proc.Command) ([]byte, []byte, error) { return nil, nil, nil }
 		wantExit(t, f.run("setup", "--new-local", "--name", "gene", "--yes"), 1)
-		nothingMade(t, f)
+		setupNothingMade(t, f)
 	})
 }
 
@@ -673,7 +673,7 @@ func TestSetupNoGit(t *testing.T) {
 	if f.out.Len() != 0 || len(f.gits) != 0 {
 		t.Fatalf("stdout %q, git ran %d times", f.out.String(), len(f.gits))
 	}
-	nothingMade(t, f)
+	setupNothingMade(t, f)
 }
 
 func TestSetupNeverPrintsThePrivateKey(t *testing.T) {
