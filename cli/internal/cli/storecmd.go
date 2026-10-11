@@ -114,9 +114,12 @@ With --due, print instead the secrets that need a new value because somebody who
 				}
 				return nil
 			}
-			owing := func(n int) {
-				if n > 0 {
-					fmt.Fprintf(sys.Stdout, "rotation due: %d secrets (ezc store status --due lists them)\n", n)
+			owing := func() {
+				switch d, err := recipients.LoadDue(p.StoreEzc()); {
+				case err != nil:
+					fmt.Fprintf(sys.Stdout, "rotation due: cannot read %s\n", recipients.DueFile)
+				case len(d) > 0:
+					fmt.Fprintf(sys.Stdout, "rotation due: %s (ezc store status --due lists them)\n", count(len(d), "secret"))
 				}
 			}
 			row := func(label, value string) { fmt.Fprintf(sys.Stdout, "%-10s%s\n", label, value) }
@@ -124,7 +127,7 @@ With --due, print instead the secrets that need a new value because somebody who
 			if !s.Git {
 				row("store", p.Store())
 				row("state", "not a git repo, so it is not synced")
-				owing(len(dueEntries(p.StoreEzc())))
+				owing()
 				return nil
 			}
 			if s.Err != nil {
@@ -166,7 +169,7 @@ With --due, print instead the secrets that need a new value because somebody who
 			row("state", state)
 			row("fetched", fetched)
 			row("requests", requests)
-			owing(s.Due)
+			owing()
 			return nil
 		},
 	}

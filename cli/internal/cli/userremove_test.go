@@ -249,3 +249,56 @@ func TestStoreStatusRotationDue(t *testing.T) {
 		t.Fatalf("--due: %v %q", err, out)
 	}
 }
+
+func TestSetLeavesNothingWhenTheEntryCannotBeCleared(t *testing.T) {
+	f := newFake(t)
+	x := removeDue(t, f)
+	due := x.file(recipients.DueFile)
+	if err := os.Chmod(due, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(due, 0o644) })
+	if f2, err := os.OpenFile(due, os.O_WRONLY, 0); err == nil {
+		f2.Close()
+		t.Skip("a read-only file is writable here")
+	}
+	head, before := x.git("rev-parse", "HEAD"), setupSnapshot(t, filepath.Join(x.store, ezcDir))
+	f.stdin = "fresh-value-1\n"
+	if err := f.run("set", "-g", "TOKEN", "--env", "prod"); err == nil {
+		t.Fatal("set succeeded")
+	}
+	x.wantClean()
+	if x.git("rev-parse", "HEAD") != head {
+		t.Fatal("a commit was made")
+	}
+	if after := setupSnapshot(t, filepath.Join(x.store, ezcDir)); !mapsEqual(before, after) {
+		t.Fatal("a file of the store changed")
+	}
+}
+
+func TestStoreStatusSaysWhenRotationDueCannotBeRead(t *testing.T) {
+	f := newFake(t)
+	x := removeStore(t, f)
+	write(t, x.file(recipients.DueFile), "{{ not yaml")
+	x.git("add", "-A")
+	x.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "broken")
+	x.push(x.store)
+	out, _, err := accessRun(f, "store", "status")
+	if err != nil || !strings.Contains(out, "rotation due: cannot read rotation-due.yaml\n") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
+func TestUserRemoveOneSecret(t *testing.T) {
+	f := newFake(t)
+	x := removeStore(t, f)
+	for _, file := range accessEncFiles[1:] {
+		if err := os.Remove(x.file(file)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	x.git("add", "-A")
+	x.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "one file")
+	x.push(x.store)
+	accessWant(t, f, "✓ remove sam\n✓ pushed to "+x.bare+"\n1 secret was readable by sam and needs a new value:\n  common.enc.yaml/TOKEN\nGive each a new value with ezc set -g NAME.\n", "user", "remove", "sam")
+}

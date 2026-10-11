@@ -99,6 +99,26 @@ func (s scope) clearRotation(due recipients.Due, file, name string) error {
 	return due.Save(s.dir)
 }
 
+// putBack restores the files of dir (base names) that differ from before to their bytes then.
+func putBack(dir string, names []string, before []fileState) error {
+	left := changedFiles(dir, names, before)
+	for i, name := range names {
+		if !slices.Contains(left, name) {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		if !before[i].found {
+			os.Remove(path)
+		} else {
+			os.WriteFile(path, before[i].data, 0o644)
+		}
+	}
+	if left = changedFiles(dir, names, before); len(left) > 0 {
+		return errors.New("not put back")
+	}
+	return nil
+}
+
 // valuesBase is "common", or "env.<env>" when an environment is named.
 func valuesBase(env string) string {
 	if env == "" {
@@ -342,6 +362,10 @@ A name the scope's manifest does not declare is declared by this command, as req
 			}
 			if cleared {
 				if err := sc.clearRotation(due, file, name); err != nil {
+					// The value was written and cannot be committed without its entry cleared: put every file back.
+					if rerr := putBack(sc.dir, watched, before); rerr != nil {
+						return fmt.Errorf("%w\n       %s could not be put back as it was; look at %s", err, sc.dir, strings.Join(changedFiles(sc.dir, watched, before), ", "))
+					}
 					return undeclare(err)
 				}
 			}

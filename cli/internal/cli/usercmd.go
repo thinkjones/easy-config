@@ -180,7 +180,11 @@ Refused for a bot (` + "`ezc bot remove`" + `), for the last recipient, for a us
 			}
 			// A commit that was not pushed is made all the same.
 			if len(list) > 0 {
-				fmt.Fprintf(sys.Stdout, "%d secrets were readable by %s and need new values:\n", len(list), name)
+				was, need := "were", "need new values"
+				if len(list) == 1 {
+					was, need = "was", "needs a new value"
+				}
+				fmt.Fprintf(sys.Stdout, "%s %s readable by %s and %s:\n", count(len(list), "secret"), was, name, need)
 				for _, entry := range list {
 					fmt.Fprintf(sys.Stdout, "  %s\n", entry)
 				}
