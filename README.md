@@ -22,7 +22,7 @@ Part 1 of 7 is built; encrypted files arrive in part 2.
 | `ezc env export [ENV] [--format shell\|dotenv\|json]` | Print the environment's variables on stdout. `shell` is for `eval`; `dotenv` is for dotenv loaders and must not be sourced by a shell. Outside a repo it exports the store alone. |
 | `ezc run [ENV] -- <command> [args…]` | Run a command with the environment added to its own. |
 | `ezc list [ENV] [-g]` | List the names an environment holds, with each one's type and the file that supplies it, and the manifest's names that have no value. Never prints a value. `-g` lists the store alone. |
-| `ezc get NAME [ENV] [--reveal]` | Print one value on stdout. A `secret` needs `--reveal`. |
+| `ezc get NAME [ENV] [--reveal]` | Print one value on stdout. A `secret` needs `--reveal`; a name is treated as a secret when the repo's or the store's manifest declares it one. |
 | `ezc manifest validate [-m FILE]` | Check that the manifest is well formed; prints the path and counts of required and optional variables. |
 | `ezc manifest schema [-o FILE]` | Print the manifest's JSON Schema, or write it to FILE. |
 | `ezc codegen python [-m FILE] [-o FILE]` | Validate the manifest, then generate a pydantic config module. An invalid manifest generates nothing. |

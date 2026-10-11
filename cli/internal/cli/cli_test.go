@@ -633,13 +633,50 @@ func TestList(t *testing.T) {
 
 func TestListShowsNoValues(t *testing.T) {
 	f := newFake(t)
-	store(t, f, map[string]string{"common.yaml": "NAME: topsecretvalue\n"})
-	repo(t, f, map[string]string{"manifest.yaml": m1, "env.local.yaml": "SIZE: 3\n"})
+	// No store manifest and a store with no files beyond one value; the repo overrides NAME, TOKEN is a secret, and there is no env.local so warn fires.
+	repo(t, f, map[string]string{
+		"manifest.yaml": "schemaVersion: v1\nrequired:\n  NAME: {type: str, desc: n}\n  TOKEN: {type: secret, desc: t}\n",
+		"common.yaml":   "NAME: losingvalue1\nTOKEN: secretvalue2\n",
+		"env.dev.yaml":  "NAME: winningvalue3\n",
+	})
+	if err := f.run("list", "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.errOut.String(), "no store") {
+		t.Fatalf("warn did not fire: %q", f.errOut.String())
+	}
+	for _, v := range []string{"losingvalue1", "secretvalue2", "winningvalue3"} {
+		if strings.Contains(f.out.String()+f.errOut.String(), v) {
+			t.Fatalf("%s leaked: %q %q", v, f.out.String(), f.errOut.String())
+		}
+	}
+}
+
+func TestListInvalidManifest(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{"manifest.yaml": "schemaVersion: v1\nrequired:\n  A: {type: nope, desc: d}\n", "env.local.yaml": ""})
+	if err := f.run("list"); err == nil {
+		t.Fatal("want an error for an invalid repo manifest")
+	}
+	f = newFake(t)
+	store(t, f, map[string]string{"manifest.yaml": "schemaVersion: v1\nrequired:\n  A: {type: nope, desc: d}\n", "common.yaml": "A: b\n"})
+	if err := f.run("list", "-g"); err == nil {
+		t.Fatal("want an error for an invalid store manifest")
+	}
+}
+
+func TestListUnsetSorted(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{
+		"manifest.yaml":  "schemaVersion: v1\nrequired:\n  ZED: {type: str, desc: z}\noptional:\n  ALPHA: {type: int, desc: a}\n",
+		"env.local.yaml": "",
+	})
 	if err := f.run("list"); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(f.out.String()+f.errOut.String(), "topsecretvalue") {
-		t.Fatalf("a value leaked: %q %q", f.out.String(), f.errOut.String())
+	want := "APP_ENV  -  shell\nEZC_ENV  -  shell\n\nALPHA  int  (not set)\nZED    str  (not set)\n"
+	if got := f.out.String(); got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -739,6 +776,40 @@ func TestGetSecretDeclaredOnlyInStore(t *testing.T) {
 	err := f.run("get", "TOKEN")
 	if err == nil || !strings.Contains(err.Error(), "is a secret") {
 		t.Fatalf("got %v", err)
+	}
+	if f.out.Len() != 0 || strings.Contains(err.Error()+f.errOut.String(), "t0k") {
+		t.Fatalf("leak: %q %q %v", f.out.String(), f.errOut.String(), err)
+	}
+}
+
+func TestGetSecretInStoreStrInRepo(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"manifest.yaml": "schemaVersion: v1\nrequired:\n  TOKEN: {type: secret, desc: t}\n"})
+	repo(t, f, map[string]string{"manifest.yaml": "schemaVersion: v1\nrequired:\n  TOKEN: {type: str, desc: t}\n", "common.yaml": "TOKEN: t0k\n", "env.local.yaml": ""})
+	err := f.run("get", "TOKEN")
+	if err == nil || !strings.Contains(err.Error(), "is a secret") || f.out.Len() != 0 {
+		t.Fatalf("got %v, stdout %q", err, f.out.String())
+	}
+}
+
+func TestGetMultiLineValue(t *testing.T) {
+	f := newFake(t)
+	pem := "-----BEGIN KEY-----\nabc\n-----END KEY-----"
+	repo(t, f, map[string]string{"common.yaml": "KEY: |-\n  -----BEGIN KEY-----\n  abc\n  -----END KEY-----\n", "env.local.yaml": ""})
+	if err := f.run("get", "KEY"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.out.String(); got != pem+"\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestGetUnsetLeavesStdoutEmpty(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	err := f.run("get", "NOPE")
+	if err == nil || f.out.Len() != 0 || strings.Contains(err.Error()+f.errOut.String(), "3") {
+		t.Fatalf("got %v, stdout %q, stderr %q", err, f.out.String(), f.errOut.String())
 	}
 }
 

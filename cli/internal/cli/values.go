@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -15,9 +16,6 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/paths"
 	"github.com/thinkjones/easy-config/cli/internal/resolve"
 )
-
-// selectors are the variables ezc records for the environment it composed; list shows them last.
-var selectors = []string{"APP_ENV", "EZC_ENV"}
 
 // manifestIfPresent is the manifest at path; found is false when there is no such file. An invalid manifest is an error.
 func manifestIfPresent(path string) (m manifest.Manifest, found bool, err error) {
@@ -86,11 +84,11 @@ func typeOf(m manifest.Manifest, name string) string {
 func renderList(m manifest.Manifest, res resolve.Result) string {
 	var names []string
 	for _, n := range res.Names() {
-		if !slices.Contains(selectors, n) {
+		if !slices.Contains(resolve.SelectorVars, n) {
 			names = append(names, n)
 		}
 	}
-	for _, n := range selectors {
+	for _, n := range slices.Sorted(slices.Values(resolve.SelectorVars)) {
 		if _, ok := res.Env[n]; ok {
 			names = append(names, n)
 		}
@@ -161,7 +159,7 @@ func newGetCmd(sys System) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get NAME [ENV]",
 		Short: "print one variable's value; secrets need --reveal",
-		Long:  `Print NAME's value from ENV (else $EZC_ENV, $APP_ENV, then local) on stdout, and nothing else. In a repo it resolves the repo with the store; elsewhere the store alone. A secret, as typed by the repo's manifest or else the store's, is printed only with --reveal.`,
+		Long:  `Print NAME's value from ENV (else $EZC_ENV, $APP_ENV, then local) on stdout, and nothing else: the value verbatim followed by one newline, even when the value itself ends in one. In a repo it resolves the repo with the store; elsewhere the store alone. A secret, (declared secret by the repo's manifest or the store's) is printed only with --reveal.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if err := minArgs(1, "a variable name")(cmd, args); err != nil {
 				return err
@@ -200,14 +198,11 @@ func newGetCmd(sys System) *cobra.Command {
 				return fmt.Errorf("%s is not set in environment %s.", name, res.EnvLabel())
 			}
 			for _, m := range ms {
-				if v, ok := m.Lookup(name); ok {
-					if v.IsSecret() && !reveal {
-						return fmt.Errorf("%s is a secret — add --reveal to print it.", name)
-					}
-					break
+				if v, ok := m.Lookup(name); ok && v.IsSecret() && !reveal {
+					return fmt.Errorf("%s is a secret — add --reveal to print it.", name)
 				}
 			}
-			_, err = fmt.Fprintln(sys.Stdout, value)
+			_, err = io.WriteString(sys.Stdout, value+"\n")
 			return err
 		},
 	}
