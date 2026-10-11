@@ -94,7 +94,7 @@ creation_rules:
     age: age1...your public key...
 ```
 
-The key file is `~/.config/sops/age/keys.txt`, passed to `sops` as `SOPS_AGE_KEY_FILE`; when `SOPS_AGE_KEY` or `SOPS_AGE_KEY_FILE` is already set in the environment, that wins. Make a key with `mkdir -p ~/.config/sops/age && age-keygen -o ~/.config/sops/age/keys.txt`; its public key is printed, and goes after `age:` above. A policy whose `path_regex` matches no file name stores nothing, and `ezc set` says so.
+The key file is the `key_file` of `$EZC_HOME/config.toml` when that file names one, else `~/.config/sops/age/keys.txt`. It is passed to `sops` as `SOPS_AGE_KEY_FILE`; when `SOPS_AGE_KEY` or `SOPS_AGE_KEY_FILE` is already set in the environment, that wins. Make a key with `mkdir -p ~/.config/sops/age && age-keygen -o ~/.config/sops/age/keys.txt`; its public key is printed, and goes after `age:` above. A policy whose `path_regex` matches no file name stores nothing, and `ezc set` says so.
 
 The store is made by hand too, until `ezc setup` exists: create the folder `store/.ezc` in ezc's home (`$EZC_HOME` when set, else `~/Library/ezc` on macOS and `~/.local/share/ezc` on Linux; with no store, `ezc env` names the place it looked), then a `manifest.yaml` there holding `schemaVersion: v1`, and the same `.sops.yaml`. `ezc set -g` then declares and stores values in it.
 

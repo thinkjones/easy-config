@@ -29,8 +29,11 @@ type scope struct {
 func (s scope) manifest() string        { return filepath.Join(s.dir, manifestName) }
 func (s scope) show(file string) string { return s.layer + "/" + file }
 
-// scopeFor is the repo's .ezc folder, or with global the store's, which must exist.
+// scopeFor is the repo's .ezc folder, or with global the store's, which must exist. An invalid config.toml is an error.
 func scopeFor(sys System, global bool) (scope, error) {
+	if _, err := loadConfig(sys); err != nil {
+		return scope{}, err
+	}
 	if !global {
 		dir, err := requireRepoDir(sys)
 		return scope{"repo", dir}, err

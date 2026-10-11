@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
+	"github.com/thinkjones/easy-config/cli/internal/gitstore/gittest"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
 	"github.com/thinkjones/easy-config/cli/internal/proc"
 	"github.com/thinkjones/easy-config/cli/share"
@@ -35,6 +37,11 @@ type fake struct {
 	paths     map[string]string                          // what LookPath finds, by name
 	backend   *backend.Fake                              // the encryption backend; System.Backend
 	now       time.Time                                  // System.Now; the zero value means 2026-10-11T12:00:00Z
+	errTTY    bool                                       // StderrIsTerminal
+
+	t    *testing.T
+	gits []proc.Command // every git command Exec ran; they are not in execs
+	git  proc.Runner    // the real git, isolated; made on first use
 }
 
 func newFake(t *testing.T) *fake {
@@ -44,7 +51,20 @@ func newFake(t *testing.T) *fake {
 		wd:  t.TempDir(),
 
 		backend: &backend.Fake{},
+		t:       t,
 	}
+}
+
+// runGit runs the real git, cut off from the user's config. Without git it answers as a machine that has none.
+func (f *fake) runGit(c proc.Command) ([]byte, []byte, error) {
+	f.gits = append(f.gits, c)
+	if f.git == nil {
+		if _, err := exec.LookPath("git"); err != nil && os.Getenv("EZC_REQUIRE_GIT") != "1" {
+			return nil, nil, exec.ErrNotFound
+		}
+		f.git = gittest.Runner(f.t)
+	}
+	return f.git(c)
 }
 
 func (f *fake) sys() System {
@@ -70,6 +90,9 @@ func (f *fake) sys() System {
 		},
 		Version: "0.2.0",
 		Exec: func(c proc.Command) ([]byte, []byte, error) {
+			if c.Name == "git" {
+				return f.runGit(c)
+			}
 			f.execs = append(f.execs, c)
 			if f.execFn == nil {
 				return nil, nil, errors.New("no exec configured")
@@ -87,7 +110,7 @@ func (f *fake) sys() System {
 			return f.secret, f.secretErr
 		},
 		StdinIsTerminal:  func() bool { return f.tty },
-		StderrIsTerminal: func() bool { return false },
+		StderrIsTerminal: func() bool { return f.errTTY },
 		Now: func() time.Time {
 			if f.now.IsZero() {
 				return time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)

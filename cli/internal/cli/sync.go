@@ -1,0 +1,222 @@
+package cli
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/thinkjones/easy-config/cli/internal/config"
+	"github.com/thinkjones/easy-config/cli/internal/gitstore"
+	"github.com/thinkjones/easy-config/cli/internal/paths"
+)
+
+const (
+	// syncMaxAge is how long a fetch attempt stands before a command tries again.
+	syncMaxAge = 10 * time.Minute
+	// syncTimeout is how long a command waits for that fetch.
+	syncTimeout = 3 * time.Second
+
+	requestsDir = "requests"
+)
+
+// storeSync is what a command learns about the store before it uses it.
+type storeSync struct {
+	Git      bool // the store is a git repo
+	Status   gitstore.Status
+	Fetched  time.Time // the last fetch that worked; zero when never
+	Offline  bool      // a fetch was tried just now and failed
+	Requests []string  // names in the store's requests folder, sorted
+}
+
+// storeGit is git as this machine runs it.
+func storeGit(sys System) gitstore.Git {
+	return gitstore.Git{Run: sys.Exec, Environ: sys.Environ()}
+}
+
+// loadConfig is the machine's config; the zero Config when there is none.
+func loadConfig(sys System) (config.Config, error) {
+	p, err := paths.Resolve(sys.Getenv, sys.GOOS)
+	if err != nil {
+		return config.Config{}, err
+	}
+	c, _, err := config.Load(p.Config())
+	return c, err
+}
+
+// syncStore fetches when the store has a remote and the last attempt is at least maxAge old, then reads the status.
+// It never fails a command: any error leaves Git false or the status as last known.
+func syncStore(sys System, maxAge, timeout time.Duration) storeSync {
+	p, err := paths.Resolve(sys.Getenv, sys.GOOS)
+	if err != nil {
+		return storeSync{}
+	}
+	g, dir := storeGit(sys), p.Store()
+	if !g.IsRepo(dir) {
+		return storeSync{}
+	}
+	s := storeSync{Git: true}
+	state := readState(p.State())
+	s.Fetched = stateTime(state, "fetched")
+	if remote, err := g.Remote(dir); err == nil && remote != "" {
+		now := sys.Now()
+		// An attempt dated after now is a clock that moved; it says nothing.
+		if age := now.Sub(stateTime(state, "attempted")); age < 0 || age >= maxAge {
+			setStateTime(state, "attempted", now)
+			if err := g.Fetch(dir, timeout); err == nil {
+				s.Fetched = now
+				setStateTime(state, "fetched", now)
+			} else {
+				s.Offline = errors.Is(err, gitstore.ErrUnreachable)
+			}
+			writeState(p.State(), state)
+		}
+	}
+	s.Status, _ = g.Status(dir)
+	s.Requests = requests(p.StoreEzc())
+	return s
+}
+
+// requests are the names of the access requests in a store's .ezc folder: its requests/*.yaml, sorted.
+func requests(storeEzc string) []string {
+	entries, err := os.ReadDir(filepath.Join(storeEzc, requestsDir))
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range entries {
+		if name, ok := strings.CutSuffix(e.Name(), ".yaml"); ok && name != "" && !e.IsDir() {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+// readState is state.json as its keys; a missing or unreadable file is no keys.
+func readState(path string) map[string]json.RawMessage {
+	state := map[string]json.RawMessage{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return state
+	}
+	if err := json.Unmarshal(data, &state); err != nil || state == nil {
+		return map[string]json.RawMessage{}
+	}
+	return state
+}
+
+// stateTime is the time state holds under key; zero when it holds none.
+func stateTime(state map[string]json.RawMessage, key string) time.Time {
+	var text string
+	if json.Unmarshal(state[key], &text) != nil {
+		return time.Time{}
+	}
+	t, _ := time.Parse(time.RFC3339, text)
+	return t
+}
+
+func setStateTime(state map[string]json.RawMessage, key string, t time.Time) {
+	state[key], _ = json.Marshal(t.UTC().Format(time.RFC3339))
+}
+
+// writeState replaces state.json. A failure is not reported: the next command fetches again.
+func writeState(path string, state map[string]json.RawMessage) {
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil || os.MkdirAll(filepath.Dir(path), 0o755) != nil {
+		return
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return
+	}
+	_, werr := tmp.Write(append(data, '\n'))
+	if cerr := tmp.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Rename(tmp.Name(), path)
+	}
+	if werr != nil {
+		os.Remove(tmp.Name())
+	}
+}
+
+// indicate prints the one line to stderr when there is something to say.
+func indicate(sys System, s storeSync) {
+	if !s.Git {
+		return
+	}
+	const red, amber, reset = "\x1b[31m", "\x1b[33m", "\x1b[0m"
+	say := func(colour, line string) {
+		if sys.StderrIsTerminal() && sys.Getenv("NO_COLOR") == "" {
+			line = colour + line + reset
+		}
+		fmt.Fprintln(sys.Stderr, line)
+	}
+
+	line, colour := "", red
+	switch st := s.Status; st.State() {
+	case gitstore.Ahead:
+		line, colour = count(st.Ahead, "commit")+" ahead of origin — run ezc store push", amber
+	case gitstore.Behind:
+		line = count(st.Behind, "commit") + " behind origin — run ezc store pull"
+	case gitstore.Diverged:
+		line = fmt.Sprintf("diverged from origin (%d ahead, %d behind) — run ezc store pull", st.Ahead, st.Behind)
+	case gitstore.Uncommitted:
+		line = "uncommitted changes"
+		if p, err := paths.Resolve(sys.Getenv, sys.GOOS); err == nil {
+			line += " in " + p.Store()
+		}
+	}
+	if n := len(s.Requests); n > 0 {
+		pending := count(n, "access request") + " pending: " + strings.Join(s.Requests, ", ")
+		if line == "" {
+			line, colour = pending, amber
+		} else {
+			line += " · " + pending
+		}
+	}
+	if line != "" {
+		say(colour, "store: "+line)
+	}
+	if s.Offline {
+		checked := "never checked"
+		if !s.Fetched.IsZero() {
+			checked = "last checked " + ago(sys.Now().Sub(s.Fetched))
+		}
+		say(amber, "store: origin could not be reached; "+checked)
+	}
+}
+
+// count is "1 commit" or "2 commits".
+func count(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+// ago is how long ago d was, in the largest whole unit: just now, minutes, hours or days.
+func ago(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return count(int(d/time.Minute), "minute") + " ago"
+	case d < 24*time.Hour:
+		return count(int(d/time.Hour), "hour") + " ago"
+	}
+	return count(int(d/(24*time.Hour)), "day") + " ago"
+}
+
+// touchStore is syncStore with the 10 minute rule followed by indicate. Commands that read or write the store call it once.
+func touchStore(sys System) storeSync {
+	s := syncStore(sys, syncMaxAge, syncTimeout)
+	indicate(sys, s)
+	return s
+}
