@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -334,16 +335,18 @@ func Run(t *testing.T, newEnv func(t *testing.T) Env) {
 			t.Fatal(err)
 		}
 		dir := e.NoPolicyDir
+		before := dirNames(t, dir)
 		if err := e.Backend.WritePolicy(dir, []string{a}); err != nil {
 			t.Fatalf("WritePolicy: %v", err)
 		}
 		if ok, err := e.Backend.HasPolicy(dir); err != nil || !ok {
 			t.Fatalf("HasPolicy = %v, %v, want true", ok, err)
 		}
+		// The policy is whatever WritePolicy added to the folder: the contract does not know a backend's file names.
 		policy := func() []byte {
 			var found []byte
 			for _, n := range dirNames(t, dir) {
-				if strings.Contains(n, "policy") || strings.Contains(n, "sops") {
+				if !slices.Contains(before, n) {
 					data, err := os.ReadFile(filepath.Join(dir, n))
 					if err != nil {
 						t.Fatal(err)
