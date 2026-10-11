@@ -78,16 +78,57 @@ func envName(sys System, arg string) string {
 // storePaths is where ezc keeps things. The default store may be absent, but
 // a store named with EZC_STORE that does not exist is an error: it is a typo.
 func storePaths(sys System) (paths.Paths, error) {
-	p, err := paths.Resolve(sys.Getenv, sys.GOOS)
+	p, explicit, err := storePathsLoose(sys)
 	if err != nil {
 		return p, err
 	}
-	if sys.Getenv("EZC_STORE") != "" {
+	if explicit {
 		if _, err := os.Stat(p.Store()); errors.Is(err, fs.ErrNotExist) {
 			return p, fmt.Errorf("EZC_STORE is set to %s, which does not exist.", p.Store())
 		}
 	}
 	return p, nil
+}
+
+// storePathsLoose is storePaths without the check that an EZC_STORE exists, and whether EZC_STORE was set.
+// ezc doctor uses it, so that a typo is a finding in its report and not the end of it.
+func storePathsLoose(sys System) (p paths.Paths, explicit bool, err error) {
+	p, err = paths.Resolve(sys.Getenv, sys.GOOS)
+	return p, sys.Getenv("EZC_STORE") != "", err
+}
+
+// policyFiles are the names of the backend's policy file, which doctor recognises in a .ezc folder.
+func policyFiles(sys System) []string {
+	if sys.Backend != nil {
+		return []string{backend.FakePolicy}
+	}
+	return []string{sops.PolicyFile}
+}
+
+// keySource says where the default backend finds the key, for display, and whether a key is there: the key
+// in the environment, else the key file the environment names, else the default key file (shown with ~).
+// With a backend set (tests) there is no real key: the key is found unless the backend is a locked Fake.
+func keySource(sys System) (note string, found bool) {
+	if sys.Backend != nil {
+		locked := false
+		if f, ok := sys.Backend.(*backend.Fake); ok {
+			locked = f.Locked
+		}
+		return "test key", !locked
+	}
+	if sys.Getenv("SOPS_AGE_KEY") != "" {
+		return "SOPS_AGE_KEY", true
+	}
+	if file := sys.Getenv("SOPS_AGE_KEY_FILE"); file != "" {
+		_, err := os.Stat(file)
+		return file, err == nil
+	}
+	home := homeDir(sys)
+	if home == "" {
+		return sops.DefaultKeyFile("~"), false
+	}
+	_, err := os.Stat(sops.DefaultKeyFile(home))
+	return sops.DefaultKeyFile("~"), err == nil
 }
 
 // backendFor is sys.Backend, else the sops backend for this machine.

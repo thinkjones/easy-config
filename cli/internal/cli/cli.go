@@ -123,6 +123,7 @@ Config
 		newUnsetCmd(sys),
 		newEditCmd(sys),
 		newStoreCmd(sys),
+		newDoctorCmd(sys),
 		newRepoCmd(sys),
 	)
 	return root

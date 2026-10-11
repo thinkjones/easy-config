@@ -23,4 +23,6 @@ Guidance for Claude Code in this repository. [`AGENTS.md`](AGENTS.md) is the rou
 - **On Unix `ezc run` replaces itself with the command** (`syscall.Exec` in `cli/cmd/ezc/run_unix.go`), so nothing after `RunChild` runs there; `run_other.go` keeps a child process on other systems. The in-process tests use the fake `RunChild`; the real one is tested end to end in `cli/cmd/ezc`.
 - **A missing store is fine only at the default location.** A store that is not a folder or cannot be read is an error from `resolve.Load`; an `EZC_STORE` that does not exist is an error from `storePaths` in `cli/internal/cli/scope.go`.
 - **`codegen python` refuses a variable named after a Python keyword**; the manifest itself allows it.
+- **`doctor` and `storeaudit` print names, counts and paths only, never a value**, and `doctor` never names the encryption tool: the policy file names, the key's location and the backend's messages come in through `Options` from `scope.go` and the backend.
+- **`doctor` enforces `share.ShimVersion` against the repo's `.ezc/env.sh`.** Change the shim, its first line and `ShimVersion` together, or `ezc doctor` reports every repo as broken or healthy wrongly.
 - **`docs/superpowers/` is history.** Specs and plans describe what was intended at the time; don't edit them to match the code.

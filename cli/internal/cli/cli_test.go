@@ -1210,3 +1210,107 @@ func TestStoreNeedsAVerb(t *testing.T) {
 	f := newFake(t)
 	wantUsage(t, f.run("store"), "say audit")
 }
+
+func TestDoctor(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	if err := f.run("doctor"); err != nil {
+		t.Fatalf("%v\n%s", err, f.out.String())
+	}
+	for _, want := range []string{"machine\n", "store\n", "repo\n", "environment local"} {
+		if !strings.Contains(f.out.String(), want) {
+			t.Errorf("no %q in\n%s", want, f.out.String())
+		}
+	}
+}
+
+func TestDoctorExitsOneWhenBroken(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	f.backend.Missing = true
+	wantExit(t, f.run("doctor"), 1)
+	if !strings.Contains(f.out.String(), "✗ backend") {
+		t.Fatalf("got\n%s", f.out.String())
+	}
+}
+
+func TestDoctorOnly(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	if err := f.run("doctor", "--only", "repo"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(f.out.String(), "machine") || !strings.Contains(f.out.String(), "repo\n") {
+		t.Fatalf("got\n%s", f.out.String())
+	}
+	err := f.run("doctor", "--only", "nope")
+	wantUsage(t, err, "machine")
+	wantUsage(t, err, "store")
+	wantUsage(t, err, "repo")
+}
+
+func TestDoctorNamedEnvironment(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	if err := f.run("doctor", "prod"); err != nil {
+		t.Fatalf("%v\n%s", err, f.out.String())
+	}
+	if !strings.Contains(f.out.String(), "environment prod") {
+		t.Fatalf("got\n%s", f.out.String())
+	}
+}
+
+func TestDoctorOutsideARepo(t *testing.T) {
+	f := newFake(t)
+	if err := f.run("doctor"); err != nil {
+		t.Fatalf("%v\n%s", err, f.out.String())
+	}
+	if !strings.Contains(f.out.String(), "not in an ezc repo") {
+		t.Fatalf("got\n%s", f.out.String())
+	}
+}
+
+func TestDoctorMissingExplicitStoreIsReported(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	f.env["EZC_STORE"] = filepath.Join(f.env["EZC_HOME"], "typo")
+	wantExit(t, f.run("doctor"), 1)
+	if !strings.Contains(f.out.String(), "✗ location") {
+		t.Fatalf("got\n%s", f.out.String())
+	}
+}
+
+func TestDoctorNoKey(t *testing.T) {
+	f := newFake(t)
+	good(t, f)
+	f.backend.Locked = true
+	if err := f.run("doctor"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.out.String(), "! key") {
+		t.Fatalf("got\n%s", f.out.String())
+	}
+}
+
+func TestKeySource(t *testing.T) {
+	f := newFake(t)
+	sys := f.sys()
+	sys.Backend = nil // the default backend, whose key comes from the environment
+	check := func(wantNote string, wantFound bool) {
+		t.Helper()
+		note, found := keySource(sys)
+		if note != wantNote || found != wantFound {
+			t.Fatalf("got (%q, %v), want (%q, %v)", note, found, wantNote, wantFound)
+		}
+	}
+	check("~/.config/sops/age/keys.txt", false)
+	write(t, filepath.Join(f.env["HOME"], ".config", "sops", "age", "keys.txt"), "k")
+	check("~/.config/sops/age/keys.txt", true)
+	other := filepath.Join(t.TempDir(), "other.txt")
+	f.env["SOPS_AGE_KEY_FILE"] = other
+	check(other, false)
+	write(t, other, "k")
+	check(other, true)
+	f.env["SOPS_AGE_KEY"] = "AGE-SECRET-KEY-x"
+	check("SOPS_AGE_KEY", true)
+}
