@@ -197,7 +197,7 @@ func indicate(sys System, s storeSync) {
 	case gitstore.Diverged:
 		line = fmt.Sprintf("diverged from origin (%d ahead, %d behind) — run ezc store pull", st.Ahead, st.Behind)
 	case gitstore.Uncommitted:
-		line = "uncommitted changes in " + s.Dir
+		line = "uncommitted changes in " + s.Dir + alsoStands(st)
 	}
 	if n := len(s.Requests); n > 0 {
 		pending := count(n, "access request") + " pending: " + strings.Join(s.Requests, ", ")
@@ -217,6 +217,19 @@ func indicate(sys System, s storeSync) {
 		}
 		say(amber, "store: origin could not be reached; "+checked)
 	}
+}
+
+// alsoStands is what follows "uncommitted changes" when the store is also ahead, behind or diverged; "" when it is level.
+func alsoStands(st gitstore.Status) string {
+	switch {
+	case st.Ahead > 0 && st.Behind > 0:
+		return fmt.Sprintf("; diverged from origin (%d ahead, %d behind)", st.Ahead, st.Behind)
+	case st.Behind > 0:
+		return "; " + count(st.Behind, "commit") + " behind origin"
+	case st.Ahead > 0:
+		return "; " + count(st.Ahead, "commit") + " ahead of origin"
+	}
+	return ""
 }
 
 // count is "1 commit" or "2 commits".

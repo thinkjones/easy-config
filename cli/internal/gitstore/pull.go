@@ -22,6 +22,24 @@ type PullResult struct {
 	Replaced []Replaced
 }
 
+// ConflictError is a pull stopped by files changed here and on the remote in the same place. It is ErrConflict.
+type ConflictError struct {
+	Paths []string // relative to the store's root, as git names them
+}
+
+func (e *ConflictError) Error() string {
+	shown := make([]string, len(e.Paths))
+	for i, path := range e.Paths {
+		// A name that would not read as one name is quoted.
+		if shown[i] = path; strconv.Quote(path) != `"`+path+`"` || strings.Contains(path, ", ") {
+			shown[i] = strconv.Quote(path)
+		}
+	}
+	return strings.Join(shown, ", ") + ": " + ErrConflict.Error()
+}
+
+func (e *ConflictError) Is(target error) bool { return target == ErrConflict }
+
 var (
 	ErrConflict = errors.New("changed here and on the remote")
 	ErrDirty    = errors.New("uncommitted changes")
@@ -30,7 +48,7 @@ var (
 
 // Pull fetches, then fast-forwards, or rebases the local commits onto the remote's. During the rebase a
 // conflicted file for which keepRemote(path) is true takes the remote's version; any other conflict
-// aborts the rebase, leaves the store as it was, and returns an error wrapping ErrConflict that names the file.
+// aborts the rebase, leaves the store as it was, and returns a *ConflictError that lists the files.
 func (g Git) Pull(dir string, timeout time.Duration, keepRemote func(path string) bool) (PullResult, error) {
 	st, err := g.Status(dir)
 	switch {
@@ -104,13 +122,7 @@ func (g Git) rebase(dir, remote string, keepRemote func(path string) bool) ([]Re
 			return fail(err)
 		}
 		if other := slices.DeleteFunc(slices.Clone(paths), keepRemote); len(other) > 0 {
-			for i, path := range other {
-				// A name that would not read as one name is quoted.
-				if q := strconv.Quote(path); q != `"`+path+`"` || strings.Contains(path, ", ") {
-					other[i] = q
-				}
-			}
-			return fail(fmt.Errorf("%s: %w", strings.Join(other, ", "), ErrConflict))
+			return fail(&ConflictError{Paths: other})
 		}
 		for _, path := range paths {
 			if !slices.ContainsFunc(replaced, func(r Replaced) bool { return r.Path == path }) {

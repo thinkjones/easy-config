@@ -193,6 +193,46 @@ func TestSyncOffABranch(t *testing.T) {
 	}
 }
 
+// Uncommitted changes do not hide that the store is also behind, ahead or diverged.
+func TestSyncUncommittedAndTheCounts(t *testing.T) {
+	f := newFake(t)
+	x := remoteStore(t, f)
+	uncommitted := "store: uncommitted changes in " + x.store
+	write(t, filepath.Join(x.store, ezcDir, "env.new.yaml"), "A: b\n")
+	x.theirs(1)
+	if got, want := stderrOf(t, f, "list", "-g"), uncommitted+"; 1 commit behind origin\n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	x.commit(x.store, "env.mine.yaml", "A: b\n")
+	x.commit(x.store, "requests/sam.yaml", "name: sam\n")
+	if got, want := stderrOf(t, f, "list", "-g"), uncommitted+"; diverged from origin (2 ahead, 1 behind) · 1 access request pending: sam\n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+
+	f = newFake(t)
+	x = remoteStore(t, f)
+	write(t, filepath.Join(x.store, ezcDir, "env.new.yaml"), "A: b\n")
+	x.commit(x.store, "env.mine.yaml", "A: b\n")
+	x.commit(x.store, "env.more.yaml", "A: b\n")
+	if got, want := stderrOf(t, f, "list", "-g"), "store: uncommitted changes in "+x.store+"; 2 commits ahead of origin\n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// `ezc store audit` reads the store, so it looks at it first like every other reader.
+func TestStoreAuditPrintsTheLine(t *testing.T) {
+	f := newFake(t)
+	x := remoteStore(t, f)
+	x.commit(x.store, "manifest.yaml", auditManifest)
+	x.theirs(1)
+	if got, want := stderrOf(t, f, "store", "audit"), "store: diverged from origin (1 ahead, 1 behind) — run ezc store pull\n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if len(fetches(f)) != 1 {
+		t.Fatalf("fetches %v", fetches(f))
+	}
+}
+
 func TestSyncRequestsAppended(t *testing.T) {
 	f := newFake(t)
 	x := remoteStore(t, f)

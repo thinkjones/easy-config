@@ -117,7 +117,7 @@ func TestStatusStates(t *testing.T) {
 	storeCmdWant(t, f, storeCmdStatus(x.store, x.bare, "diverged from origin (2 ahead, 1 behind)", "just now", "none"), "status")
 
 	write(t, filepath.Join(x.store, ezcDir, "env.new.yaml"), "A: b\n")
-	storeCmdWant(t, f, storeCmdStatus(x.store, x.bare, "uncommitted changes", "just now", "none"), "status")
+	storeCmdWant(t, f, storeCmdStatus(x.store, x.bare, "uncommitted changes; diverged from origin (2 ahead, 1 behind)", "just now", "none"), "status")
 
 	f = newFake(t)
 	x = remoteStore(t, f)

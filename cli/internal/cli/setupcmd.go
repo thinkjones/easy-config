@@ -136,12 +136,17 @@ func runSetup(sys System, o setupFlags) error {
 			}
 			err = be.Check()
 		}
-		if err != nil {
-			fmt.Fprintln(sys.Stderr, err)
+		if errors.Is(err, backend.ErrNoTool) {
+			// One thing to do, said once: the backend's own text also sends the user elsewhere.
+			fmt.Fprintf(sys.Stderr, "✗ %s is not installed.\n", be.Name())
 			if hint := be.ToolHint(sys.GOOS); hint != "" {
 				fmt.Fprintln(sys.Stderr, hint)
 			}
+			fmt.Fprintln(sys.Stderr, "Then run ezc setup again.")
 			return &ExitError{1}
+		}
+		if err != nil {
+			return err
 		}
 		toolMark = "+"
 	}

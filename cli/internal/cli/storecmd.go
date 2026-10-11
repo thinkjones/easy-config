@@ -120,7 +120,7 @@ Exits 0 in every state it can read. A store that is not a git repo is not synced
 			case gitstore.Diverged:
 				state = fmt.Sprintf("diverged from origin (%d ahead, %d behind)", st.Ahead, st.Behind)
 			case gitstore.Uncommitted:
-				state = "uncommitted changes"
+				state = "uncommitted changes" + alsoStands(st)
 			}
 			fetched := "n/a"
 			if st.Remote != "" {
@@ -165,19 +165,11 @@ An encrypted file changed both here and on the remote cannot be merged: the remo
 			}
 			dir := p.Store()
 			res, err := g.Pull(dir, storePullTimeout, resolve.IsEncrypted)
+			// Only the conflict itself: when more went wrong, the error says what.
+			if conflict, ok := err.(*gitstore.ConflictError); ok {
+				return conflictRefusal(dir, conflict.Paths)
+			}
 			switch {
-			case errors.Is(err, gitstore.ErrConflict):
-				file, ok := strings.CutSuffix(err.Error(), ": "+gitstore.ErrConflict.Error())
-				if !ok {
-					// More went wrong than the conflict; the error says what.
-					return err
-				}
-				was, it := "was", "it"
-				if strings.Contains(file, ", ") {
-					// gitstore lists more than one file with commas.
-					was, it = "were", "them"
-				}
-				return fmt.Errorf("%s %s changed here and on the remote in the same place, so nothing was pulled. Resolve %s in %s with git (git pull --rebase).", file, was, it, dir)
 			case errors.Is(err, gitstore.ErrDirty):
 				return storeDirty(dir, "pull")
 			case errors.Is(err, gitstore.ErrNoRemote):
@@ -206,15 +198,32 @@ An encrypted file changed both here and on the remote cannot be merged: the remo
 	}
 }
 
+// conflictRefusal says which files stopped a pull, and where to resolve them.
+func conflictRefusal(dir string, paths []string) error {
+	shown := make([]string, len(paths))
+	for i, path := range paths {
+		shown[i] = quoted(path)
+	}
+	was, it := "was", "it"
+	if len(paths) > 1 {
+		was, it = "were", "them"
+	}
+	return fmt.Errorf("%s %s changed here and on the remote in the same place, so nothing was pulled. Resolve %s in %s with git (git pull --rebase).", strings.Join(shown, ", "), was, it, dir)
+}
+
+// quoted is a file's name for a message: quoted when it would not read as one name on one line.
+func quoted(name string) string {
+	if q := strconv.Quote(name); q != `"`+name+`"` || strings.Contains(name, ", ") {
+		return q
+	}
+	return name
+}
+
 // replacedNote says that a file took the remote's version, and the commands that make its local changes again.
 // It reads the names of an encrypted file, which are not encrypted, and never a value.
 func replacedNote(r gitstore.Replaced) string {
 	file, inEzc := strings.CutPrefix(r.Path, ezcDir+"/")
-	shown := file
-	if q := strconv.Quote(file); q != `"`+file+`"` {
-		shown = q
-	}
-	note := fmt.Sprintf("! %s was changed here and on the remote. The remote's version was kept; ", shown)
+	note := fmt.Sprintf("! %s was changed here and on the remote. The remote's version was kept; ", quoted(file))
 	const unlisted = "its local changes must be set again.\n"
 
 	// The flag that names the file to `ezc set -g`; a file that is not the store's own has none.
@@ -317,6 +326,7 @@ Prints names, files and what to do, never a value. Exits 1 when there is anythin
 			if err != nil {
 				return err
 			}
+			touchStore(sys)
 			res, err := storeaudit.Audit(sc.dir, backendFor(sys))
 			if err != nil {
 				return err

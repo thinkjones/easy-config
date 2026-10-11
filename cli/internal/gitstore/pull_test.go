@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -250,6 +251,10 @@ func TestPullConflictAborts(t *testing.T) {
 	if !strings.Contains(err.Error(), "common.yaml") {
 		t.Fatalf("the error does not name the file: %v", err)
 	}
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) || !slices.Equal(conflict.Paths, []string{"common.yaml"}) {
+		t.Fatalf("the error does not list the file: %#v", err)
+	}
 	if strings.Contains(err.Error(), "value") {
 		t.Fatalf("the error carries content: %v", err)
 	}
@@ -489,5 +494,10 @@ func TestPullConflictQuotesAnOddName(t *testing.T) {
 	_, err := g.Pull(mine, time.Minute, encrypted)
 	if !errors.Is(err, ErrConflict) || strings.Contains(err.Error(), "\n") || !strings.Contains(err.Error(), `"a, b\nc.yaml"`) {
 		t.Fatalf("Pull: %q, want ErrConflict with the name quoted on one line", err)
+	}
+	// The list holds the name as it is; only the text quotes it.
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) || !slices.Equal(conflict.Paths, []string{name}) {
+		t.Fatalf("Paths: %#v", err)
 	}
 }

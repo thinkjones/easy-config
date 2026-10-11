@@ -472,10 +472,15 @@ func TestHandEditElsewhereDoesNotBlock(t *testing.T) {
 	write(t, x.file("env.prod.yaml"), "SIZE: 5\n")
 	write(t, x.file("env.loose.yaml"), "A: b\n")
 	storeWriteEditor(f, "NAME: edited\n")
-	uncommitted := "store: uncommitted changes in " + x.store + "\n"
-	for _, args := range [][]string{{"set", "-g", "NAME", "v2"}, {"edit", "-g"}, {"unset", "-g", "NAME"}} {
-		if got := stderrOf(t, f, args...); got != uncommitted {
-			t.Errorf("%v: stderr %q", args, got)
+	// Each write leaves the store one more commit ahead, which the line says as well.
+	uncommitted := "store: uncommitted changes in " + x.store
+	for i, args := range [][]string{{"set", "-g", "NAME", "v2"}, {"edit", "-g"}, {"unset", "-g", "NAME"}} {
+		want := uncommitted + "\n"
+		if i > 0 {
+			want = uncommitted + "; " + count(i, "commit") + " ahead of origin\n"
+		}
+		if got := stderrOf(t, f, args...); got != want {
+			t.Errorf("%v: stderr %q, want %q", args, got, want)
 		}
 	}
 	if got := x.subjects(); !slices.Equal(got, []string{"set NAME (common.yaml)", "edit common.yaml", "unset NAME (common.yaml)"}) {

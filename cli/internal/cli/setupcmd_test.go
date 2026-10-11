@@ -629,7 +629,7 @@ func TestSetupToolMissing(t *testing.T) {
 		f.backend.Missing = true
 		err := f.run("setup", "--new-local", "--name", "gene", "--yes")
 		wantExit(t, err, 1)
-		if want := "fake: the encryption tool is not installed\nInstall the fake tool.\n"; f.errOut.String() != want {
+		if want := "✗ fake is not installed.\nInstall the fake tool.\nThen run ezc setup again.\n"; f.errOut.String() != want {
 			t.Fatalf("stderr %q", f.errOut.String())
 		}
 		if f.out.String() != "✓ git\n" || len(f.execs) != 0 {
