@@ -81,12 +81,14 @@ func Run(t *testing.T, newEnv func(t *testing.T) Env) {
 	})
 
 	run("FileIsNotPlaintext", func(t *testing.T, e Env, file string) {
-		set(t, e.Backend, file, "TOKEN", "t0k")
+		// A short value turns up in ciphertext by chance; this one cannot, with a character base64 has none of.
+		const value = "plain!value"
+		set(t, e.Backend, file, "TOKEN", value)
 		data, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if bytes.Contains(data, []byte("t0k")) {
+		if bytes.Contains(data, []byte(value)) {
 			t.Error("the file holds the value in plaintext")
 		}
 		if !bytes.Contains(data, []byte("TOKEN")) {
