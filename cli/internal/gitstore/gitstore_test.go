@@ -180,7 +180,8 @@ func TestCommitOnlyNamedPaths(t *testing.T) {
 	if !status(t, g, dir).Dirty {
 		t.Fatal("the files left alone should still be uncommitted")
 	}
-	if got := raw(t, g, dir, "status", "--porcelain"); got != "M other.yaml\nM  staged.yaml" && got != " M other.yaml\nM  staged.yaml" {
+	// raw trims the space that leads the first line.
+	if got := raw(t, g, dir, "status", "--porcelain"); got != "M other.yaml\nM  staged.yaml" {
 		t.Fatalf("left behind:\n%s", got)
 	}
 }
@@ -223,13 +224,15 @@ func TestCommitPathIsLiteral(t *testing.T) {
 	g := newGit(t)
 	dir := newStore(t, g)
 	write(t, dir, "a.yaml", "A: 1\n")
-	write(t, dir, "*.yaml", "B: 1\n")
-	done, err := g.Commit(dir, "star", author, "*.yaml")
-	if err != nil || !done {
-		t.Fatalf("Commit: done=%v err=%v", done, err)
-	}
-	if got := raw(t, g, dir, "show", "--name-only", "--format=", "HEAD"); got != "*.yaml" {
-		t.Fatalf("the commit holds %q", got)
+	for _, name := range []string{"*.yaml", "-n", "--amend", "a b.yaml"} {
+		write(t, dir, name, "B: 1\n")
+		done, err := g.Commit(dir, "--amend", author, name)
+		if err != nil || !done {
+			t.Fatalf("Commit %q: done=%v err=%v", name, done, err)
+		}
+		if got := raw(t, g, dir, "show", "--name-only", "--format=%s", "HEAD"); got != "--amend\n\n"+name {
+			t.Fatalf("the commit for %q holds %q", name, got)
+		}
 	}
 }
 
@@ -377,7 +380,7 @@ func TestFetchUnreachable(t *testing.T) {
 
 	// The remote's side of the fetch hangs.
 	slow := clone(t, g, published(t, g))
-	raw(t, g, slow, "config", "remote.origin.uploadpack", "sleep 20;")
+	raw(t, g, slow, "config", "remote.origin.uploadpack", "sleep 5;")
 	start := time.Now()
 	err := g.Fetch(slow, 300*time.Millisecond)
 	if !errors.Is(err, ErrUnreachable) {
@@ -450,7 +453,7 @@ func TestNotInstalled(t *testing.T) {
 func TestEnvironment(t *testing.T) {
 	var got proc.Command
 	g := Git{
-		Environ: []string{"PATH=/bin", "LC_ALL=fr_FR.UTF-8", "GIT_TERMINAL_PROMPT=1", "KEEP=me"},
+		Environ: []string{"PATH=/bin", "LC_ALL=fr_FR.UTF-8", "GIT_TERMINAL_PROMPT=1", "KEEP=me", "GIT_DIR=/project/.git", "GIT_INDEX_FILE=/project/.git/index.lock", "GIT_WORK_TREE=/project"},
 		Run: func(c proc.Command) ([]byte, []byte, error) {
 			got = c
 			return nil, nil, nil
@@ -471,6 +474,70 @@ func TestEnvironment(t *testing.T) {
 		if slices.Contains(got.Env, not) {
 			t.Errorf("the environment still holds %s", not)
 		}
+	}
+	for _, kv := range got.Env {
+		if key, _, _ := strings.Cut(kv, "="); key == "GIT_DIR" || key == "GIT_INDEX_FILE" || key == "GIT_WORK_TREE" {
+			t.Errorf("the environment still says where another repo is: %s", kv)
+		}
+	}
+}
+
+// As when ezc is started from a hook of another repo, or a shell that exports GIT_DIR.
+func TestInheritedRepoIsIgnored(t *testing.T) {
+	g := newGit(t)
+	project := newStore(t, g)
+	inherited := Git{Run: g.Run, Environ: []string{
+		"GIT_DIR=" + filepath.Join(project, ".git"),
+		"GIT_INDEX_FILE=" + filepath.Join(project, ".git", "index"),
+	}}
+
+	plain := t.TempDir()
+	write(t, plain, "common.yaml", "A: 1\n")
+	if inherited.IsRepo(plain) {
+		t.Fatal("a plain folder is a repo because GIT_DIR names one")
+	}
+
+	store := newStore(t, inherited)
+	commit(t, inherited, store, "one.yaml", "A: 1\n")
+	if !inherited.IsRepo(store) || status(t, inherited, store).Dirty {
+		t.Fatal("the store is not read as its own repo")
+	}
+	if got := raw(t, g, store, "rev-list", "--count", "HEAD", "--"); got != "2" {
+		t.Fatalf("the store holds %s commits, want 2", got)
+	}
+	if got := raw(t, g, project, "rev-list", "--count", "HEAD", "--"); got != "1" {
+		t.Fatalf("the other repo holds %s commits, want 1", got)
+	}
+	if got := raw(t, g, project, "status", "--porcelain"); got != "" {
+		t.Fatalf("the other repo was touched:\n%s", got)
+	}
+}
+
+func TestFileNamedLikeARevision(t *testing.T) {
+	g := newGit(t)
+	dir := clone(t, g, published(t, g))
+	commit(t, g, dir, "HEAD", "A: 1\n")
+	commit(t, g, dir, "main", "A: 1\n")
+	wantCounts(t, g, dir, Ahead, 2, 0)
+	if n, err := g.Push(dir); err != nil || n != 2 {
+		t.Fatalf("Push: %d, %v", n, err)
+	}
+
+	// No branch on the remote: every local commit is counted.
+	if err := g.SetRemote(dir, gittest.Bare(t)); err != nil {
+		t.Fatal(err)
+	}
+	raw(t, g, dir, "update-ref", "-d", "refs/remotes/origin/main")
+	wantCounts(t, g, dir, Ahead, 3, 0)
+}
+
+func TestStatusSeesUntrackedFiles(t *testing.T) {
+	g := newGit(t)
+	dir := newStore(t, g)
+	raw(t, g, dir, "config", "status.showUntrackedFiles", "no")
+	write(t, dir, "loose.yaml", "A: 1\n")
+	if !status(t, g, dir).Dirty {
+		t.Fatal("an untracked file is not seen")
 	}
 }
 
@@ -494,7 +561,7 @@ func TestErrorsHoldNoFileContent(t *testing.T) {
 		t.Fatalf("the error does not say why: %v", err)
 	}
 
-	// A push that is refused says so, not where it went.
+	// A push that is refused says so.
 	bare := published(t, g)
 	a, b := clone(t, g, bare), clone(t, g, bare)
 	commit(t, g, a, "one.yaml", "A: 1\n")

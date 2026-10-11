@@ -40,7 +40,7 @@ const (
 // Status is the local state of a store.
 type Status struct {
 	Branch        string
-	Remote        string // origin's URL; "" for a local-only store
+	Remote        string // origin's URL as configured, credentials and all; "" for a local-only store
 	Ahead, Behind int    // against origin/<Branch>; with no such branch on the remote, Ahead is every local commit
 	Dirty         bool
 }
@@ -69,13 +69,24 @@ var (
 // messages in one language, and a path that is never a pattern.
 var fixed = []string{"GIT_TERMINAL_PROMPT=0", "LC_ALL=C", "GIT_LITERAL_PATHSPECS=1"}
 
+// elsewhere are the variables that point git at a repo other than the folder
+// it runs in (git rev-parse --local-env-vars, and two more that move what it
+// finds). Git sets them for a hook, so an ezc started from one inherits them.
+var elsewhere = []string{
+	"GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX",
+	"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE",
+	"GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_INTERNAL_SUPER_PREFIX",
+	"GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+	"GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES",
+}
+
 // run runs git in dir and returns its stdout. An error carries one line of
 // git's stderr, never its stdout.
 func (g Git) run(dir string, timeout time.Duration, args ...string) ([]byte, error) {
 	env := make([]string, 0, len(g.Environ)+len(fixed))
 	for _, kv := range g.Environ {
 		key, _, _ := strings.Cut(kv, "=")
-		if !slices.ContainsFunc(fixed, func(f string) bool { return strings.HasPrefix(f, key+"=") }) {
+		if !slices.Contains(elsewhere, key) && !slices.ContainsFunc(fixed, func(f string) bool { return strings.HasPrefix(f, key+"=") }) {
 			env = append(env, kv)
 		}
 	}
@@ -153,7 +164,8 @@ func (g Git) SetRemote(dir, url string) error {
 }
 
 // Commit commits exactly these paths (relative to dir; additions, changes and
-// deletions). done is false when none of them changed.
+// deletions). done is false when none of them changed, which includes a path
+// git ignores. A commit that fails leaves the paths staged.
 func (g Git) Commit(dir, message string, a Author, paths ...string) (bool, error) {
 	if len(paths) == 0 {
 		return false, nil
@@ -215,7 +227,7 @@ func (g Git) Fetch(dir string, timeout time.Duration) error {
 
 // Status reads the local state only; it never uses the network.
 func (g Git) Status(dir string) (Status, error) {
-	out, err := g.run(dir, 0, "status", "--porcelain=v2", "--branch")
+	out, err := g.run(dir, 0, "status", "--porcelain=v2", "--branch", "--untracked-files=normal")
 	if err != nil {
 		return Status{}, err
 	}
@@ -267,9 +279,10 @@ func (g Git) Status(dir string) (Status, error) {
 	return st, nil
 }
 
-// count runs git rev-list --count and returns the n numbers it prints.
+// count runs git rev-list --count and returns the n numbers it prints. The
+// closing "--" keeps a file named like a revision from making it ambiguous.
 func (g Git) count(dir string, n int, args ...string) ([]int, error) {
-	out, err := g.run(dir, 0, append([]string{"rev-list", "--count"}, args...)...)
+	out, err := g.run(dir, 0, append(append([]string{"rev-list", "--count"}, args...), "--")...)
 	if err != nil {
 		return nil, err
 	}
