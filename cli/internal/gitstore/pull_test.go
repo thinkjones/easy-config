@@ -410,3 +410,84 @@ func TestPullUnrelatedHistories(t *testing.T) {
 	}
 	wantCounts(t, g, mine, Ahead, 1, 0)
 }
+
+// A file renamed and changed here while the remote changed the original loses nothing: the old
+// name holds the remote's version, as for any file deleted here and changed there, and the new
+// name holds the local content. Following the rename would remove both.
+func TestPullRenamedEncryptedFile(t *testing.T) {
+	g := newGit(t)
+	mine, theirs := pair(t, g)
+	const base = "A: one\nB: two\nC: three\nD: four\nE: five\n"
+	publish(t, g, theirs, "x.enc.yaml", base)
+	pull(t, g, mine)
+
+	const remote = "A: remote\nB: two\nC: three\nD: four\nE: five\n"
+	const local = "A: one\nB: two\nC: three\nD: four\nE: local\n"
+	publish(t, g, theirs, "x.enc.yaml", remote)
+	if err := os.Remove(filepath.Join(mine, "x.enc.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, mine, "y.enc.yaml", local)
+	if done, err := g.Commit(mine, "rename x.enc.yaml", author, "x.enc.yaml", "y.enc.yaml"); err != nil || !done {
+		t.Fatalf("Commit: done=%v err=%v", done, err)
+	}
+
+	res := pull(t, g, mine)
+	if got := read(t, mine, "x.enc.yaml"); got != remote {
+		t.Fatalf("x.enc.yaml = %q, want the remote's", got)
+	}
+	if got := read(t, mine, "y.enc.yaml"); got != local {
+		t.Fatalf("y.enc.yaml = %q, want the local content", got)
+	}
+	if got := raw(t, g, mine, "ls-files"); got != "common.yaml\nx.enc.yaml\ny.enc.yaml" {
+		t.Fatalf("tracked files:\n%s", got)
+	}
+	if len(res.Replaced) != 1 {
+		t.Fatalf("result %+v, want 1 replaced", res)
+	}
+	if r := res.Replaced[0]; r.Path != "x.enc.yaml" || string(r.Base) != base || r.Local != nil {
+		t.Fatalf("replaced %q base %q local %q, want x.enc.yaml with no local content", r.Path, r.Base, r.Local)
+	}
+	wantCounts(t, g, mine, Ahead, 1, 0)
+}
+
+// A conflict in a later commit undoes what an earlier commit's replaced file had settled.
+func TestPullConflictAfterReplacedFile(t *testing.T) {
+	g := newGit(t)
+	mine, theirs := pair(t, g)
+	publish(t, g, theirs, "x.enc.yaml", "remote\n")
+	publish(t, g, theirs, "common.yaml", "A: 2\n")
+	commit(t, g, mine, "x.enc.yaml", "local\n")
+	commit(t, g, mine, "common.yaml", "A: 3\n")
+	head := raw(t, g, mine, "rev-parse", "HEAD")
+
+	if _, err := g.Pull(mine, time.Minute, encrypted); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Pull: %v, want ErrConflict", err)
+	}
+	wantUnchanged(t, g, mine, head)
+	if got := read(t, mine, "x.enc.yaml"); got != "local\n" {
+		t.Fatalf("x.enc.yaml = %q", got)
+	}
+}
+
+func TestPullUntrackedFileIsDirty(t *testing.T) {
+	g := newGit(t)
+	mine, _ := pair(t, g)
+	write(t, mine, "notes.yaml", "by hand\n")
+	if _, err := g.Pull(mine, time.Minute, encrypted); !errors.Is(err, ErrDirty) {
+		t.Fatalf("Pull: %v, want ErrDirty", err)
+	}
+}
+
+func TestPullConflictQuotesAnOddName(t *testing.T) {
+	g := newGit(t)
+	mine, theirs := pair(t, g)
+	const name = "a, b\nc.yaml"
+	publish(t, g, theirs, name, "A: 2\n")
+	commit(t, g, mine, name, "A: 3\n")
+
+	_, err := g.Pull(mine, time.Minute, encrypted)
+	if !errors.Is(err, ErrConflict) || strings.Contains(err.Error(), "\n") || !strings.Contains(err.Error(), `"a, b\nc.yaml"`) {
+		t.Fatalf("Pull: %q, want ErrConflict with the name quoted on one line", err)
+	}
+}

@@ -4,14 +4,16 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
 
-// Replaced is a file changed here and on the remote, for which the remote's version was kept.
+// Replaced is a file changed here and on the remote, for which the remote's version was kept
+// when a local commit conflicted in it. A later local commit that merges into it cleanly still applies.
 type Replaced struct {
 	Path        string // relative to the store's root
-	Base, Local []byte // its content at the common ancestor (nil when it did not exist) and here before the pull
+	Base, Local []byte // its content at the common ancestor and here before the pull; nil where it did not exist
 }
 
 // PullResult is what a pull brought in.
@@ -92,7 +94,9 @@ func (g Git) rebase(dir, remote string, keepRemote func(path string) bool) ([]Re
 	}
 
 	var replaced []Replaced
-	err = step("rebase", "--quiet", "--no-autostash", remote)
+	// Renames are not followed: a file renamed here and changed on the remote is then a file
+	// deleted here, which keeps the remote's version, beside a new one.
+	err = step("rebase", "--quiet", "--no-autostash", "-Xno-renames", remote)
 	for err != nil {
 		paths, lerr := g.names(dir, "diff", "--name-only", "--diff-filter=U", "-z")
 		if lerr != nil || len(paths) == 0 {
@@ -100,6 +104,12 @@ func (g Git) rebase(dir, remote string, keepRemote func(path string) bool) ([]Re
 			return fail(err)
 		}
 		if other := slices.DeleteFunc(slices.Clone(paths), keepRemote); len(other) > 0 {
+			for i, path := range other {
+				// A name that would not read as one name is quoted.
+				if q := strconv.Quote(path); q != `"`+path+`"` || strings.Contains(path, ", ") {
+					other[i] = q
+				}
+			}
 			return fail(fmt.Errorf("%s: %w", strings.Join(other, ", "), ErrConflict))
 		}
 		for _, path := range paths {
