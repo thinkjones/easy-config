@@ -245,7 +245,7 @@ func TestCorruptFileIsNotNoKey(t *testing.T) {
 	if err == nil || errors.Is(err, backend.ErrNoKey) {
 		t.Fatalf("error = %v, want a failure that is not ErrNoKey", err)
 	}
-	if !strings.Contains(err.Error(), "sops failed") || strings.Contains(err.Error(), "s3cr3t-value") {
+	if !strings.Contains(err.Error(), "sops could not read") || strings.Contains(err.Error(), "s3cr3t-value") {
 		t.Errorf("error = %q", err)
 	}
 }
@@ -481,11 +481,12 @@ func TestNoKeyError(t *testing.T) {
 	}
 }
 
-func TestOtherFailurePassesFiveLines(t *testing.T) {
+func TestOtherFailureNeverPassesStderr(t *testing.T) {
 	var lines []string
 	for i := 1; i <= 9; i++ {
 		lines = append(lines, fmt.Sprintf("line%d", i))
 	}
+	lines[2] = "quoted plaintext s3cr3t-value"
 	r := &recorder{err: errors.New("exit status 1"), stderr: strings.Join(lines, "\n"), stdout: "STDOUT-TEXT"}
 	b, dir := recorded(t, r, nil)
 	file := filepath.Join(dir, "common.enc.yaml")
@@ -494,29 +495,104 @@ func TestOtherFailurePassesFiveLines(t *testing.T) {
 	if err == nil {
 		t.Fatal("Decrypt succeeded")
 	}
-	msg := err.Error()
-	if !strings.Contains(msg, "line1") || !strings.Contains(msg, "line5") || strings.Contains(msg, "line6") {
-		t.Errorf("message = %q", msg)
+	want := file + ": sops could not read this file. To see its own message, run `sops decrypt common.enc.yaml` in " + dir + "."
+	if err.Error() != want {
+		t.Errorf("message = %q, want %q", err, want)
 	}
-	if !strings.Contains(msg, file) || strings.Contains(msg, "STDOUT-TEXT") {
-		t.Errorf("message = %q", msg)
+	if err := b.Set(file, "A", "v"); err == nil || !strings.Contains(err.Error(), "could not write") || strings.Contains(err.Error(), "s3cr3t") {
+		t.Errorf("Set error = %v", err)
 	}
 }
 
-func TestFailureNeverEchoesTheValue(t *testing.T) {
-	r := &recorder{err: errors.New("exit status 1"), stderr: `bad input "s3cr3t-value" and s3cr3t-value`}
+func TestInvalidUTF8IsRejected(t *testing.T) {
+	r := &recorder{}
 	b, dir := recorded(t, r, nil)
 	file := filepath.Join(dir, "common.enc.yaml")
 	os.WriteFile(file, []byte("x"), 0o644)
-	err := b.Set(file, "A", "s3cr3t-value")
-	if err == nil || strings.Contains(err.Error(), "s3cr3t-value") {
-		t.Fatalf("error = %v", err)
+	err := b.Set(file, "A", "a\xffb")
+	if err == nil || !strings.Contains(err.Error(), "A is not valid UTF-8 text and cannot be stored.") || len(r.cmds) != 0 {
+		t.Fatalf("error = %v, %d commands", err, len(r.cmds))
+	}
+}
+
+func TestReservedName(t *testing.T) {
+	r := &recorder{}
+	b, dir := recorded(t, r, nil)
+	if err := b.Set(filepath.Join(dir, "common.enc.yaml"), "sops", "v"); err == nil || len(r.cmds) != 0 {
+		t.Fatalf("error = %v, %d commands", err, len(r.cmds))
+	}
+}
+
+func TestEmptyKeyVariableIsNotSet(t *testing.T) {
+	r := &recorder{}
+	b, dir := recorded(t, r, []string{"HOME=/h", "SOPS_AGE_KEY=", "SOPS_AGE_KEY_FILE="})
+	file := filepath.Join(dir, "common.enc.yaml")
+	os.WriteFile(file, []byte("x"), 0o644)
+	if err := b.Set(file, "A", "v"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"HOME=/h", "SOPS_AGE_KEY_FILE=/keys/keys.txt"}; !reflect.DeepEqual(r.cmds[0].Env, want) {
+		t.Errorf("Env = %v, want %v", r.cmds[0].Env, want)
+	}
+}
+
+// flipType rewrites the recorded type of every value in an encrypted file, the edit that makes sops quote the
+// decrypted text in its own error. It needs no key.
+func flipType(t *testing.T, file string) {
+	t.Helper()
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, bytes.ReplaceAll(data, []byte("type:str]"), []byte("type:int]")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEditedTypeNeverLeaksTheValue(t *testing.T) {
+	r := newReal(t)
+	b := New(r.opts)
+	file := filepath.Join(r.dir, "common.enc.yaml")
+	for _, n := range []string{"A", "B"} {
+		if err := b.Set(file, n, "s3cr3t-value-"+n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	flipType(t, file)
+	_, derr := b.Decrypt(file)
+	serr := b.Set(file, "B", "other")
+	uerr := b.Unset(file, "A")
+	for name, err := range map[string]error{"Decrypt": derr, "Set": serr, "Unset": uerr} {
+		if err == nil {
+			t.Errorf("%s succeeded on an edited file", name)
+			continue
+		}
+		if errors.Is(err, backend.ErrNoKey) || strings.Contains(err.Error(), "s3cr3t") {
+			t.Errorf("%s error = %q", name, err)
+		}
+	}
+}
+
+func TestDamagedKeyBlockIsNotNoKey(t *testing.T) {
+	r := newReal(t)
+	b := New(r.opts)
+	file := filepath.Join(r.dir, "common.enc.yaml")
+	if err := b.Set(file, "A", "s3cr3t-value"); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(file)
+	if err := os.WriteFile(file, bytes.Replace(data, []byte("-----BEGIN AGE ENCRYPTED FILE-----"), []byte("-----BEGIN AGE ENCRYPTEX FILE-----"), 1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := b.Decrypt(file)
+	if err == nil || errors.Is(err, backend.ErrNoKey) || strings.Contains(err.Error(), "s3cr3t") {
+		t.Fatalf("error = %v, want a failure that is not ErrNoKey", err)
 	}
 }
 
 func TestNameIsJSONEncodedInTheIndex(t *testing.T) {
-	got, err := indexOf("A_B")
-	if err != nil || got != `["A_B"]` {
-		t.Errorf("indexOf = %q, %v", got, err)
+	got := indexOf("A_B")
+	if got != `["A_B"]` {
+		t.Errorf("indexOf = %q", got)
 	}
 }

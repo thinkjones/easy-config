@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -29,9 +30,6 @@ const (
 	// key that is not a recipient, does not exist, or is empty or unreadable. A corrupt file or a bad MAC prints
 	// something else, and must not be mistaken for a missing key.
 	noKeyMarker = "Failed to get the data key"
-
-	// maxStderrLines bounds how much of sops's own diagnostic is passed through.
-	maxStderrLines = 5
 )
 
 // DefaultKeyFile is the key file under home.
@@ -43,7 +41,7 @@ func DefaultKeyFile(home string) string {
 type Options struct {
 	Run      proc.Runner
 	LookPath func(string) (string, error)
-	Environ  []string // the process environment, K=V; the whole environment sops gets
+	Environ  []string // the process environment, K=V; the whole environment sops gets (nil gives it only the key file)
 	KeyFile  string   // used unless Environ already sets SOPS_AGE_KEY or SOPS_AGE_KEY_FILE
 }
 
@@ -147,7 +145,7 @@ func (b *sopsBackend) Decrypt(path string) ([]backend.Pair, error) {
 	}
 	stdout, stderr, err := b.run(proc.Command{Dir: filepath.Dir(path), Args: []string{"decrypt", "--output-type", "json", filepath.Base(path)}})
 	if err != nil {
-		return nil, b.failure(path, stderr, err, "")
+		return nil, b.failure(path, stderr, "read")
 	}
 	return flatten(path, stdout)
 }
@@ -192,6 +190,13 @@ func flatten(path string, data []byte) ([]backend.Pair, error) {
 // exist is made with `sops encrypt`, whose output goes to a temporary file that is renamed into place.
 func (b *sopsBackend) Set(path, name, value string) error {
 	dir, base := filepath.Dir(path), filepath.Base(path)
+	if name == "sops" {
+		return fmt.Errorf("%s: sops is reserved by the file format and cannot be a name.", path)
+	}
+	// json.Marshal would swap each invalid byte for U+FFFD without an error, storing a different value.
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("%s: %s is not valid UTF-8 text and cannot be stored.", path, name)
+	}
 	_, statErr := os.Stat(path)
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("%s: %w", path, statErr)
@@ -199,17 +204,11 @@ func (b *sopsBackend) Set(path, name, value string) error {
 	if statErr != nil {
 		return b.create(path, name, value)
 	}
-	val, err := json.Marshal(value)
+	val := mustJSON(value)
+	index := indexOf(name)
+	_, stderr, err := b.run(proc.Command{Dir: dir, Stdin: []byte(val), Args: []string{"set", "--value-stdin", base, index}})
 	if err != nil {
-		return fmt.Errorf("%s: %s cannot be encoded", path, name)
-	}
-	index, err := indexOf(name)
-	if err != nil {
-		return fmt.Errorf("%s: %s cannot be used as a name", path, name)
-	}
-	_, stderr, err := b.run(proc.Command{Dir: dir, Stdin: val, Args: []string{"set", "--value-stdin", base, index}})
-	if err != nil {
-		return b.failure(path, stderr, err, value)
+		return b.failure(path, stderr, "write")
 	}
 	return nil
 }
@@ -221,17 +220,14 @@ func (b *sopsBackend) create(path, name, value string) error {
 	if err := b.requirePolicy(path); err != nil {
 		return err
 	}
-	plain, err := json.Marshal(map[string]string{name: value})
-	if err != nil {
-		return fmt.Errorf("%s: %s cannot be encoded", path, name)
-	}
+	plain, _ := json.Marshal(map[string]string{name: value}) // cannot fail for strings
 	stdout, stderr, err := b.run(proc.Command{
 		Dir:   dir,
 		Stdin: plain,
 		Args:  []string{"encrypt", "--filename-override", base, "--input-type", "json", "--output-type", "yaml", "/dev/stdin"},
 	})
 	if err != nil {
-		return b.failure(path, stderr, err, value)
+		return b.failure(path, stderr, "write")
 	}
 	if len(stdout) == 0 {
 		return fmt.Errorf("%s: sops produced no output", path)
@@ -260,19 +256,17 @@ func (b *sopsBackend) Unset(path, name string) error {
 	if !slices.Contains(names, name) {
 		return fmt.Errorf("%s: %s: %w", path, name, backend.ErrNotSet)
 	}
+	// The last name is removed without a key: the file is gone either way, and the key proves nothing about who may delete it.
 	if len(names) == 1 {
 		if err := os.Remove(path); err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
 		return nil
 	}
-	index, err := indexOf(name)
-	if err != nil {
-		return fmt.Errorf("%s: %s cannot be used as a name", path, name)
-	}
+	index := indexOf(name)
 	_, stderr, err := b.run(proc.Command{Dir: filepath.Dir(path), Args: []string{"unset", filepath.Base(path), index}})
 	if err != nil {
-		return b.failure(path, stderr, err, "")
+		return b.failure(path, stderr, "write")
 	}
 	return nil
 }
@@ -292,9 +286,9 @@ func (b *sopsBackend) Edit(path string) error {
 }
 
 // indexOf is sops's index argument for a top-level name: a JSON array holding the name.
-func indexOf(name string) (string, error) {
-	b, err := json.Marshal([]string{name})
-	return string(b), err
+func indexOf(name string) string {
+	b, _ := json.Marshal([]string{name}) // cannot fail for strings
+	return string(b)
 }
 
 // run runs sops with the key file in its environment.
@@ -306,7 +300,16 @@ func (b *sopsBackend) run(c proc.Command) (stdout, stderr []byte, err error) {
 
 // env is the environment plus the key file, unless the environment already says where the key is.
 func (b *sopsBackend) env() []string {
-	env := slices.Clone(b.o.Environ)
+	var env []string
+	for _, kv := range b.o.Environ {
+		if kv == envKey+"=" || kv == envKeyFile+"=" { // sops ignores an empty value; so does the check below
+			continue
+		}
+		env = append(env, kv)
+	}
+	if b.o.Environ != nil && env == nil {
+		env = []string{}
+	}
 	if b.keyFromEnv() == "" && b.o.KeyFile != "" {
 		env = append(env, envKeyFile+"="+b.o.KeyFile)
 	}
@@ -318,44 +321,47 @@ func (b *sopsBackend) keyFromEnv() string {
 	found := ""
 	for _, kv := range b.o.Environ {
 		switch {
-		case strings.HasPrefix(kv, envKey+"="):
+		case strings.HasPrefix(kv, envKey+"=") && kv != envKey+"=":
 			return envKey
-		case strings.HasPrefix(kv, envKeyFile+"="):
+		case strings.HasPrefix(kv, envKeyFile+"=") && kv != envKeyFile+"=":
 			found = envKeyFile
 		}
 	}
 	return found
 }
 
-// failure turns a failed sops run into an error. A missing key is ErrNoKey. Anything else passes on at most the
-// first lines of sops's stderr, with the value (if the call carried one) blanked out in case sops echoed it;
-// sops's stdout is never included.
-func (b *sopsBackend) failure(path string, stderr []byte, runErr error, value string) error {
-	if bytes.Contains(stderr, []byte(noKeyMarker)) {
+// failure turns a failed sops run into an error. sops's own text is never passed on: its messages can quote
+// a decrypted value (a value whose recorded type was edited makes it print the text it failed to convert), and
+// a file can be edited by someone with no key. The failure is classified by what stderr says and answered
+// with a fixed sentence. verb is "read" or "write".
+func (b *sopsBackend) failure(path string, stderr []byte, verb string) error {
+	if isNoKey(stderr) {
 		source := "Your key file is " + b.o.KeyFile + "."
 		if v := b.keyFromEnv(); v != "" {
 			source = "The key comes from " + v + "."
 		}
 		return &kindError{fmt.Sprintf("cannot decrypt %s: no key on this machine is one of its recipients. %s", path, source), backend.ErrNoKey}
 	}
-	text := strings.TrimSpace(string(stderr))
-	if text == "" {
-		text = runErr.Error()
+	return fmt.Errorf("%s: sops could not %s this file. To see its own message, run `sops decrypt %s` in %s.", path, verb, filepath.Base(path), filepath.Dir(path))
+}
+
+// isNoKey reports whether stderr says no key opened the file. sops prints the same first line when the key
+// block inside the file is damaged; then the detail says it could not read the stored key, which is a damaged
+// file and not a missing key.
+func isNoKey(stderr []byte) bool {
+	if !bytes.Contains(stderr, []byte(noKeyMarker)) {
+		return false
 	}
-	if value != "" {
-		for _, v := range []string{value, mustJSON(value)} {
-			text = strings.ReplaceAll(text, v, "***")
+	for _, damaged := range []string{"failed to read header", "parsing age header", "invalid armor"} {
+		if bytes.Contains(stderr, []byte(damaged)) {
+			return false
 		}
 	}
-	lines := strings.Split(text, "\n")
-	if len(lines) > maxStderrLines {
-		lines = lines[:maxStderrLines]
-	}
-	return fmt.Errorf("%s: sops failed:\n%s", path, strings.Join(lines, "\n"))
+	return true
 }
 
 func mustJSON(s string) string {
-	b, _ := json.Marshal(s)
+	b, _ := json.Marshal(s) // cannot fail for strings
 	return string(b)
 }
 
