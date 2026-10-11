@@ -83,18 +83,26 @@ func (r Result) Overrides(name string) []string {
 }
 
 // Envs returns the sorted, de-duplicated environment names found in dirs: any
-// env.<name>.yaml or env.<name>.enc.yaml.
-func Envs(dirs ...string) []string {
+// env.<name>.yaml or env.<name>.enc.yaml. A directory that does not exist has
+// none; any other read error is returned.
+func Envs(dirs ...string) ([]string, error) {
 	seen := map[string]bool{}
 	for _, dir := range dirs {
-		for _, pattern := range []string{"env.*.yaml", "env.*.enc.yaml"} {
-			matches, _ := filepath.Glob(filepath.Join(dir, pattern))
-			for _, m := range matches {
-				name := strings.TrimPrefix(filepath.Base(m), "env.")
-				name = strings.TrimSuffix(strings.TrimSuffix(name, ".yaml"), ".enc")
-				if name != "" {
-					seen[name] = true
-				}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("%s: %w", dir, err)
+		}
+		for _, e := range entries {
+			n := e.Name()
+			if !strings.HasPrefix(n, "env.") || !strings.HasSuffix(n, ".yaml") {
+				continue
+			}
+			name := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(n, "env."), ".yaml"), ".enc")
+			if name != "" {
+				seen[name] = true
 			}
 		}
 	}
@@ -103,7 +111,7 @@ func Envs(dirs ...string) []string {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	return names
+	return names, nil
 }
 
 func isDir(path string) bool {
@@ -144,7 +152,10 @@ func Load(o Options) (Result, error) {
 		dirs[i] = l.dir
 	}
 
-	envs := Envs(dirs...)
+	envs, err := Envs(dirs...)
+	if err != nil {
+		return res, err
+	}
 	name := o.Env
 	switch {
 	case name == "" && slices.Contains(envs, DefaultEnv):
@@ -184,6 +195,9 @@ func Load(o Options) (Result, error) {
 		// therefore flows one direction only, which is what makes a cycle
 		// impossible to write rather than something to detect.
 		for _, pair := range pairs {
+			if slices.Contains(SelectorVars, pair.Name) {
+				return res, fmt.Errorf("%s: %s names the environment and comes from the shell or the command line; remove it from this file.", s.Path, pair.Name)
+			}
 			value := pair.Value
 			if !isEncrypted(s.Path) {
 				value, err = expandRefs(value, pair.Name, s.Path, o.Home, res.Env)

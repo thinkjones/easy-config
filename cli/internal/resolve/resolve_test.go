@@ -211,7 +211,41 @@ func TestEnvs(t *testing.T) {
 		"store/env.local.yaml": "A: 1\n", "store/env.prod.enc.yaml": "x: y\n",
 		"repo/env.prod.yaml": "A: 1\n", "repo/common.yaml": "A: 1\n",
 	})
-	if got := Envs(store, repo); !slices.Equal(got, []string{"local", "prod"}) {
-		t.Errorf("got %v", got)
+	if got, err := Envs(store, repo); err != nil || !slices.Equal(got, []string{"local", "prod"}) {
+		t.Errorf("got %v, %v", got, err)
+	}
+}
+
+func TestEnvsIgnoresGlobCharactersInDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "my[proj]*?", ".ezc")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "env.local.yaml"), []byte("A: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Envs(dir); err != nil || !slices.Equal(got, []string{"local"}) {
+		t.Errorf("got %v, %v", got, err)
+	}
+	r := mustResolve(t, Options{RepoDir: dir})
+	if r.CommonOnly || r.Env["A"] != "1" {
+		t.Errorf("common only %v, env %v", r.CommonOnly, r.Env)
+	}
+}
+
+func TestSelectorInFileIsError(t *testing.T) {
+	_, repo := tree(t, map[string]string{"repo/common.yaml": "APP_ENV: fromfile\n"})
+	_, err := Load(Options{RepoDir: repo})
+	if err == nil || !strings.Contains(err.Error(), "APP_ENV names the environment and comes from the shell or the command line; remove it from this file.") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestSelectorInDecryptedFileIsError(t *testing.T) {
+	_, repo := tree(t, map[string]string{"repo/common.enc.yaml": "x: y\n"})
+	decrypt := func(string) ([]backend.Pair, error) { return []backend.Pair{{Name: "EZC_ENV", Value: "s"}}, nil }
+	_, err := Load(Options{RepoDir: repo, Decrypt: decrypt})
+	if err == nil || !strings.Contains(err.Error(), "EZC_ENV names the environment") {
+		t.Errorf("got %v", err)
 	}
 }

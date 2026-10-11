@@ -90,7 +90,8 @@ func TestHomeExpansion(t *testing.T) {
 }
 
 func TestHomeExpansionWithoutHome(t *testing.T) {
-	if got := loadErr(t, "common.yaml", "A: ~/x\n", ""); !strings.Contains(got, "A starts with a home reference") {
+	got := loadErr(t, "common.yaml", "A: ~/secret-rest\n", "")
+	if !strings.Contains(got, "A starts with a home reference") || strings.Contains(got, "secret-rest") {
 		t.Errorf("got %q", got)
 	}
 }

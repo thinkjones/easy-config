@@ -62,16 +62,16 @@ func loadFile(path, home string, decrypt func(string) ([]backend.Pair, error)) (
 //
 // Only a home prefix, only at the very start. A $ inside a password stays a $.
 func expandHome(value, name, path, home string) (string, error) {
-	var rest string
+	var rest, prefix string
 	switch {
 	case value == "~", value == "$HOME", value == "${HOME}":
-		rest = ""
+		rest, prefix = "", value
 	case strings.HasPrefix(value, "~/"):
-		rest = value[len("~"):]
+		rest, prefix = value[len("~"):], "~"
 	case strings.HasPrefix(value, "$HOME/"):
-		rest = value[len("$HOME"):]
+		rest, prefix = value[len("$HOME"):], "$HOME"
 	case strings.HasPrefix(value, "${HOME}/"):
-		rest = value[len("${HOME}"):]
+		rest, prefix = value[len("${HOME}"):], "${HOME}"
 	default:
 		// Includes ~user/, which is deliberately left alone: resolving another
 		// account's home is not something a config value should be able to ask
@@ -82,8 +82,8 @@ func expandHome(value, name, path, home string) (string, error) {
 	// Needed only when a value asks for it, so a machine with no home directory
 	// still loads any store whose values do not.
 	if home == "" {
-		return "", fmt.Errorf("%s: %s starts with a home reference (%q) but this process has no home directory.\n"+
-			"       Set HOME, or write the path out in full", path, name, value)
+		return "", fmt.Errorf("%s: %s starts with a home reference (%s) but this process has no home directory.\n"+
+			"       Set HOME, or write the path out in full", path, name, prefix)
 	}
 	return home + rest, nil
 }
