@@ -14,7 +14,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -114,9 +113,6 @@ type Options struct {
 	// ExtraFiles are file names that belong in a .ezc folder besides ezc's own, such as the backend's policy file.
 	ExtraFiles []string
 }
-
-// shimMarker is the version line of the repo's env.sh.
-var shimMarker = regexp.MustCompile(`^#\s*ezc-shim:\s*(\d+)\s*$`)
 
 // Collect gathers the picture Options asks for. It never fails: whatever it cannot read is a Broken item.
 func Collect(o Options) Report {
@@ -251,15 +247,17 @@ func shimItem(dir string) Item {
 	if err != nil {
 		return Item{Broken, "shim", firstLine(err), ""}
 	}
-	first, _, _ := strings.Cut(string(data), "\n")
-	m := shimMarker.FindStringSubmatch(strings.TrimRight(first, "\r"))
-	if m == nil {
+	got, ok := share.VersionOf(string(data))
+	switch {
+	case !ok:
 		return Item{Broken, "shim", "no version marker", fix}
-	}
-	if got, _ := strconv.Atoi(m[1]); got != share.ShimVersion {
+	case got > share.ShimVersion:
+		// repo init keeps it, so the fix is a newer ezc, not a rewrite.
+		return Item{Warn, "shim", fmt.Sprintf("version %d, newer than this ezc (%d)", got, share.ShimVersion), "Upgrade ezc."}
+	case got != share.ShimVersion:
 		return Item{Broken, "shim", fmt.Sprintf("version %d, want %d", got, share.ShimVersion), fix}
 	}
-	return Item{OK, "shim", "version " + m[1], ""}
+	return Item{OK, "shim", fmt.Sprintf("version %d", got), ""}
 }
 
 func environmentsItem(o Options) Item {
@@ -323,11 +321,15 @@ func environmentItem(o Options, m manifest.Manifest) Item {
 
 // policyItem: a folder with encrypted files must hold the backend's policy, or nothing can be written there.
 func policyItem(o Options, dir string) Item {
-	enc, err := filepath.Glob(filepath.Join(dir, "*.enc.yaml"))
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return Item{Broken, "policy", firstLine(err), ""}
 	}
-	if len(enc) == 0 {
+	encrypted := false
+	for _, e := range entries {
+		encrypted = encrypted || (!e.IsDir() && strings.HasSuffix(e.Name(), ".enc.yaml"))
+	}
+	if !encrypted {
 		return Item{OK, "policy", "not needed", ""}
 	}
 	ok, err := o.Backend.HasPolicy(dir)
@@ -351,7 +353,7 @@ func filesItems(o Options, dir string, isStore bool) []Item {
 	}
 	var items []Item
 	for _, f := range odd {
-		detail := f[0]
+		detail := displayName(f[0])
 		if f[1] != "" {
 			detail += " — did you mean " + f[1] + "?"
 		}
@@ -360,7 +362,16 @@ func filesItems(o Options, dir string, isStore bool) []Item {
 	return items
 }
 
-func validEnv(name string) bool { return resolve.ValidEnvName(name) }
+// displayName is a file name for the report: quoted when it holds whitespace or anything outside printable
+// ASCII, so a name from a cloned repo cannot forge a line or send terminal escapes.
+func displayName(name string) string {
+	for _, r := range name {
+		if r <= ' ' || r > '~' {
+			return strconv.Quote(name)
+		}
+	}
+	return name
+}
 
 // sameDir reports whether a and b are the same existing folder.
 func sameDir(a, b string) bool {

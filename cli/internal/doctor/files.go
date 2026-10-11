@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/thinkjones/easy-config/cli/internal/resolve"
 )
 
 // Names recognised in any .ezc folder, and the extra ones a repo and a store have. Suggestions are made
@@ -61,7 +63,7 @@ func recognised(name string, isDir, store bool, fixed, extra []string) bool {
 		return true
 	}
 	m := envFile.FindStringSubmatch(name)
-	return m != nil && validEnv(m[1])
+	return m != nil && resolve.ValidEnvName(m[1])
 }
 
 // suggest is the recognised name that name was probably meant to be, or "".

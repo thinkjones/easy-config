@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -291,8 +292,17 @@ func TestShimStates(t *testing.T) {
 	if it := item(t, Collect(o), "repo", "shim"); it.State != Broken {
 		t.Fatalf("%+v", it)
 	}
+	put(t, shim, "# ezc-shim: x\n")
+	if it := item(t, Collect(o), "repo", "shim"); it.State != Broken {
+		t.Fatalf("%+v", it)
+	}
+	put(t, shim, fmt.Sprintf("# ezc-shim: %d\n", share.ShimVersion+1))
+	it := item(t, Collect(o), "repo", "shim")
+	if it.State != Warn || it.Fix != "Upgrade ezc." || !strings.Contains(it.Detail, "newer than this ezc") {
+		t.Fatalf("%+v", it)
+	}
 	put(t, shim, share.EnvSh)
-	if it := item(t, Collect(o), "repo", "shim"); it.State != OK || it.Detail != "version 1" {
+	if it := item(t, Collect(o), "repo", "shim"); it.State != OK || it.Detail != fmt.Sprintf("version %d", share.ShimVersion) {
 		t.Fatalf("%+v", it)
 	}
 }
@@ -347,6 +357,10 @@ func TestNoValuesInReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	put(t, filepath.Join(o.RepoDir, "env.local.yaml"), "NAME: VALUE-four-9f3\nBAD: VALUE-five-9f3\n")
+	if err := f.Set(filepath.Join(o.StoreDir, "env.prod.enc.yaml"), "NAME", "VALUE-six-9f3"); err != nil {
+		t.Fatal(err)
+	}
+	put(t, filepath.Join(o.StoreDir, "env.dev.enc.yaml"), "VALUE-seven-9f3\n") // malformed: an error path
 	for _, locked := range []bool{false, true} {
 		o.Backend = &backend.Fake{Locked: locked}
 		out := Collect(o).String()
@@ -378,5 +392,24 @@ func TestStringLayout(t *testing.T) {
 		"  ✓ files     all recognised\n"
 	if got := r.String(); got != want {
 		t.Fatalf("got:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFilesQuoteOddNames(t *testing.T) {
+	o := healthy(t)
+	put(t, filepath.Join(o.RepoDir, "a\nb"), "")
+	out := Collect(o).String()
+	if strings.Contains(out, "a\nb") || !strings.Contains(out, `"a\nb"`) {
+		t.Fatalf("got\n%s", out)
+	}
+}
+
+func TestPolicyInFolderWithGlobCharacters(t *testing.T) {
+	o := healthy(t)
+	o.RepoDir = filepath.Join(t.TempDir(), "proj[1]", ".ezc")
+	put(t, filepath.Join(o.RepoDir, "manifest.yaml"), repoManifest)
+	put(t, filepath.Join(o.RepoDir, "common.enc.yaml"), "EXTRA: FAKE[bg==]\n")
+	if it := item(t, Collect(o), "repo", "policy"); it.State != Broken {
+		t.Fatalf("%+v", it)
 	}
 }

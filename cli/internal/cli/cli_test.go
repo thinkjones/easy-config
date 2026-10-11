@@ -1097,6 +1097,23 @@ func TestRepoInitUpdatesAnOldShim(t *testing.T) {
 	}
 }
 
+func TestRepoInitKeepsANewerShim(t *testing.T) {
+	f := newFake(t)
+	shim := filepath.Join(f.wd, ".ezc", "env.sh")
+	newer := fmt.Sprintf("# ezc-shim: %d\necho newer\n", share.ShimVersion+1)
+	write(t, shim, newer)
+	if err := f.run("repo", "init"); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("kept .ezc/env.sh (version %d, newer than this ezc)\n", share.ShimVersion+1)
+	if !strings.Contains(f.out.String(), want) {
+		t.Fatalf("got %q", f.out.String())
+	}
+	if b, _ := os.ReadFile(shim); string(b) != newer {
+		t.Fatalf("shim changed: %q", b)
+	}
+}
+
 func TestRepoInitInsideAnotherRepo(t *testing.T) {
 	f := newFake(t)
 	write(t, filepath.Join(f.wd, ".ezc", "manifest.yaml"), "schemaVersion: v1\nrequired: {}\n")
