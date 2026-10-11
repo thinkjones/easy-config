@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/ghcli"
 	"github.com/thinkjones/easy-config/cli/internal/recipients"
 	"github.com/thinkjones/easy-config/cli/internal/setup"
@@ -41,35 +41,29 @@ func botGh(sys System) ghcli.GH {
 	return ghcli.GH{Run: sys.Exec, LookPath: sys.LookPath, Environ: sys.Environ()}
 }
 
-// deliveryError is a bot's key that could not be saved in a repo, after it was saved in given.
-type deliveryError struct {
-	repo  string
-	given []string
-	err   error
-}
-
-func (e *deliveryError) Error() string {
-	s := fmt.Sprintf("%s could not be set in %s (%s)", botSecret, e.repo, strings.TrimSuffix(e.err.Error(), "."))
-	if len(e.given) > 0 {
-		s += fmt.Sprintf(". It was set in %s to a key the store does not name, which reads nothing until this is run again", strings.Join(e.given, ", "))
-	}
-	return s
-}
-
-// giveBotKey applies c, a change that registers the public half of private, and hands the private half over. Before
-// the commit it proves that the key opens every encrypted file and saves it as a secret of each repo, on gh's stdin;
-// a failure of either puts the store back (decision 4). With printPrivate, stdout then carries the key and a newline
-// and nothing else, so out, where every other line of the command goes, is stderr. done is whether the key was
-// handed over: the error is then nil or an *unpushedError.
+// giveBotKey applies c, a change that registers the public half of private for the bot name, and hands the private
+// half over as its one secret line (backend.SecretLine). Before the commit it proves that the key opens every
+// encrypted file and saves it as a secret of each repo, on gh's stdin; a failure of either puts the store back
+// (decision 4). With printPrivate, stdout then carries the key and a newline and nothing else, so out, where every
+// other line of the command goes, is stderr. done is whether the change was made: the error is then nil, an
+// *unpushedError or the key not having reached stdout.
+//
+// A failure after a repo took the key cannot take it back: the error then names the repos that hold a key the store
+// does not name, and again, the command that gives them one it does.
 //
 // private stays a []byte and reaches only the backend, gh's stdin and, when asked for, stdout: never an error.
-func giveBotKey(sys System, a *access, c change, private []byte, repos []string, printPrivate bool) (out io.Writer, done bool, err error) {
+func giveBotKey(sys System, a *access, name, again string, c change, private []byte, repos []string, printPrivate bool) (out io.Writer, done bool, err error) {
 	out = sys.Stdout
 	if printPrivate {
 		out = sys.Stderr
 		a.sys.Stdout = sys.Stderr
 	}
+	secret := backend.SecretLine(private)
+	if len(secret) == 0 {
+		return out, false, errors.New("a key could not be created for the bot.")
+	}
 	gh := botGh(sys)
+	var given []string // the repos that took the key
 	c.extra = func() error {
 		for _, file := range a.enc {
 			// The backend's error is not passed on: it was given the key.
@@ -77,31 +71,45 @@ func giveBotKey(sys System, a *access, c change, private []byte, repos []string,
 				return fmt.Errorf("the new key cannot read %s", file)
 			}
 		}
-		for i, repo := range repos {
-			if err := gh.SecretSet(repo, botSecret, private); err != nil {
-				return &deliveryError{repo: repo, given: repos[:i], err: err}
+		for _, repo := range repos {
+			if err := gh.SecretSet(repo, botSecret, secret); err != nil {
+				return fmt.Errorf("%s could not be set in %s (%s)", botSecret, repo, strings.TrimSuffix(err.Error(), "."))
 			}
+			given = append(given, repo)
 		}
 		return nil
 	}
 	err = a.apply(c)
 	var unpushed *unpushedError
 	if err != nil && !errors.As(err, &unpushed) {
-		var unchanged *unchangedError
-		var failed *deliveryError
-		if errors.As(err, &unchanged) && errors.As(err, &failed) && len(failed.given) > 0 {
-			// The store is as it was, but a repo is not.
-			return out, false, fmt.Errorf("%s. The store was not changed.", failed)
+		if len(given) == 0 {
+			return out, false, err
 		}
-		return out, false, err
+		// Whatever failed, and the commit can fail after every repo took the key, those repos are not as they were.
+		holds := fmt.Sprintf("%s was set in %s to a key the store does not name, which reads nothing", botSecret, strings.Join(given, ", "))
+		var unchanged *unchangedError
+		if errors.As(err, &unchanged) {
+			return out, false, fmt.Errorf("%s. %s. The store was not changed. Run %s again.", strings.TrimSuffix(unchanged.Unwrap().Error(), "."), holds, again)
+		}
+		return out, false, fmt.Errorf("%s %s. Once the store is as it was, run %s again.", err, holds, again)
 	}
 	// A commit that was not pushed is made all the same, and the repos hold its key.
 	for _, repo := range repos {
 		fmt.Fprintf(out, "✓ %s set in %s\n", botSecret, repo)
 	}
 	if printPrivate {
-		sys.Stdout.Write(bytes.TrimRight(private, "\r\n"))
-		fmt.Fprintln(sys.Stdout)
+		if _, werr := sys.Stdout.Write(secret); werr != nil {
+			// The registry names a key that stdout did not take: say so, whatever the push did.
+			lost := fmt.Sprintf("The bot %s is registered, but its key could not be written to stdout and is lost.", name)
+			if len(repos) > 0 {
+				lost = fmt.Sprintf("The bot %s is registered and its key is saved in %s, but it could not be written to stdout.", name, strings.Join(repos, ", "))
+			}
+			lost += fmt.Sprintf(" Run ezc bot rotate %s --print-private for a new one.", name)
+			if err != nil {
+				lost += " " + err.Error()
+			}
+			return out, true, errors.New(lost)
+		}
 	}
 	return out, true, err
 }
@@ -116,7 +124,7 @@ func newBotAddCmd(sys System) *cobra.Command {
 
 The private half is never written to disk. Before the commit, ezc checks that it opens every encrypted file and saves it as the ` + botSecret + ` Actions secret of each --repo, through gh, which reads it on stdin. When a repo cannot be given the key, the store is put back as it was and nothing is committed. The repos are recorded in the bot's entry.
 
-With --print-private the private key is printed on stdout, with nothing else there: every other line goes to stderr. It is for a CI system that is not GitHub Actions; pipe it straight into that system's secret store. Give --repo, --print-private or both.
+With --print-private the private key is printed on stdout as one line, with nothing else there: every other line goes to stderr. It is for a CI system that is not GitHub Actions; pipe it straight into that system's secret store. Give --repo, --print-private or both.
 
 The bot also needs to read the store's repo, with a credential ezc cannot create: a read-only deploy key or a fine-grained token, saved as the ` + storeTokenSecret + ` secret of each repo.
 
@@ -160,7 +168,7 @@ Needs this machine's key file, as every change to who can read the store does, a
 			if err != nil {
 				return fmt.Errorf("%w.", err)
 			}
-			out, done, err := giveBotKey(sys, a, change{next: next, message: "add bot " + name}, private, to, printPrivate)
+			out, done, err := giveBotKey(sys, a, name, "the same ezc bot add", change{next: next, message: "add bot " + name}, private, to, printPrivate)
 			if done {
 				fmt.Fprintln(out, botStoreNote)
 			}
@@ -303,7 +311,7 @@ Needs this machine's key file, and gh when the entry names a repo.`,
 					return err
 				}
 			}
-			out, done, err := giveBotKey(sys, a, c, private, rec.Repos, printPrivate)
+			out, done, err := giveBotKey(sys, a, name, "ezc bot rotate "+name, c, private, rec.Repos, printPrivate)
 			if done {
 				sayDue(out, old, list)
 			}

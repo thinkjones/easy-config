@@ -66,9 +66,11 @@ func (g GH) run(dir string, stdin []byte, args ...string) ([]byte, error) {
 	case errors.Is(err, exec.ErrNotFound):
 		return nil, ErrNotInstalled
 	}
-	// A gh that repeats its input must not put a secret in an error.
-	if held := bytes.TrimSpace(stdin); len(held) > 0 && bytes.Contains(stderr, held) {
-		return nil, errors.New("gh: it failed")
+	// A gh that repeats its input, or one line of it, anywhere in what it says must not put a secret in an error.
+	for _, held := range bytes.Split(stdin, []byte("\n")) {
+		if held = bytes.TrimSpace(held); len(held) > 0 && bytes.Contains(stderr, held) {
+			return nil, errors.New("gh: it failed")
+		}
 	}
 	if line := reason(stderr); line != "" {
 		return nil, errors.New("gh: " + line)

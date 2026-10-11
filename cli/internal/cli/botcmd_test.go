@@ -77,6 +77,11 @@ func (g *botFake) deletes(t *testing.T, repos ...string) {
 	}
 }
 
+// botHolds is what a failure says of the repos that took a key the store then did not register.
+func botHolds(repos string) string {
+	return "EZC_AGE_KEY was set in " + repos + " to a key the store does not name, which reads nothing. The store was not changed."
+}
+
 // botPublic is the public half of a fake private key.
 func botPublic(t *testing.T, private string) string {
 	t.Helper()
@@ -204,7 +209,7 @@ func TestBotAddDeliveryFails(t *testing.T) {
 
 	// The first repo now holds a key that was never registered: the error says so.
 	g.calls, g.fail = nil, "o/b"
-	accessUntouched(t, f, x, "EZC_AGE_KEY could not be set in o/b ("+botGhSaid+"). It was set in o/a to a key the store does not name, which reads nothing until this is run again. The store was not changed.", "bot", "add", "ci", "--repo", "o/a", "--repo", "o/b")
+	accessUntouched(t, f, x, "EZC_AGE_KEY could not be set in o/b ("+botGhSaid+"). "+botHolds("o/a")+" Run the same ezc bot add again.", "bot", "add", "ci", "--repo", "o/a", "--repo", "o/b")
 	private := g.sets(t, "o/a", "o/b")
 	botKeyNowhere(t, f, x, private, f.out.String(), f.errOut.String())
 	if botOpens(f, x, private) {
@@ -242,7 +247,7 @@ func TestBotKeyIsProvedBeforeItIsDelivered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, done, err := giveBotKey(f.sys(), a, change{next: next, message: "add bot ci"}, []byte("FAKE-KEY-dd04\n"), []string{"o/a"}, false)
+	_, done, err := giveBotKey(f.sys(), a, "ci", "the same ezc bot add", change{next: next, message: "add bot ci"}, []byte("FAKE-KEY-dd04\n"), []string{"o/a"}, false)
 	if done || err == nil || err.Error() != "the new key cannot read common.enc.yaml. Nothing was changed." {
 		t.Fatalf("done %v, err %v", done, err)
 	}
@@ -576,7 +581,7 @@ func TestBotRotateDeliveryFails(t *testing.T) {
 	x := botStore(t, f, "o/a", "o/b")
 	g := botFakeGh(f)
 	g.fail = "o/b"
-	accessUntouched(t, f, x, "EZC_AGE_KEY could not be set in o/b ("+botGhSaid+"). It was set in o/a to a key the store does not name, which reads nothing until this is run again. The store was not changed.", "bot", "rotate", "ci", "--compromised")
+	accessUntouched(t, f, x, "EZC_AGE_KEY could not be set in o/b ("+botGhSaid+"). "+botHolds("o/a")+" Run ezc bot rotate ci again.", "bot", "rotate", "ci", "--compromised")
 	private := g.sets(t, "o/a", "o/b")
 	botKeyNowhere(t, f, x, private, f.out.String(), f.errOut.String())
 	// The old key is still the bot's.
@@ -584,4 +589,133 @@ func TestBotRotateDeliveryFails(t *testing.T) {
 		t.Fatal("the store is not as it was")
 	}
 	x.wantClean()
+}
+
+// A commit that fails after every repo took the key leaves those repos with a key nobody registered.
+func TestBotAddCommitFails(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	g := botFakeGh(f)
+	f.gitFail = "commit"
+	accessUntouched(t, f, x, "the change could not be committed: made to fail. "+botHolds("o/a, o/b")+" Run the same ezc bot add again.", "bot", "add", "ci", "--repo", "o/a", "--repo", "o/b", "--print-private")
+	private := g.sets(t, "o/a", "o/b")
+	botKeyNowhere(t, f, x, private, f.out.String(), f.errOut.String())
+	if f.errOut.String() != "" || botOpens(f, x, private) {
+		t.Fatalf("stderr %q, or the key that was not registered opens the store", f.errOut.String())
+	}
+	x.wantClean()
+}
+
+func TestBotRotateCommitFails(t *testing.T) {
+	f := newFake(t)
+	x := botStore(t, f, "o/a", "o/b")
+	g := botFakeGh(f)
+	f.gitFail = "commit"
+	accessUntouched(t, f, x, "the change could not be committed: made to fail. "+botHolds("o/a, o/b")+" Run ezc bot rotate ci again.", "bot", "rotate", "ci", "--print-private")
+	private := g.sets(t, "o/a", "o/b")
+	botKeyNowhere(t, f, x, private, f.out.String(), f.errOut.String())
+	if !botOpens(f, x, botOldPrivate) || botOpens(f, x, private) {
+		t.Fatal("the store is not as it was")
+	}
+	x.wantClean()
+}
+
+func TestBotRotatePushFails(t *testing.T) {
+	f := newFake(t)
+	x := botStore(t, f, "o/a")
+	g := botFakeGh(f)
+	if err := os.RemoveAll(x.bare); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := accessRun(f, "bot", "rotate", "ci")
+	var unpushed *unpushedError
+	if !errors.As(err, &unpushed) || out != "✓ rotate bot ci\n✓ EZC_AGE_KEY set in o/a\n" {
+		t.Fatalf("got %v, stdout %q", err, out)
+	}
+	if !botOpens(f, x, g.sets(t, "o/a")) || botOpens(f, x, botOldPrivate) {
+		t.Fatal("the commit does not hold the new key alone")
+	}
+}
+
+// closed is a stdout that takes nothing.
+type closed struct{}
+
+func (closed) Write([]byte) (int, error) { return 0, errors.New("write |1: broken pipe") }
+
+// The key on stdout may be its only copy: a write that fails is not a success.
+func TestBotPrintPrivateSaysWhenStdoutFails(t *testing.T) {
+	for _, c := range []struct {
+		want string
+		args []string
+	}{
+		{"The bot ci is registered, but its key could not be written to stdout and is lost. Run ezc bot rotate ci --print-private for a new one.", []string{"bot", "add", "ci", "--print-private"}},
+		{"The bot ci is registered and its key is saved in o/a, but it could not be written to stdout. Run ezc bot rotate ci --print-private for a new one.", []string{"bot", "add", "ci", "--print-private", "--repo", "o/a"}},
+	} {
+		f := newFake(t)
+		x := accessStore(t, f)
+		botFakeGh(f)
+		sys := f.sys()
+		sys.Stdout = closed{}
+		err := Run(c.args, sys)
+		if err == nil || err.Error() != c.want {
+			t.Fatalf("%v: got %v\nwant %s", c.args, err, c.want)
+		}
+		storeWriteExitsOne(t, err)
+		// The bot is registered, as the message says, and the rest was still said.
+		if got := x.git("log", "-1", "--format=%s"); got != "add bot ci" || !strings.HasSuffix(f.errOut.String(), botNote) {
+			t.Fatalf("last commit %q, stderr %q", got, f.errOut.String())
+		}
+	}
+
+	// A rotation too, and the push it also owes is still said.
+	f := newFake(t)
+	x := botStore(t, f)
+	if err := os.RemoveAll(x.bare); err != nil {
+		t.Fatal(err)
+	}
+	sys := f.sys()
+	sys.Stdout = closed{}
+	err := Run([]string{"bot", "rotate", "ci", "--print-private"}, sys)
+	const want = "The bot ci is registered, but its key could not be written to stdout and is lost. Run ezc bot rotate ci --print-private for a new one. Committed, but the push failed ("
+	if err == nil || !strings.HasPrefix(err.Error(), want) || !strings.HasSuffix(err.Error(), "). Run ezc store push.") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// commented is a backend whose new key is the text of a key file: comment lines, then the key.
+type commented struct{ *backend.Fake }
+
+func (c commented) NewKey() (string, []byte, error) {
+	public, private, err := c.Fake.NewKey()
+	return public, append([]byte("# created: 2026-10-11\n# public key: "+public+"\n"), private...), err
+}
+
+// Only the key's own line is delivered, to gh and to stdout.
+func TestBotDeliversTheSecretLineAlone(t *testing.T) {
+	for _, args := range [][]string{
+		{"bot", "add", "ci", "--repo", "o/a", "--print-private"},
+		{"bot", "rotate", "ci", "--print-private"},
+	} {
+		f := newFake(t)
+		var x storeWriteFix
+		if args[1] == "add" {
+			x = accessStore(t, f)
+		} else {
+			x = botStore(t, f, "o/a")
+		}
+		g := botFakeGh(f)
+		sys := f.sys()
+		sys.Backend = commented{f.backend}
+		if err := Run(args, sys); err != nil {
+			t.Fatal(err)
+		}
+		out := f.out.String()
+		public := botPublic(t, out)
+		if out != "FAKE-KEY-"+strings.TrimPrefix(public, "fake1")+"\n" || g.sets(t, "o/a") != out {
+			t.Fatalf("%v: stdout %q, gh's stdin %q: want one line, the same in both", args[:2], out, g.calls[0].Stdin)
+		}
+		if accessRegistry(t, filepath.Join(x.store, ezcDir)).Recipients["ci"].Key != public || !botOpens(f, x, out) {
+			t.Fatalf("%v: the line delivered is not the registered key", args[:2])
+		}
+	}
 }

@@ -83,6 +83,17 @@ func TestAFailureHoldsNoStdinContent(t *testing.T) {
 	}
 }
 
+func TestAFailureHoldsNoLineOfStdin(t *testing.T) {
+	// The value is one line among others, and gh repeats that line alone, inside a sentence.
+	for _, stdin := range []string{secretValue + "\n", "# public key: age1xyz\n" + secretValue + "\n", "  " + secretValue + "  \r\nmore\n"} {
+		r := &recorder{stderr: "could not encrypt \"" + secretValue + "\" for acme/app\n", err: errors.New("exit status 1")}
+		err := r.gh().SecretSet("acme/app", "EZC_AGE_KEY", []byte(stdin))
+		if err == nil || err.Error() != "gh: it failed" {
+			t.Fatalf("stdin %q: err %q", stdin, err)
+		}
+	}
+}
+
 func TestAFailureCarriesOneLineWithoutCredentials(t *testing.T) {
 	r := &recorder{
 		stdout: "never shown\n",
