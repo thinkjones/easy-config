@@ -7,7 +7,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/thinkjones/easy-config/cli/internal/config"
 	"github.com/thinkjones/easy-config/cli/internal/doctor"
+	"github.com/thinkjones/easy-config/cli/internal/gitstore"
+	"github.com/thinkjones/easy-config/cli/internal/paths"
+	"github.com/thinkjones/easy-config/cli/internal/recipients"
 )
 
 func newDoctorCmd(sys System) *cobra.Command {
@@ -39,7 +43,7 @@ Each line is a check, a warning (!) or a problem (✗), with what to do about it
 				return err
 			}
 			note, found := keySource(sys)
-			report := doctor.Collect(doctor.Options{
+			o := doctor.Options{
 				Only:       only,
 				Version:    sys.Version,
 				Home:       homeDir(sys),
@@ -51,7 +55,12 @@ Each line is a check, a warning (!) or a problem (✗), with what to do about it
 				KeyNote:    note,
 				KeyFound:   found,
 				ExtraFiles: policyFiles(sys),
-			})
+			}
+			machineOptions(sys, &o)
+			if only == "" || only == "store" {
+				storeOptions(sys, p.StoreEzc(), &o)
+			}
+			report := doctor.Collect(o)
 			fmt.Fprint(sys.Stdout, report.String())
 			if report.Broken() {
 				return &ExitError{1}
@@ -61,4 +70,79 @@ Each line is a check, a warning (!) or a problem (✗), with what to do about it
 	}
 	cmd.Flags().StringVar(&only, "only", "", "report one part: "+strings.Join(doctor.Sections, ", "))
 	return cmd
+}
+
+// machineOptions fills in the config and git. An invalid config.toml is a finding, not a failure.
+func machineOptions(sys System, o *doctor.Options) {
+	if p, err := paths.Resolve(sys.Getenv, sys.GOOS); err == nil {
+		o.ConfigPath = p.Config()
+		c, found, err := config.Load(p.Config())
+		o.ConfigFound, o.User = found, c.User
+		if err != nil {
+			o.ConfigErr = firstLineOf(err)
+		}
+	}
+	_, err := sys.LookPath("git")
+	o.GitFound = err == nil
+}
+
+// storeOptions fills in what doctor says about the store beyond its files: the sync state, whether this
+// machine's key is a recipient, and the pending requests.
+func storeOptions(sys System, storeEzc string, o *doctor.Options) {
+	s := syncStore(sys, syncMaxAge, syncTimeout)
+	o.Sync, o.SyncState, o.SyncFix = syncPhrase(sys, s)
+	o.Requests = s.Requests
+
+	reg, found, err := recipients.Load(storeEzc)
+	o.HasRegistry = found
+	if err != nil {
+		o.RegistryErr = firstLineOf(err)
+		return
+	}
+	if !found {
+		return
+	}
+	file, ok := keyFileInUse(sys)
+	if !ok {
+		return
+	}
+	public, err := backendFor(sys).PublicKey(file)
+	if err != nil {
+		return
+	}
+	o.AccessKnown, o.Recipient = true, reg.NameOf(public)
+}
+
+// syncPhrase is the store's state against its remote as one phrase, its state and what to do about it. The phrase is
+// empty for a store that is not a git repo.
+func syncPhrase(sys System, s storeSync) (phrase string, state doctor.State, fix string) {
+	if !s.Git {
+		return "", doctor.OK, ""
+	}
+	st := s.Status
+	switch st.State() {
+	case gitstore.Ahead:
+		phrase, state, fix = count(st.Ahead, "commit")+" ahead of origin", doctor.Warn, "Run `ezc store push`."
+	case gitstore.Behind:
+		phrase, state, fix = count(st.Behind, "commit")+" behind origin", doctor.Warn, "Run `ezc store pull`."
+	case gitstore.Diverged:
+		phrase, state, fix = fmt.Sprintf("diverged from origin (%d ahead, %d behind)", st.Ahead, st.Behind), doctor.Broken, "Run `ezc store pull`."
+	case gitstore.Uncommitted:
+		phrase, state, fix = "uncommitted changes", doctor.Warn, "Commit or discard them with git in "+s.Dir+"."
+	default:
+		phrase = "local only"
+		if remote, err := storeGit(sys).Remote(s.Dir); err == nil && remote != "" {
+			phrase = "in sync"
+		}
+	}
+	if s.Offline {
+		phrase += " (origin could not be reached)"
+		state = max(state, doctor.Warn)
+	}
+	return phrase, state, fix
+}
+
+func firstLineOf(err error) string {
+	first, _, _ := strings.Cut(err.Error(), "\n")
+	return strings.TrimSpace(first)
 }

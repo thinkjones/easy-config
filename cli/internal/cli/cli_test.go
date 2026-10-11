@@ -50,6 +50,7 @@ func newFake(t *testing.T) *fake {
 		env: map[string]string{"HOME": t.TempDir(), "EZC_HOME": t.TempDir()},
 		wd:  t.TempDir(),
 
+		paths:   map[string]string{"git": "/usr/bin/git"},
 		backend: &backend.Fake{},
 		t:       t,
 	}

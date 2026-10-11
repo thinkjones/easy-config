@@ -161,6 +161,21 @@ func keyFile(sys System) string {
 	return sops.DefaultKeyFile(home)
 }
 
+// keyFileInUse is the key file the commands read, and false when there is none to read: the key is in the
+// environment as text, or there is no home to look in. The public half of the key is read from this file.
+func keyFileInUse(sys System) (string, bool) {
+	if sys.Backend == nil {
+		if sys.Getenv("SOPS_AGE_KEY") != "" {
+			return "", false
+		}
+		if file := sys.Getenv("SOPS_AGE_KEY_FILE"); file != "" {
+			return file, true
+		}
+	}
+	file := keyFile(sys)
+	return file, file != ""
+}
+
 // load resolves the environment for repo (a .ezc directory, or "" for the store alone). An invalid config.toml is an error.
 func load(sys System, repo, env string) (resolve.Result, error) {
 	if _, err := loadConfig(sys); err != nil {
