@@ -36,9 +36,9 @@ type access struct {
 }
 
 // openAccess loads the store, its registry and this machine's public key. A store with no registry is an error.
-// With write it fetches now and refuses, before a byte is written, when the store's state cannot be told, when it is
-// behind its remote, when a file an access change rewrites has uncommitted changes, when this machine has no key
-// file, and when its key is not one the registry names.
+// With write it fetches now and refuses, before a byte is written, when the store's state cannot be told, when its
+// remote was not reached, when it is behind its remote, when a file an access change rewrites has uncommitted
+// changes, when this machine has no key file, and when its key is not one the registry names.
 func openAccess(sys System, write bool) (*access, error) {
 	c, err := loadConfig(sys)
 	if err != nil {
@@ -101,6 +101,10 @@ func (a *access) guard() error {
 	if s.Err != nil {
 		return cannotTell(s.Dir, s.Err)
 	}
+	// A change nobody else gets is the start of two registries, which no pull can merge.
+	if s.Offline && s.Status.Remote != "" {
+		return errors.New("The store's remote could not be reached, so nobody else would get this change. Run this again when it can be.")
+	}
 	if s.Status.Behind > 0 {
 		return errors.New("The store is behind its remote. Run ezc store pull, then run this again.")
 	}
@@ -132,16 +136,29 @@ type change struct {
 	due     func(d recipients.Due) // edits rotation-due.yaml; nil leaves the file alone
 	extra   func() error           // runs after the sequence and before the commit; its failure restores
 	remove  []string               // files in .ezc to delete in the commit, as paths inside it
+	// pushed says the change is of no use until the remote has it: a push that fails for any reason takes the
+	// commit back. Without it only a push the remote refused because it moved does.
+	pushed bool
 }
 
 // unchangedError is a failure of an access change after which the store is as it was.
-type unchangedError struct{ err error }
+type unchangedError struct {
+	err  error
+	then string // what to do before running the command again; "" when there is nothing
+}
 
 func (e *unchangedError) Error() string {
-	return strings.TrimSuffix(e.err.Error(), ".") + ". Nothing was changed."
+	msg := strings.TrimSuffix(e.err.Error(), ".") + ". Nothing was changed."
+	if e.then != "" {
+		msg += " " + e.then
+	}
+	return msg
 }
 
 func (e *unchangedError) Unwrap() error { return e.err }
+
+// pullFirst is what an access change that a moved remote undid says to do.
+const pullFirst = "Run ezc store pull, then run this again."
 
 // unpushedError is an access change that was committed here and whose push failed: the commit stays.
 type unpushedError struct{ err error }
@@ -154,7 +171,8 @@ func (e *unpushedError) Unwrap() error { return e.err }
 
 // apply is the one path every access change takes: the sequence (recipients.Apply), c.due, c.extra, the removals,
 // one commit of the files that changed and a push when the store has a remote. A failure before the commit is
-// made puts every file back; a push that fails leaves the commit.
+// made puts every file back. A push the remote refuses because it has moved takes the commit back and puts the
+// files back too; a push that fails for another reason leaves the commit, unless c.pushed asks for it back.
 func (a *access) apply(c change) error {
 	_, err := a.run(c)
 	return err
@@ -169,7 +187,7 @@ func (a *access) run(c change) (changed bool, err error) {
 		if rerr := a.restore(files, before); rerr != nil {
 			return fmt.Errorf("%s. %w", strings.TrimSuffix(err.Error(), "."), rerr)
 		}
-		return &unchangedError{err}
+		return &unchangedError{err: err}
 	}
 	if err := a.write(c); err != nil {
 		return false, undo(err)
@@ -188,6 +206,8 @@ func (a *access) run(c change) (changed bool, err error) {
 	if a.me != "" {
 		author.Name = a.me
 	}
+	// Where the store is now, to return to when the commit has to be taken back.
+	parent, parentErr := g.Head(a.sync.Dir)
 	done, err := g.Commit(a.sync.Dir, c.message, author, inEzc(written)...)
 	if err != nil {
 		return false, undo(fmt.Errorf("the change could not be committed: %s", gitReason(err)))
@@ -196,16 +216,38 @@ func (a *access) run(c change) (changed bool, err error) {
 		// Git saw nothing to commit in files whose bytes changed: it ignores them.
 		return false, undo(fmt.Errorf("the change could not be committed: git ignores the store's files in %s", a.dir))
 	}
-	fmt.Fprintf(a.sys.Stdout, "✓ %s\n", c.message)
 	remote := a.sync.Status.Remote
 	if remote == "" {
+		fmt.Fprintf(a.sys.Stdout, "✓ %s\n", c.message)
 		return true, nil
 	}
 	if _, err := g.Push(a.sync.Dir); err != nil {
+		moved := errors.Is(err, gitstore.ErrRemoteMoved)
+		if (moved || c.pushed) && parentErr == nil && a.uncommit(parent) {
+			// The store's branch is where it was: only the commit's own files are left to put back.
+			cause := &unchangedError{err: fmt.Errorf("The push failed (%s)", gitReason(err))}
+			if moved {
+				cause = &unchangedError{errors.New("The store's remote changed while this ran"), pullFirst}
+			}
+			if rerr := a.restore(files, before); rerr != nil {
+				return false, fmt.Errorf("%s. %w", strings.TrimSuffix(cause.err.Error(), "."), rerr)
+			}
+			return false, cause
+		}
+		fmt.Fprintf(a.sys.Stdout, "✓ %s\n", c.message)
 		return true, &unpushedError{err}
 	}
+	fmt.Fprintf(a.sys.Stdout, "✓ %s\n", c.message)
 	fmt.Fprintf(a.sys.Stdout, "✓ pushed to %s\n", gitstore.ShowURL(remote))
 	return true, nil
+}
+
+// uncommit takes back the commit run just made on top of parent, and reports whether the store's branch is at
+// parent again. Nothing in the work tree is touched: restore puts the commit's files back.
+func (a *access) uncommit(parent string) bool {
+	g := storeGit(a.sys)
+	made, err := g.Head(a.sync.Dir)
+	return err == nil && made != parent && g.Uncommit(a.sync.Dir, parent, made) == nil
 }
 
 // write does everything of a change that comes before its commit.

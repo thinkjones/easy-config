@@ -629,7 +629,7 @@ func TestErrorsHoldNoFileContent(t *testing.T) {
 	}
 	commit(t, g, b, "two.yaml", "A: "+marker+"\n")
 	_, err = g.Push(b)
-	if err == nil || strings.Contains(err.Error(), marker) || !strings.Contains(err.Error(), "failed to push") {
+	if !errors.Is(err, ErrRemoteMoved) || strings.Contains(err.Error(), marker) {
 		t.Fatalf("Push: %v", err)
 	}
 }

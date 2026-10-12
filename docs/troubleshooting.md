@@ -41,3 +41,11 @@ For the detail of a single failure, `ezc env` lists what is wrong with the envir
 | An `env.sh` written by an older `ezc` | Run `ezc repo init`. |
 | An `env.sh` written by a newer `ezc` | A warning: upgrade `ezc`. `ezc repo init` leaves that shim alone. |
 | An environment that does not resolve or does not pass the manifest | `ezc env` lists what is wrong. |
+
+## A file this machine's key does not open
+
+`ezc store rewrap` (and any other change to who can read the store) opens each encrypted file with this machine's key before it re-wraps it. When it stops with `cannot decrypt … no key on this machine is one of its recipients`, the file is encrypted for a list that does not hold the key `config.toml` names. Nothing was changed.
+
+- **Somebody else can read the store.** Ask them to run `ezc store pull` and `ezc store rewrap`, then pull. This is the usual way out.
+- **You rotated this machine's key and the file is still encrypted for the old one.** `ezc user rotate` takes itself back when its push fails, so this needs an older `ezc` or a file put back by hand. The old key file is still beside the new one (`ezc user rotate` never deletes it). `ezc` reads with one key only, so use `sops` once, in the store's `.ezc/`, with the old file: `SOPS_AGE_KEY_FILE=<old key file> sops rotate -i <file>`, then `SOPS_AGE_KEY_FILE=<old key file> sops updatekeys --yes <file>`, which re-encrypts the file for the keys the policy names, this machine's new one among them. Commit the file with git, then run `ezc user list` to check that every file agrees with `recipients.yaml`.
+- **Neither.** The file cannot be opened by anyone you can ask: restore it from a commit this machine's key opens, or set its secrets again.

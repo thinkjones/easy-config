@@ -645,3 +645,58 @@ func TestAccessChangeThatWasNotPushedEndToEnd(t *testing.T) {
 	}
 	w.done(a, b)
 }
+
+// A rotation whose push the remote refuses is taken back: the machine keeps the key it had, the new file is gone,
+// and it still reads the store, as does the other machine that holds the same key.
+func TestRotateThatCannotBePushedEndToEnd(t *testing.T) {
+	w := newWatch(t)
+	a, b, bare := twoMachines(t)
+	w.hide("the secret's value", e2eSecret)
+	w.hide("A's private key", secretLineOf(t, a.key))
+	config, err := os.ReadFile(filepath.Join(a.ezcHome, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := a.git("rev-parse", "HEAD")
+	hook := filepath.Join(bare, "hooks", "pre-receive")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, code := w.run(a, "", "user", "rotate")
+	if code != 1 || !strings.Contains(stderr, "The push failed (") || !strings.Contains(stderr, "Nothing was changed.") {
+		t.Fatalf("rotate: exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+	if strings.Contains(stdout+stderr, "delete it") || strings.Contains(stdout, "new key in") {
+		t.Fatalf("a rotation that was taken back talks of a new key:\n%s%s", stdout, stderr)
+	}
+	if made, _ := filepath.Glob(filepath.Join(filepath.Dir(a.key), "keys-*.txt")); len(made) != 0 {
+		t.Fatalf("a new key file was left: %v", made)
+	}
+	if now, err := os.ReadFile(filepath.Join(a.ezcHome, "config.toml")); err != nil || !bytes.Equal(now, config) {
+		t.Fatalf("config.toml changed (%v):\n%s", err, now)
+	}
+	if got := a.git("rev-parse", "HEAD"); got != head {
+		t.Fatalf("the store is at %s, was at %s", got, head)
+	}
+	if got := a.git("status", "--porcelain"); got != "" {
+		t.Errorf("the store has uncommitted changes:\n%s", got)
+	}
+	reads(t, a, e2eSecret)
+
+	// With the remote taking pushes again the rotation goes through, and the store agrees with its registry.
+	if err := os.Remove(hook); err != nil {
+		t.Fatal(err)
+	}
+	w.ok(a, "", "user", "rotate")
+	made, _ := filepath.Glob(filepath.Join(filepath.Dir(a.key), "keys-*.txt"))
+	if len(made) != 1 {
+		t.Fatalf("the new key files: %v", made)
+	}
+	w.hide("A's new private key", secretLineOf(t, made[0]))
+	reads(t, a, e2eSecret)
+	wantShutOut(t, a, "common.enc.yaml", made[0], a.key)
+	w.ok(b, "", "store", "pull")
+	cannotRead(t, w, b)
+	w.done(a, b)
+}

@@ -389,13 +389,11 @@ func TestUserAddRestoresWhenAFileFails(t *testing.T) {
 	accessLevel(t, x)
 }
 
-// Decision 9: the commit stays when the push fails.
+// Decision 9: the commit stays when the push fails for a reason other than a remote that moved.
 func TestUserAddPushFails(t *testing.T) {
 	f := newFake(t)
 	x := accessStore(t, f)
-	if err := os.RemoveAll(x.bare); err != nil {
-		t.Fatal(err)
-	}
+	f.gitFail = pushFails
 	out, _, err := accessRun(f, "user", "add", "sam", accessSam)
 	if err == nil || !strings.HasPrefix(err.Error(), "Committed, but the push failed (") || !strings.HasSuffix(err.Error(), "). Run ezc store push.") {
 		t.Fatalf("got %v", err)
@@ -802,7 +800,7 @@ func TestAccessRefusesAFileNameThatCannotBeShown(t *testing.T) {
 // The requests of these tests are filed by machine b of joinMachines, or pushed by hand from the third clone.
 const (
 	requestNone     = "No pending requests.\n"
-	requestOffline  = "The store's remote could not be reached, so the request cannot be read as it stands. Run this again when it can be."
+	requestOffline  = accessOffline
 	requestNameRule = "the name is lower case letters, digits and -, starting with a letter or a digit."
 	// requestHand is a key nobody holds, for a request written by hand.
 	requestHand = "fake1dd04"
@@ -1553,24 +1551,60 @@ func TestUserRotateCommitFails(t *testing.T) {
 	accessReaders(t, f, filepath.Join(x.store, ezcDir), accessGene)
 }
 
+// A rotation that nobody else gets is taken back whatever stopped the push: this machine keeps the key it had.
 func TestUserRotatePushFails(t *testing.T) {
 	f := newFake(t)
 	x := accessStore(t, f)
-	if err := os.RemoveAll(x.bare); err != nil {
-		t.Fatal(err)
-	}
-	out, _, err := accessRun(f, "user", "rotate")
-	var unpushed *unpushedError
-	if !errors.As(err, &unpushed) {
+	before := readFile(t, setupConfig(f))
+	head := x.git("rev-parse", "HEAD")
+	f.gitFail = pushFails
+	out, _, err := accessRun(f, "user", "rotate", "--compromised")
+	var unchanged *unchangedError
+	if !errors.As(err, &unchanged) || !strings.HasPrefix(err.Error(), "The push failed (") || !strings.HasSuffix(err.Error(), "). Nothing was changed.") {
 		t.Fatalf("got %T %v", err, err)
 	}
-	// The rotation happened here: the new file and the config stay.
-	fresh := rotateNew(f, "")
+	if out != "" {
+		t.Fatalf("stdout %q", out)
+	}
+	if _, err := os.Stat(rotateNew(f, "")); err == nil {
+		t.Fatal("the new key file is still there")
+	}
+	if got := readFile(t, setupConfig(f)); got != before {
+		t.Fatalf("config is now %q", got)
+	}
+	if x.git("rev-parse", "HEAD") != head {
+		t.Fatal("the commit was left")
+	}
+	x.wantClean()
+	accessReaders(t, f, filepath.Join(x.store, ezcDir), accessGene)
+	// The store still reads with the key it had.
+	if err := f.run("get", "TOKEN", "--reveal"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// When the commit cannot be taken back the registry here names the new key: both files stay, both are named, and
+// nothing says to delete the old one.
+func TestUserRotateKeepsBothKeysWhenTheCommitCannotBeTakenBack(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	f.gitFail = pushFails + " update-ref"
+	out, _, err := accessRun(f, "user", "rotate")
+	fresh, old := rotateNew(f, ""), setupKeyFile(f)
+	want := "The rotation is committed here, but the push failed ("
+	if err == nil || !strings.HasPrefix(err.Error(), want) || !strings.HasSuffix(err.Error(), "). Your new key is in "+fresh+" and your old key in "+old+": keep both, and run ezc store push.") {
+		t.Fatalf("got %v", err)
+	}
+	if strings.Contains(out+err.Error(), "delete it") {
+		t.Fatalf("it says to delete a key:\n%s\n%v", out, err)
+	}
+	for _, file := range []string{fresh, old} {
+		if _, err := os.Stat(file); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if got := rotateConfigKeyFile(t, f); got != fresh {
 		t.Fatalf("key_file %q, want %q", got, fresh)
-	}
-	if !strings.Contains(out, "✓ new key in "+fresh) {
-		t.Fatalf("stdout %q", out)
 	}
 	if got := x.subjects(); !slices.Equal(got, []string{"rotate gene"}) {
 		t.Fatalf("commits %q", got)

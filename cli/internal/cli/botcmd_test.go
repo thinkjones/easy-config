@@ -2,7 +2,6 @@ package cli
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -354,9 +353,7 @@ func TestBotAddPushFails(t *testing.T) {
 	f := newFake(t)
 	x := accessStore(t, f)
 	g := botFakeGh(f)
-	if err := os.RemoveAll(x.bare); err != nil {
-		t.Fatal(err)
-	}
+	f.gitFail = pushFails
 	out, _, err := accessRun(f, "bot", "add", "ci", "--repo", "o/a")
 	var unpushed *unpushedError
 	if !errors.As(err, &unpushed) {
@@ -458,11 +455,9 @@ func TestBotRemoveDeletesNothingWhenNothingWasChanged(t *testing.T) {
 
 func TestBotRemovePushFails(t *testing.T) {
 	f := newFake(t)
-	x := botStore(t, f, "o/a")
+	botStore(t, f, "o/a")
 	g := botFakeGh(f)
-	if err := os.RemoveAll(x.bare); err != nil {
-		t.Fatal(err)
-	}
+	f.gitFail = pushFails
 	out, _, err := accessRun(f, "bot", "remove", "ci")
 	var unpushed *unpushedError
 	if !errors.As(err, &unpushed) {
@@ -624,9 +619,7 @@ func TestBotRotatePushFails(t *testing.T) {
 	f := newFake(t)
 	x := botStore(t, f, "o/a")
 	g := botFakeGh(f)
-	if err := os.RemoveAll(x.bare); err != nil {
-		t.Fatal(err)
-	}
+	f.gitFail = pushFails
 	out, _, err := accessRun(f, "bot", "rotate", "ci")
 	var unpushed *unpushedError
 	if !errors.As(err, &unpushed) || out != "✓ rotate bot ci\n✓ EZC_AGE_KEY set in o/a\n" {
@@ -669,10 +662,8 @@ func TestBotPrintPrivateSaysWhenStdoutFails(t *testing.T) {
 
 	// A rotation too, and the push it also owes is still said.
 	f := newFake(t)
-	x := botStore(t, f)
-	if err := os.RemoveAll(x.bare); err != nil {
-		t.Fatal(err)
-	}
+	botStore(t, f)
+	f.gitFail = pushFails
 	sys := f.sys()
 	sys.Stdout = closed{}
 	err := Run([]string{"bot", "rotate", "ci", "--print-private"}, sys)

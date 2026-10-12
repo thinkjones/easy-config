@@ -98,7 +98,7 @@ func newUserAddCmd(sys System) *cobra.Command {
 
 The key is the public one, which ` + "`ezc setup --store`" + ` prints on a machine that cannot read the store yet. Never pass a private key. A machine (--kind machine) is a second key of a user who is already a recipient, named with --owner.
 
-Needs this machine's key file, and the key must be one recipients.yaml names. Refused while the store is behind its remote or holds uncommitted changes to the files it rewrites. A failure puts the store back as it was; a push that fails leaves the commit, and ` + "`ezc store push`" + ` sends it.`,
+Needs this machine's key file, and the key must be one recipients.yaml names. Refused when the store's remote cannot be reached, while the store is behind it, and while it holds uncommitted changes to the files it rewrites. A failure puts the store back as it was. So does a push the remote refuses because it moved in the meantime: run ` + "`ezc store pull`" + ` and the command again. A push that fails for another reason leaves the commit, and ` + "`ezc store push`" + ` sends it.`,
 		Args: exactArgs(2, "a name and a public key"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, key := args[0], args[1]
@@ -313,12 +313,9 @@ A request that does not hold to the rules is listed as not valid, and cannot be 
 	}
 }
 
-// request is the pending request filed under name, as the remote holds it at the fetch openAccess just made. A
-// remote that was not reached then is an error: what this machine remembers of it may not be the request any more.
+// request is the pending request filed under name, as the remote holds it at the fetch openAccess just made, which
+// reached the remote: openAccess refuses when it did not.
 func (a *access) request(name string) (pending, error) {
-	if a.sync.Offline {
-		return pending{}, errors.New("The store's remote could not be reached, so the request cannot be read as it stands. Run this again when it can be.")
-	}
 	for _, q := range pendingRequests(a.sys, filepath.Dir(a.dir), a.sync.Git && a.sync.Status.Remote != "") {
 		if q.Name == name {
 			return q, nil
@@ -353,7 +350,7 @@ func (a *access) dropRequest(name, message string) error {
 		if rerr := a.restore(files, before); rerr != nil {
 			return fmt.Errorf("%s. %w", strings.TrimSuffix(err.Error(), "."), rerr)
 		}
-		return &unchangedError{err}
+		return &unchangedError{err: err}
 	}
 	if err := os.Remove(filepath.Join(a.dir, filepath.FromSlash(files[0]))); err != nil {
 		return undo(fmt.Errorf("%s: cannot remove this file", files[0]))
@@ -395,7 +392,7 @@ Approving trusts a key that somebody else wrote down. Compare the key printed he
 
 On a terminal it asks ` + "`Approve <name>? [y/N]`" + ` after showing the request, and anything but y or yes changes nothing. Without a terminal it needs --yes. What was shown is what is added: the request is not read again after the answer.
 
-Needs this machine's key file, as ` + "`ezc user add`" + ` does, and refuses a name that is taken, a key that is registered and a request that is not valid. A failure puts the store back as it was; a push that fails leaves the commit and the branch.`,
+Needs this machine's key file, as ` + "`ezc user add`" + ` does, and refuses a name that is taken, a key that is registered and a request that is not valid. A failure puts the store back as it was, and so does a push the remote refuses because it moved in the meantime; a push that fails for another reason leaves the commit and the branch.`,
 		Args: exactArgs(1, "a name"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -553,7 +550,7 @@ func newUserRotateCmd(sys System) *cobra.Command {
 		Short: "give this machine a new key in a new file; the old key stops opening the store",
 		Long: `Create a new key in a new file beside this machine's key file, named like it with the date added (keys-20261011.txt), replace this machine's key in recipients.yaml, write the encryption policy and re-wrap every encrypted file, in one commit named ` + "`rotate <name>`" + `, then push. Then key_file in config.toml names the new file. From that commit on the old key opens no file.
 
-The old file is never touched: back the new one up, and delete the old one when you are sure. Nobody can rotate another person's key, because there is no safe way to hand them the private half.
+A rotation is finished only when the remote has it: when the push fails, the commit is taken back, the new file is removed and config.toml is as it was. The old file is never touched: back the new one up, and delete the old one when you are sure. Nobody can rotate another person's key, because there is no safe way to hand them the private half.
 
 A routine rotation records nothing to rotate. With --compromised, for a key that may have leaked, every secret the old key could read is recorded in rotation-due.yaml and listed, as ` + "`ezc user remove`" + ` does: the old key still opens every older commit of the store.
 
@@ -632,7 +629,8 @@ Needs this machine's key file, as every change to who can read the store does, a
 			if err != nil {
 				return giveUp(fmt.Errorf("%w.", err))
 			}
-			c := change{next: next, message: "rotate " + a.myName}
+			// A rotation that stays on this machine leaves it reading with a key the remote's files are not for.
+			c := change{next: next, message: "rotate " + a.myName, pushed: true}
 			was := a.myName + " (old key)"
 			var list []string
 			if compromised {
@@ -655,19 +653,22 @@ Needs this machine's key file, as every change to who can read the store does, a
 			var unpushed *unpushedError
 			var unchanged *unchangedError
 			switch {
-			case err == nil || errors.As(err, &unpushed):
+			case err == nil:
 			case errors.As(err, &unchanged):
-				// The store is proven back as it was.
+				// The store is proven back as it was, a commit whose push failed included.
 				return giveUp(err)
+			case errors.As(err, &unpushed):
+				// The commit could not be taken back: the registry here names the new key and the remote's the old one.
+				return fmt.Errorf("The rotation is committed here, but the push failed (%s). Your new key is in %s and your old key in %s: keep both, and run ezc store push.", gitReason(unpushed.err), fresh, old)
 			default:
 				// The store may hold files only the new key opens: both keys stay.
 				return fmt.Errorf("The store could not be put back. Your new key is in %s and your old key in %s; keep both until ezc doctor is clean. %w", fresh, old, err)
 			}
-			// A commit that was not pushed is made all the same: the registry here holds the new key.
+			// The rotation is on the remote, or the store has none: the old key opens nothing that is written from here on.
 			sayDue(sys.Stdout, was, list)
 			fmt.Fprintf(sys.Stdout, "✓ new key in %s\n", fresh)
 			fmt.Fprintf(sys.Stdout, "Back it up. The old key in %s no longer opens the store; delete it when you are sure.\n", old)
-			return err
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&compromised, "compromised", false, "the old key may have leaked: record every secret it could read as due for a new value")

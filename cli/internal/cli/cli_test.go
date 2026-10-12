@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ type fake struct {
 	now       time.Time                                  // System.Now; the zero value means 2026-10-11T12:00:00Z
 	errTTY    bool                                       // StderrIsTerminal
 	noGit     bool                                       // git cannot be found
-	gitFail   string                                     // a git command with this argument fails
+	gitFail   string                                     // a git command with one of these arguments, space separated, fails
 	hostname  string                                     // System.Hostname; "" means test-host
 	execHook  func(proc.Command)                         // called before each git command, when set
 
@@ -71,7 +72,7 @@ func (f *fake) runGit(c proc.Command) ([]byte, []byte, error) {
 	}
 	if f.gitFail != "" {
 		for _, arg := range c.Args {
-			if arg == f.gitFail {
+			if slices.Contains(strings.Fields(f.gitFail), arg) {
 				return nil, []byte("fatal: made to fail\n"), errors.New("exit status 128")
 			}
 		}

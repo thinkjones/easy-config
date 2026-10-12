@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/gitstore"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
 	"github.com/thinkjones/easy-config/cli/internal/paths"
@@ -183,7 +184,7 @@ func newStorePullCmd(sys System) *cobra.Command {
 		Short: "bring the remote's commits into the store",
 		Long: `Fetch from the store's remote and bring its commits in; commits made here are replayed on top of them.
 
-An encrypted file changed both here and on the remote cannot be merged: the remote's version is kept, the names to set again are listed on stderr and the command exits 1. A plaintext file changed in the same place on both sides stops the pull with the store as it was.
+An encrypted file changed both here and on the remote cannot be merged: the remote's version is kept, the names to set again are listed on stderr and the command exits 1. A plaintext file changed in the same place on both sides stops the pull with the store as it was; when it is recipients.yaml or the encryption policy, the message says how to drop the commits made here and make the change again.
 
 Afterwards every encrypted file that is not encrypted for the people recipients.yaml names is named on stderr, and the command exits 1: run ` + "`ezc store rewrap`" + ` before anything is set in it. Prints names and files, never a value.`,
 		Args: noArgs,
@@ -196,7 +197,11 @@ Afterwards every encrypted file that is not encrypted for the people recipients.
 			res, err := g.Pull(dir, storePullTimeout, resolve.IsEncrypted)
 			// Only the conflict itself: when more went wrong, the error says what.
 			if conflict, ok := err.(*gitstore.ConflictError); ok {
-				return conflictRefusal(dir, conflict.Paths)
+				branch := "<branch>"
+				if st, err := g.Status(dir); err == nil {
+					branch = st.Branch
+				}
+				return conflictRefusal(dir, branch, conflict.Paths, policyFiles(sys))
 			}
 			switch {
 			case errors.Is(err, gitstore.ErrDirty):
@@ -246,15 +251,24 @@ Afterwards every encrypted file that is not encrypted for the people recipients.
 	}
 }
 
-// conflictRefusal says which files stopped a pull, and where to resolve them.
-func conflictRefusal(dir string, paths []string) error {
+// conflictRefusal says which files stopped a pull, and where to resolve them. The registry and the policy are
+// written by ezc and cannot be merged: when one of them is among the files, the way out is to drop the commits made
+// here on branch and make the change again.
+func conflictRefusal(dir, branch string, paths, policy []string) error {
 	shown := make([]string, len(paths))
+	access := false
 	for i, path := range paths {
 		shown[i] = quoted(path)
+		file := strings.TrimPrefix(path, ezcDir+"/")
+		access = access || file == recipients.File || slices.Contains(policy, file)
 	}
 	was, it := "was", "it"
 	if len(paths) > 1 {
 		was, it = "were", "them"
+	}
+	if access {
+		origin := "refs/remotes/origin/" + branch
+		return fmt.Errorf("%s %s changed here and on the remote, so nothing was pulled. Who can read the store was changed on two machines at once, and the files ezc writes for that cannot be merged. In %s, `git log %s..HEAD` lists the commits made here that the remote lacks; drop them with `git reset --hard %s`, then make your change again.", strings.Join(shown, ", "), was, dir, origin, origin)
 	}
 	return fmt.Errorf("%s %s changed here and on the remote in the same place, so nothing was pulled. Resolve %s in %s with git (git pull --rebase).", strings.Join(shown, ", "), was, it, dir)
 }
@@ -375,7 +389,7 @@ func newStoreRewrapCmd(sys System) *cobra.Command {
 		Short: "encrypt every file of the store for the people recipients.yaml names",
 		Long: `Write the store's encryption policy from recipients.yaml and re-wrap every encrypted file for exactly the keys it names, in one commit, then push. It is the fix when ` + "`ezc user list`" + ` says a file's recipients differ from the registry.
 
-Needs this machine's key file, and the key must be one recipients.yaml names. Refused while the store is behind its remote or holds uncommitted changes to the files it rewrites. A failure puts the store back as it was. No value is read or printed.`,
+Needs this machine's key file, and the key must be one recipients.yaml names. Refused when the store's remote cannot be reached, while the store is behind it, and while it holds uncommitted changes to the files it rewrites. A failure puts the store back as it was. No value is read or printed.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := openAccess(sys, true)
@@ -385,6 +399,10 @@ Needs this machine's key file, and the key must be one recipients.yaml names. Re
 			changed, err := a.run(change{next: a.reg, message: "rewrap"})
 			if err == nil && !changed {
 				fmt.Fprintln(sys.Stdout, "✓ every file is encrypted for the registry")
+			}
+			if errors.Is(err, backend.ErrNoKey) {
+				// The usual cause is a rotation of this machine's key that the file never saw.
+				return fmt.Errorf("%w A key file this machine used before may still open it: see \"A file this machine's key does not open\" in docs/troubleshooting.md.", err)
 			}
 			return err
 		},

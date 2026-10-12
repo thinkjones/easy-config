@@ -89,7 +89,12 @@ func giveBotKey(sys System, a *access, name, again string, c change, private []b
 		holds := fmt.Sprintf("%s was set in %s to a key the store does not name, which reads nothing", botSecret, strings.Join(given, ", "))
 		var unchanged *unchangedError
 		if errors.As(err, &unchanged) {
-			return out, false, fmt.Errorf("%s. %s. The store was not changed. Run %s again.", strings.TrimSuffix(unchanged.Unwrap().Error(), "."), holds, again)
+			run := "Run " + again
+			if unchanged.then != "" {
+				// The remote moved under the push: this machine has to catch up before it tries again.
+				run = "Run ezc store pull, then run " + again
+			}
+			return out, false, fmt.Errorf("%s. %s. The store was not changed. %s again.", strings.TrimSuffix(unchanged.Unwrap().Error(), "."), holds, run)
 		}
 		return out, false, fmt.Errorf("%s %s. Once the store is as it was, run %s again.", err, holds, again)
 	}

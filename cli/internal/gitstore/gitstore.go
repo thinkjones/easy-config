@@ -76,6 +76,8 @@ var (
 	ErrBranchTaken = errors.New("the remote already has that branch with other content")
 	// ErrBranchMoved is a branch of the remote that is no longer at the commit it was read at.
 	ErrBranchMoved = errors.New("the remote's branch has changed since it was read")
+	// ErrRemoteMoved is a push the remote refused because its branch holds commits the store does not.
+	ErrRemoteMoved = errors.New("the remote has commits the store does not have")
 )
 
 // allBranches is the refspec that maps every branch of origin to its remote-tracking branch.
@@ -436,7 +438,8 @@ func (g Git) count(dir string, n int, args ...string) ([]int, error) {
 }
 
 // Push publishes the branch, creating it on the remote and setting the
-// upstream when needed. pushed is the number of commits sent.
+// upstream when needed. pushed is the number of commits sent. A push the remote
+// refuses because its branch has moved on wraps ErrRemoteMoved.
 func (g Git) Push(dir string) (int, error) {
 	st, err := g.Status(dir)
 	if err != nil {
@@ -449,7 +452,41 @@ func (g Git) Push(dir string) (int, error) {
 		return 0, nil
 	}
 	if err := g.push(dir, st.Branch, 0, "--set-upstream", "origin", head(st.Branch)+":"+head(st.Branch)); err != nil {
+		var tag *TagError
+		if !errors.As(err, &tag) && g.moved(dir, st.Branch) {
+			return 0, fmt.Errorf("git: %w", ErrRemoteMoved)
+		}
 		return 0, err
 	}
 	return st.Ahead, nil
+}
+
+// moved reports whether origin's branch is at a commit the store's last commit does not come after, asked of
+// origin now. A remote that cannot be asked has not been seen to move.
+func (g Git) moved(dir, branch string) bool {
+	now, err := g.onRemote(dir, branch, 0)
+	if err != nil || now == "" {
+		return false
+	}
+	// A commit the store has never fetched is not an ancestor of anything here.
+	_, err = g.run(dir, 0, "merge-base", "--is-ancestor", now, "HEAD")
+	return err != nil
+}
+
+// Head is the commit the store is at.
+func (g Git) Head(dir string) (string, error) {
+	return g.revParse(dir, "HEAD")
+}
+
+// Uncommit takes back the commit made on top of parent while the store's branch is still at it: the branch
+// returns to parent, and the index and the work tree are left as they are. The files the commit changed are
+// then for Restore to put back, and no other file is touched. A branch that is elsewhere by now is left alone.
+func (g Git) Uncommit(dir, parent, made string) error {
+	out, err := g.run(dir, 0, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		return fmt.Errorf("git: %w", ErrNoBranch)
+	}
+	// The branch by its full name, and the commit it must be at for git to move it.
+	_, err = g.run(dir, 0, "update-ref", "-m", "ezc: take back a commit that was not pushed", strings.TrimSpace(string(out)), parent, made)
+	return err
 }
