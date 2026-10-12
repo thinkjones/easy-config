@@ -29,6 +29,8 @@ The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-
 | `cli/internal/doctor` | Reports the health of the machine, the store and the repo (`ezc doctor`): checks, warnings and problems with their fixes, and the files in a `.ezc/` that ezc does not read. Never a value. |
 | `cli/cmd/ezc` | `main.go` wires the process into `cli.Run` and holds the version. Its tests drive the built binary: `store_test.go` (setup, two machines, sync, `setup --ci`) and `access_test.go` (join and approve, remove, bots, rotate) with real git and real sops, and a fake `gh` that only records. |
 | `bin/ezc` | Shim that builds `cli/bin/ezc` when a Go source changes and runs it; `direnv allow` puts `bin/` on PATH. |
+| `README.md`, `docs/*.md` | User docs. The README is the homepage (what ezc is, quick start, a short command table); `docs/` holds the detail: `setup.md`, `store.md`, `access.md`, `ci.md`, `reference.md` (every command and flag, files, encryption, resolution) and `troubleshooting.md`. A command, flag or message that changes is changed there in the same commit. |
+| `assets/readme/` | The README's SVGs (hero, layering diagram), written by hand: light background `#f8fafc`, text `#0f172a`, accent `#e85d26`, corners 4px at most, system fonts only. Render with `rsvg-convert -w 900` to check one. |
 | `docs/superpowers/` | Design specs and implementation plans. Historical: never rewrite them to match the code. |
 | `LICENSE` | MIT. |
 
