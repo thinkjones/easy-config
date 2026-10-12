@@ -225,6 +225,19 @@ func (a *access) effect(c change) (effect, error) {
 			}
 		}
 	}
+	// The policy decides who a file made from now on is for, and in a store with no encrypted file it is all
+	// there is to compare: a name it lacks, and that no file above already showed, gains what is set next.
+	policy, err := a.b.PolicyRecipients(filepath.Join(a.dir, "common.enc.yaml"))
+	if err != nil && !errors.Is(err, backend.ErrNoPolicy) {
+		return e, errors.New("cannot read who the store's encryption policy names.")
+	}
+	if err == nil {
+		for _, name := range slices.Sorted(maps.Keys(c.next.Recipients)) {
+			if key := c.next.Recipients[name].Key; len(e.gains[name]) == 0 && !slices.Contains(policy, key) && !slices.Contains(own, key) {
+				e.gains[name] = []string{"secrets set from now on"}
+			}
+		}
+	}
 	return e, nil
 }
 
@@ -349,6 +362,8 @@ func (a *access) run(c change) (changed bool, err error) {
 		// Git saw nothing to commit in files whose bytes changed: it ignores them.
 		return false, undo(fmt.Errorf("the change could not be committed: git ignores the store's files in %s", a.dir))
 	}
+	// The commit just made, read now: one another command makes while the push runs is never taken back.
+	made, madeErr := g.Head(a.sync.Dir)
 	remote := a.sync.Status.Remote
 	if remote == "" {
 		fmt.Fprintf(a.sys.Stdout, "✓ %s\n", c.message)
@@ -356,7 +371,7 @@ func (a *access) run(c change) (changed bool, err error) {
 	}
 	if _, err := g.Push(a.sync.Dir); err != nil {
 		moved := errors.Is(err, gitstore.ErrRemoteMoved)
-		if (moved || c.pushed) && parentErr == nil && a.uncommit(parent) {
+		if (moved || c.pushed) && parentErr == nil && madeErr == nil && a.uncommit(parent, made) {
 			// The store's branch is where it was: only the commit's own files are left to put back.
 			cause := &unchangedError{err: fmt.Errorf("The push failed (%s)", gitReason(err))}
 			if moved {
@@ -375,12 +390,11 @@ func (a *access) run(c change) (changed bool, err error) {
 	return true, nil
 }
 
-// uncommit takes back the commit run just made on top of parent, and reports whether the store's branch is at
-// parent again. Nothing in the work tree is touched: restore puts the commit's files back.
-func (a *access) uncommit(parent string) bool {
-	g := storeGit(a.sys)
-	made, err := g.Head(a.sync.Dir)
-	return err == nil && made != parent && g.Uncommit(a.sync.Dir, parent, made) == nil
+// uncommit takes back made, the commit run made on top of parent, and reports whether the store's branch is at
+// parent again; it is not when the branch has moved on from made. Nothing in the work tree is touched: restore
+// puts the commit's files back.
+func (a *access) uncommit(parent, made string) bool {
+	return made != parent && storeGit(a.sys).Uncommit(a.sync.Dir, parent, made) == nil
 }
 
 // write does everything of a change that comes before its commit.

@@ -300,3 +300,45 @@ func TestUserApproveAsksAboutSomebodyElseToo(t *testing.T) {
 		t.Fatalf("%v\nstdout %q\nstderr %q", err, out, errOut)
 	}
 }
+
+// A store with no encrypted file yet has only its policy to compare: a name written into the registry with git
+// would otherwise be written into the policy unseen, and every secret set afterwards encrypted for it.
+func TestAccessChangeAsksInAStoreWithNoEncryptedFile(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	other := filepath.Join(x.other, ezcDir)
+	for _, name := range []string{"common.enc.yaml", "env.prod.enc.yaml"} {
+		if err := os.Remove(filepath.Join(other, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reg := accessRegistry(t, other)
+	reg.Recipients["mallory"] = recipients.Recipient{Key: accessStray, Kind: recipients.KindUser, Added: "2026-10-11", AddedBy: "mallory"}
+	if err := reg.Save(other); err != nil {
+		t.Fatal(err)
+	}
+	effectPushed(t, x, "tidy")
+	if _, _, err := storeCmdRun(f, "pull"); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(x.store, ezcDir)
+	head, before := x.git("rev-parse", "HEAD"), setupSnapshot(t, dir)
+	const gains = "! mallory gains access to secrets set from now on.\n"
+	out, _, err := accessRun(f, "store", "rewrap")
+	wantUsage(t, err, "ezc store rewrap: this would let mallory read the store. Say --yes to do that without being asked: there is no terminal to ask on.")
+	if out != gains {
+		t.Fatalf("stdout %q", out)
+	}
+	out, _, err = accessRun(f, "user", "add", "sam", accessSam)
+	if err == nil || out != gains {
+		t.Fatalf("%v\nstdout %q", err, out)
+	}
+	if x.git("rev-parse", "HEAD") != head || !mapsEqual(before, setupSnapshot(t, dir)) {
+		t.Fatal("the store was changed")
+	}
+	out, _, err = accessRun(f, "user", "add", "sam", accessSam, "--yes")
+	if err != nil || out != gains+"✓ add sam\n✓ pushed to "+x.bare+"\n" {
+		t.Fatalf("%v\nstdout %q", err, out)
+	}
+}
