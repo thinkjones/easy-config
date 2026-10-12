@@ -92,6 +92,7 @@ Then compare the keys each encrypted file is encrypted for with the registry, an
 
 func newUserAddCmd(sys System) *cobra.Command {
 	var kind, owner string
+	var yes bool
 	cmd := &cobra.Command{
 		Use:   "add <name> <key>",
 		Short: "let a person or one of their machines read the store",
@@ -99,7 +100,9 @@ func newUserAddCmd(sys System) *cobra.Command {
 
 The key is the public one, which ` + "`ezc setup --store`" + ` prints on a machine that cannot read the store yet. Never pass a private key. A machine (--kind machine) is a second key of a user who is already a recipient, named with --owner.
 
-Needs this machine's key file, and the key must be one recipients.yaml names. Refused when the store's remote cannot be reached, while the store is behind it, and while it holds uncommitted changes to the files it rewrites. A failure puts the store back as it was. So does a push the remote refuses because it moved in the meantime: run ` + "`ezc store pull`" + ` and the command again. A push that fails for another reason leaves the commit, and ` + "`ezc store push`" + ` sends it.`,
+Needs this machine's key file, and the key must be one recipients.yaml names. Refused when the store's remote cannot be reached, while the store is behind it, and while it holds uncommitted changes to the files it rewrites. A failure puts the store back as it was. So does a push the remote refuses because it moved in the meantime: run ` + "`ezc store pull`" + ` and the command again. A push that fails for another reason leaves the commit, and ` + "`ezc store push`" + ` sends it.
+
+When the change would also let in a name it was not asked about, one that recipients.yaml holds and no file is encrypted for yet, the command names it and asks ` + "`Let them in too? [y/N]`" + ` before it changes anything; --yes answers in advance, and is needed for that when there is no terminal. Every command that changes who can read the store does the same.`,
 		Args: exactArgs(2, "a name and a public key"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, key := args[0], args[1]
@@ -132,16 +135,18 @@ Needs this machine's key file, and the key must be one recipients.yaml names. Re
 			if err != nil {
 				return fmt.Errorf("%w.", err)
 			}
-			return a.apply(change{next: next, message: "add " + name, subject: name})
+			return a.apply(change{next: next, message: "add " + name, subject: name, confirm: alsoLetsIn(sys, cmd, yes, nil)})
 		},
 	}
+	alsoYes(cmd, &yes)
 	cmd.Flags().StringVar(&kind, "kind", recipients.KindUser, "user, or machine for a second key of a user")
 	cmd.Flags().StringVar(&owner, "owner", "", "the user a machine belongs to")
 	return cmd
 }
 
 func newUserRemoveCmd(sys System) *cobra.Command {
-	return &cobra.Command{
+	var yes bool
+	cmd := &cobra.Command{
 		Use:   "remove <name>",
 		Short: "stop a person or one of their machines reading the store",
 		Long: `Remove name from recipients.yaml, write the encryption policy from it and re-wrap every encrypted file for the new list, in one commit, then push. Then list the secrets the removed key could read, which need new values, as the ` + "`ezc set -g`" + ` command for each: they are recorded in rotation-due.yaml, and ` + "`ezc set -g`" + ` or ` + "`ezc unset -g`" + ` of one clears its entry.
@@ -183,7 +188,7 @@ Refused for a bot (` + "`ezc bot remove`" + `), for the last recipient, for a us
 			if err != nil {
 				return err
 			}
-			err = a.apply(change{next: next, message: "remove " + name, subject: name, due: due})
+			err = a.apply(change{next: next, message: "remove " + name, subject: name, due: due, confirm: alsoLetsIn(sys, cmd, yes, nil)})
 			var unpushed *unpushedError
 			if err != nil && !errors.As(err, &unpushed) {
 				return err
@@ -193,6 +198,8 @@ Refused for a bot (` + "`ezc bot remove`" + `), for the last recipient, for a us
 			return err
 		},
 	}
+	alsoYes(cmd, &yes)
+	return cmd
 }
 
 // otherWayIn is whether a recipient other than name is the same person: a user of that name, or a machine of that user.
@@ -431,7 +438,9 @@ Needs this machine's key file, as ` + "`ezc user add`" + ` does, and refuses a n
 			// Approved already, by a run whose push or whose clean-up failed: only what is left of the request goes.
 			cur, already := a.reg.Recipients[name]
 			already = already && cur.Key == q.Req.Key
-			c := change{message: "approve " + name, subject: name}
+			// One reader for both questions: a second one would not see what the first has read ahead.
+			ask := &asker{sys: sys, in: bufio.NewReader(sys.Stdin)}
+			c := change{message: "approve " + name, subject: name, confirm: alsoLetsIn(sys, cmd, yes, ask)}
 			if q.File {
 				c.remove = []string{recipients.RequestPath(name)}
 			}
@@ -455,7 +464,7 @@ Needs this machine's key file, as ` + "`ezc user add`" + ` does, and refuses a n
 			// The key is shown before anything is changed, and q is what is added: nothing reads the request again.
 			showRequest(sys.Stdout, q)
 			if !already && !yes {
-				switch strings.ToLower((&asker{sys: sys, in: bufio.NewReader(sys.Stdin)}).ask("Approve " + name + "? [y/N] ")) {
+				switch strings.ToLower(ask.ask("Approve " + name + "? [y/N] ")) {
 				case "y", "yes":
 				default:
 					fmt.Fprintln(sys.Stdout, "Not approved.")
@@ -562,9 +571,9 @@ func freshKeyFile(old string, today string) (string, error) {
 }
 
 func newUserRotateCmd(sys System) *cobra.Command {
-	var compromised bool
+	var compromised, yes bool
 	cmd := &cobra.Command{
-		Use:   "rotate [--compromised]",
+		Use:   "rotate [--compromised] [--yes]",
 		Short: "give this machine a new key in a new file; the old key stops opening the store",
 		Long: `Create a new key in a new file beside this machine's key file, named like it with the date added (keys-20261011.txt), replace this machine's key in recipients.yaml, write the encryption policy and re-wrap every encrypted file, in one commit named ` + "`rotate <name>`" + `, then push. Then key_file in config.toml names the new file. From that commit on the old key opens no file.
 
@@ -648,7 +657,7 @@ Needs this machine's key file, as every change to who can read the store does, a
 				return giveUp(fmt.Errorf("%w.", err))
 			}
 			// A rotation that stays on this machine leaves it reading with a key the remote's files are not for.
-			c := change{next: next, message: "rotate " + a.myName, subject: a.myName, pushed: true}
+			c := change{next: next, message: "rotate " + a.myName, subject: a.myName, pushed: true, confirm: alsoLetsIn(sys, cmd, yes, nil)}
 			was := a.myName + " (old key)"
 			var list []string
 			if compromised {
@@ -690,5 +699,6 @@ Needs this machine's key file, as every change to who can read the store does, a
 		},
 	}
 	cmd.Flags().BoolVar(&compromised, "compromised", false, "the old key may have leaked: record every secret it could read as due for a new value")
+	alsoYes(cmd, &yes)
 	return cmd
 }

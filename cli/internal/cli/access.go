@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -10,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/gitstore"
@@ -141,7 +144,8 @@ type change struct {
 	// loses access to a file by the change is named before it is made.
 	subject string
 	// confirm is asked, before anything is written, when the change lets names other than its subject read a
-	// file they could not read; its error stops the change. nil does not ask.
+	// file they could not read; its error stops the change. Every command sets it: alsoLetsIn for one that has a
+	// subject. nil does not ask.
 	confirm func(names []string) error
 	// pushed says the change is of no use until the remote has it: a push that fails for any reason takes the
 	// commit back. Without it only a push the remote refused because it moved does.
@@ -152,9 +156,13 @@ type change struct {
 type unchangedError struct {
 	err  error
 	then string // what to do before running the command again; "" when there is nothing
+	said bool   // err's own text is the whole message: it was stopped before a byte was written
 }
 
 func (e *unchangedError) Error() string {
+	if e.said {
+		return e.err.Error()
+	}
 	msg := strings.TrimSuffix(e.err.Error(), ".") + ". Nothing was changed."
 	if e.then != "" {
 		msg += " " + e.then
@@ -261,20 +269,48 @@ func (a *access) strangersDue(e effect, due func(recipients.Due)) (func(recipien
 	}, nil
 }
 
+// alsoLetsIn is the confirm of a command that has a subject: the change would let in names it was not asked
+// about, which the registry holds and no file is encrypted for yet. yes goes on; a terminal is asked on stderr,
+// through ask when the command has asked a question of its own; without either the change is refused.
+func alsoLetsIn(sys System, cmd *cobra.Command, yes bool, ask *asker) func(names []string) error {
+	return func(names []string) error {
+		switch {
+		case yes:
+			return nil
+		case !sys.StdinIsTerminal():
+			return usagef("%s: this would also let %s read the store. Check ezc user list: pass --yes when that is right, or take the name out with ezc user remove first. Try `%s`.", cmd.CommandPath(), someNames(names), helpFor(cmd))
+		}
+		if ask == nil {
+			ask = &asker{sys: sys, in: bufio.NewReader(sys.Stdin)}
+		}
+		switch strings.ToLower(ask.ask("Let them in too? [y/N] ")) {
+		case "y", "yes":
+			return nil
+		}
+		return errors.New("Nothing was changed.")
+	}
+}
+
+// alsoYes adds the --yes that answers alsoLetsIn's question in advance.
+func alsoYes(cmd *cobra.Command, yes *bool) {
+	cmd.Flags().BoolVar(yes, "yes", false, "also let in whoever else recipients.yaml names, without being asked; needed for that when there is no terminal")
+}
+
 // run is apply, and whether it changed a file: a change that leaves every byte as it was commits and pushes nothing.
 func (a *access) run(c change) (changed bool, err error) {
 	// Who else the change lets in or shuts out is said, and asked about, before a byte is written.
 	e, err := a.effect(c)
 	if err != nil {
-		return false, err
+		return false, &unchangedError{err: err}
 	}
 	if c.due, err = a.strangersDue(e, c.due); err != nil {
-		return false, err
+		return false, &unchangedError{err: err}
 	}
 	a.announce(e)
 	if len(e.gains) > 0 && c.confirm != nil {
 		if err := c.confirm(slices.Sorted(maps.Keys(e.gains))); err != nil {
-			return false, err
+			// The answer's own error, a usage error or an exit status, is what the command ends with.
+			return false, &unchangedError{err: err, said: true}
 		}
 	}
 	files := append([]string{recipients.File, recipients.DueFile}, policyFiles(a.sys)...)
@@ -324,7 +360,7 @@ func (a *access) run(c change) (changed bool, err error) {
 			// The store's branch is where it was: only the commit's own files are left to put back.
 			cause := &unchangedError{err: fmt.Errorf("The push failed (%s)", gitReason(err))}
 			if moved {
-				cause = &unchangedError{errors.New("The store's remote changed while this ran"), pullFirst}
+				cause = &unchangedError{err: errors.New("The store's remote changed while this ran"), then: pullFirst}
 			}
 			if rerr := a.restore(files, before); rerr != nil {
 				return false, fmt.Errorf("%s. %w", strings.TrimSuffix(cause.err.Error(), "."), rerr)

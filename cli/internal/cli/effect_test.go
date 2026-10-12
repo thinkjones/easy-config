@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -97,7 +100,7 @@ func TestAccessChangeSaysWhoElseItLetsIn(t *testing.T) {
 		t.Fatalf("stdout %q\nstderr\n%s\nwant\n%s", out, errOut, want)
 	}
 
-	out, _, err = accessRun(f, "user", "add", "sam", accessSam)
+	out, _, err = accessRun(f, "user", "add", "sam", accessSam, "--yes")
 	if err != nil || out != "! mallory gains access to common.enc.yaml, env.prod.enc.yaml.\n✓ add sam\n✓ pushed to "+x.bare+"\n" {
 		t.Fatalf("%v\nstdout %q", err, out)
 	}
@@ -140,4 +143,160 @@ func TestPullSaysWhenTheRegistryChanged(t *testing.T) {
 	}
 	storeCmdWant(t, sam, "pushed 1 commit to origin\n", "push")
 	storeCmdWant(t, f, "pulled 1 commit from origin\n", "pull")
+}
+
+const (
+	effectIntruderKey = "fake1ee05"
+	effectAlso        = "! mallory gains access to common.enc.yaml, env.prod.enc.yaml.\n"
+	effectAsk         = "Let them in too? [y/N] "
+)
+
+// effectIntruder is a store gene, sam and the bot ci (repo o/a) read, into whose registry the name mallory was
+// written with git alone: no file is encrypted for its key.
+func effectIntruder(t *testing.T, f *fake) storeWriteFix {
+	t.Helper()
+	x := accessStoreWith(t, f, map[string]recipients.Recipient{
+		"gene": accessEntry(accessGene),
+		"sam":  accessEntry(accessSam),
+		"ci":   {Key: accessStray, Kind: recipients.KindBot, Added: "2026-10-01", AddedBy: "gene", Repos: []string{"o/a"}},
+	}, accessGene, accessSam, accessStray)
+	dir := filepath.Join(x.store, ezcDir)
+	reg := accessRegistry(t, dir)
+	reg.Recipients["mallory"] = recipients.Recipient{Key: effectIntruderKey, Kind: recipients.KindUser, Added: "2026-10-11", AddedBy: "mallory"}
+	if err := reg.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := x.g.Commit(x.store, "tidy", gitstore.Author{}, ezcDir); err != nil || !done {
+		t.Fatalf("commit: %v %v", done, err)
+	}
+	x.push(x.store)
+	return x
+}
+
+// effectChanges are the access changes that have a subject, each of which would let mallory in besides.
+var effectChanges = [][]string{
+	{"user", "add", "zed", "fake1dd04"},
+	{"user", "remove", "sam"},
+	{"user", "rotate"},
+	{"bot", "add", "deploy", "--repo", "o/b"},
+	{"bot", "remove", "ci"},
+	{"bot", "rotate", "ci"},
+}
+
+// effectUntouched runs a command that must change nothing in the store, deliver no key and make no key file, and
+// returns what it printed and its error.
+func effectUntouched(t *testing.T, f *fake, x storeWriteFix, g *botFake, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	dir := filepath.Join(x.store, ezcDir)
+	head, before, config := x.git("rev-parse", "HEAD"), setupSnapshot(t, dir), readFile(t, setupConfig(f))
+	stdout, stderr, err = accessRun(f, args...)
+	if x.git("rev-parse", "HEAD") != head || !mapsEqual(before, setupSnapshot(t, dir)) {
+		t.Fatalf("%v changed the store", args)
+	}
+	x.wantClean()
+	if len(g.calls) != 0 {
+		t.Fatalf("%v ran gh: %+v", args, g.calls)
+	}
+	if _, serr := os.Stat(rotateNew(f, "")); serr == nil || readFile(t, setupConfig(f)) != config {
+		t.Fatalf("%v left a key file or changed the config", args)
+	}
+	return stdout, stderr, err
+}
+
+// Without a terminal, a change that would let in somebody it was not asked about is refused unless --yes says so.
+func TestAccessChangeNeedsYesToLetSomebodyElseIn(t *testing.T) {
+	f := newFake(t)
+	x := effectIntruder(t, f)
+	g := botFakeGh(f)
+	for _, args := range effectChanges {
+		out, errOut, err := effectUntouched(t, f, x, g, args...)
+		wantUsage(t, err, "this would also let mallory read the store. Check ezc user list: pass --yes when that is right, or take the name out with ezc user remove first.")
+		if out != effectAlso || errOut != "" {
+			t.Fatalf("%v: stdout %q, stderr %q", args, out, errOut)
+		}
+	}
+}
+
+// On a terminal it asks, on stderr, and anything but yes changes nothing.
+func TestAccessChangeAsksBeforeItLetsSomebodyElseIn(t *testing.T) {
+	f := newFake(t)
+	x := effectIntruder(t, f)
+	g := botFakeGh(f)
+	f.tty = true
+	for _, args := range effectChanges {
+		for _, answer := range []string{"n\n", ""} {
+			f.stdin = answer
+			out, errOut, err := effectUntouched(t, f, x, g, args...)
+			var usage *UsageError
+			if err == nil || err.Error() != "Nothing was changed." || errors.As(err, &usage) {
+				t.Fatalf("%v, answer %q: got %v", args, answer, err)
+			}
+			if out != effectAlso || errOut != effectAsk {
+				t.Fatalf("%v: stdout %q, stderr %q", args, out, errOut)
+			}
+		}
+	}
+
+	f.stdin = "y\n"
+	out, errOut, err := accessRun(f, "user", "add", "zed", "fake1dd04")
+	if err != nil || out != effectAlso+"✓ add zed\n✓ pushed to "+x.bare+"\n" || errOut != effectAsk {
+		t.Fatalf("%v\nstdout %q\nstderr %q", err, out, errOut)
+	}
+}
+
+// --yes goes on without a question, with or without a terminal, and a bot's key is then delivered.
+func TestAccessChangeWithYesLetsSomebodyElseIn(t *testing.T) {
+	for _, args := range effectChanges {
+		f := newFake(t)
+		x := effectIntruder(t, f)
+		botFakeGh(f)
+		out, errOut, err := accessRun(f, append(args, "--yes")...)
+		if err != nil || !strings.HasPrefix(out, effectAlso+"✓ ") || errOut != "" {
+			t.Fatalf("%v: %v\nstdout %q\nstderr %q", args, err, out, errOut)
+		}
+		got, rerr := f.backend.Recipients(x.file("common.enc.yaml"))
+		if rerr != nil || !slices.Contains(got, effectIntruderKey) {
+			t.Fatalf("%v: common.enc.yaml is for %q (%v)", args, got, rerr)
+		}
+	}
+}
+
+// A change that only takes a key nobody names off the files lets nobody in, and asks nothing.
+func TestAccessChangeThatOnlyShutsOutDoesNotAsk(t *testing.T) {
+	f := newFake(t)
+	x := agreeStale(t, f)
+	accessWant(t, f, effectLoses+"✓ add sam\n✓ pushed to "+x.bare+"\n", "user", "add", "sam", accessSam)
+}
+
+// approve asks its own question first; its --yes answers both.
+func TestUserApproveAsksAboutSomebodyElseToo(t *testing.T) {
+	j := joinMachines(t)
+	j.join(j.b, "--name", "sam")
+	dir := filepath.Join(j.x.store, ezcDir)
+	reg := accessRegistry(t, dir)
+	reg.Recipients["mallory"] = recipients.Recipient{Key: effectIntruderKey, Kind: recipients.KindUser, Added: "2026-10-11", AddedBy: "mallory"}
+	if err := reg.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := j.x.g.Commit(j.x.store, "tidy", gitstore.Author{}, ezcDir); err != nil {
+		t.Fatal(err)
+	}
+	j.x.push(j.x.store)
+	head := j.x.git("rev-parse", "HEAD")
+
+	j.a.tty, j.a.stdin = true, "y\nn\n"
+	out, errOut, err := accessRun(j.a, "user", "approve", "sam")
+	if err == nil || err.Error() != "Nothing was changed." || errOut != "Approve sam? [y/N] "+effectAsk || !strings.HasSuffix(out, effectAlso) {
+		t.Fatalf("%v\nstdout %q\nstderr %q", err, out, errOut)
+	}
+	if j.x.git("rev-parse", "HEAD") != head || !slices.Equal(j.branches(), []string{joinBranch, "main"}) {
+		t.Fatal("the store or the branch changed")
+	}
+	j.x.wantClean()
+
+	j.a.tty, j.a.stdin = false, ""
+	out, errOut, err = accessRun(j.a, "user", "approve", "sam", "--yes")
+	if err != nil || !strings.Contains(out, effectAlso+"✓ approve sam\n") || errOut != "" {
+		t.Fatalf("%v\nstdout %q\nstderr %q", err, out, errOut)
+	}
 }

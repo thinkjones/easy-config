@@ -122,7 +122,7 @@ func giveBotKey(sys System, a *access, name, again string, c change, private []b
 
 func newBotAddCmd(sys System) *cobra.Command {
 	var repos []string
-	var printPrivate bool
+	var printPrivate, yes bool
 	cmd := &cobra.Command{
 		Use:   "add <name> --repo owner/repo… [--print-private]",
 		Short: "give a bot a key that reads the store, and save it in the repos that use it",
@@ -183,7 +183,7 @@ Needs this machine's key file, as every change to who can read the store does, a
 			if err != nil {
 				return fmt.Errorf("%w.", err)
 			}
-			out, done, err := giveBotKey(sys, a, name, "the same ezc bot add", change{next: next, message: "add bot " + name, subject: name}, private, to, printPrivate)
+			out, done, err := giveBotKey(sys, a, name, "the same ezc bot add", change{next: next, message: "add bot " + name, subject: name, confirm: alsoLetsIn(sys, cmd, yes, nil)}, private, to, printPrivate)
 			if done {
 				fmt.Fprintln(out, botStoreNote)
 			}
@@ -192,11 +192,13 @@ Needs this machine's key file, as every change to who can read the store does, a
 	}
 	cmd.Flags().StringArrayVar(&repos, "repo", nil, "a GitHub repo, as owner/repo, whose Actions get the key; repeat it for more")
 	cmd.Flags().BoolVar(&printPrivate, "print-private", false, "print the bot's private key on stdout, and everything else on stderr")
+	alsoYes(cmd, &yes)
 	return cmd
 }
 
 func newBotRemoveCmd(sys System) *cobra.Command {
-	return &cobra.Command{
+	var yes bool
+	cmd := &cobra.Command{
 		Use:   "remove <name>",
 		Short: "stop a bot reading the store, and delete its key from its repos",
 		Long: `Remove the bot name from recipients.yaml, write the encryption policy and re-wrap every encrypted file without its key, in one commit named ` + "`remove bot <name>`" + `, then push. Then delete the ` + botSecret + ` Actions secret from each repo the bot's entry names, through gh; a repo it could not be deleted from is named on a ` + "`!`" + ` line, and the bot is removed all the same.
@@ -231,7 +233,7 @@ Refused for an entry that is not a bot (` + "`ezc user remove`" + `). Needs this
 			if err != nil {
 				return err
 			}
-			err = a.apply(change{next: next, message: "remove bot " + name, subject: name, due: due})
+			err = a.apply(change{next: next, message: "remove bot " + name, subject: name, due: due, confirm: alsoLetsIn(sys, cmd, yes, nil)})
 			var unpushed *unpushedError
 			if err != nil && !errors.As(err, &unpushed) {
 				return err
@@ -242,6 +244,8 @@ Refused for an entry that is not a bot (` + "`ezc user remove`" + `). Needs this
 			return err
 		},
 	}
+	alsoYes(cmd, &yes)
+	return cmd
 }
 
 // deleteBotSecrets deletes a removed bot's key from its repos and says how each went. The repos come from the
@@ -270,7 +274,7 @@ func deleteBotSecrets(sys System, repos []string) {
 }
 
 func newBotRotateCmd(sys System) *cobra.Command {
-	var printPrivate, compromised bool
+	var printPrivate, compromised, yes bool
 	cmd := &cobra.Command{
 		Use:   "rotate <name> [--print-private] [--compromised]",
 		Short: "replace a bot's key, and save the new one in its repos",
@@ -317,7 +321,7 @@ Needs this machine's key file, and gh when the entry names a repo.`,
 			if err != nil {
 				return fmt.Errorf("%w.", err)
 			}
-			c := change{next: next, message: "rotate bot " + name, subject: name}
+			c := change{next: next, message: "rotate bot " + name, subject: name, confirm: alsoLetsIn(sys, cmd, yes, nil)}
 			// Decision 6: a key that never left its repos leaks nothing by being replaced.
 			old := name + " (old key)"
 			var list []string
@@ -335,5 +339,6 @@ Needs this machine's key file, and gh when the entry names a repo.`,
 	}
 	cmd.Flags().BoolVar(&printPrivate, "print-private", false, "print the bot's new private key on stdout, and everything else on stderr")
 	cmd.Flags().BoolVar(&compromised, "compromised", false, "the old key may have leaked: record every secret it could read as due for a new value")
+	alsoYes(cmd, &yes)
 	return cmd
 }
