@@ -106,7 +106,7 @@ func (f *fake) sys() System {
 			f.children = append(f.children, append(call, env...))
 			return f.childExit, nil
 		},
-		Version: "0.3.0",
+		Version: "0.4.0",
 		Exec: func(c proc.Command) ([]byte, []byte, error) {
 			if c.Name == "git" {
 				return f.runGit(c)
@@ -183,7 +183,7 @@ func TestVersion(t *testing.T) {
 	if err := f.run("version"); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.out.String(); got != "ezc 0.3.0\n" {
+	if got := f.out.String(); got != "ezc 0.4.0\n" {
 		t.Fatalf("got %q", got)
 	}
 }

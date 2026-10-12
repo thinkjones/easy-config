@@ -23,7 +23,7 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/proc"
 )
 
-const version = "0.3.0"
+const version = "0.4.0"
 
 func main() {
 	os.Exit(run())

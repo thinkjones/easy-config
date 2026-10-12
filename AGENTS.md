@@ -2,18 +2,18 @@
 
 Router for agents working in this repo: the source code of `ezc` ("easy config"), a Go CLI that composes a repo's environment from a global store of secrets and variables and the repo's own `.ezc/`, validates it against a manifest, and exports it or runs a command with it. Read the linked file for detail; this page is only where things are.
 
-The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-10-ezc-design.md); parts 1 (core), 2 (secrets) and 3 (`ezc setup`, the store as a git repo, and its sync) are built. Part 4 (access) is being built: `ezc user list`, `add` and `remove`, the rotation-due list, `ezc store rewrap`, `ezc join` and `ezc user requests`, `approve` and `deny` are there; bots and CI setup are not yet.
+The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-10-ezc-design.md); parts 1 (core), 2 (secrets) and 3 (`ezc setup`, the store as a git repo, and its sync) are built. Part 4 (access) is built too: `ezc join`, `ezc user list`, `add`, `remove`, `requests`, `approve`, `deny` and `rotate`, `ezc bot add`, `remove` and `rotate`, the rotation-due list, `ezc store rewrap` and `ezc setup --ci`.
 
 ## Where things are
 
 | Path | What it is |
 | --- | --- |
 | `cli/` | `ezc`, the Go CLI. Every command is in `cli/internal/cli`; `cli/cmd/ezc` only wires the process into `cli.Run`. |
-| `cli/internal/backend` | The interface to an encryption tool (`Name`, `Check`, `HasPolicy`, `Inspect`, `Decrypt`, `Set`, `Unset`, `Edit`, and for setup `NewKey`, `PublicKey`, `WritePolicy`, `ToolHint`, `BrewFormula`), a fake for tests that needs no tool (it keeps files in its own format on disk), and `backendtest`, the contract every backend passes. |
-| `cli/internal/backend/sops` | The one place that knows `sops` exists: runs the program, picks the age key (a key file, or the key's text from `Options.Key`), makes a new key and reads a key file's public half, writes a folder's policy from a list of public keys, and turns its failures into fixed messages. |
+| `cli/internal/backend` | The interface to an encryption tool (`Name`, `Check`, `HasPolicy`, `Inspect`, `Decrypt`, `Set`, `Unset`, `Edit`, for setup `NewKey`, `PublicKey`, `WritePolicy`, `ToolHint`, `BrewFormula`, and for access `Recipients`, `Rewrap`, `CanDecrypt`, `ValidKey`, `ValidRecipient`), a fake for tests that needs no tool (it keeps files in its own format on disk), and `backendtest`, the contract every backend passes. |
+| `cli/internal/backend/sops` | The one place that knows `sops` exists: runs the program, picks the age key (a key file, or the key's text from `Options.Key`), makes a new key and reads a key file's public half, writes a folder's policy from a list of public keys, reads a file's recipients, re-wraps it (with a new data key when a recipient leaves), and turns its failures into fixed messages. |
 | `cli/internal/paths` | Where ezc keeps things on a machine: `EZC_HOME`, and in it `config.toml`, `state.json` and the store. |
 | `cli/internal/config` | Loads and saves the machine's `config.toml`: `user`, `backend`, `key_file` and the store's `remote`. |
-| `cli/internal/recipients` | The registry of who can decrypt a store, its `.ezc/recipients.yaml`: load, save, the list of keys the policy is written from, and the rule for a recipient's name (`^[a-z0-9][a-z0-9-]*$`). |
+| `cli/internal/recipients` | The registry of who can decrypt a store, its `.ezc/recipients.yaml`: load, save, the changes to it (`With`, `Without`, `WithKey`), the list of keys the policy is written from, and the rule for a recipient's name (`^[a-z0-9][a-z0-9-]*$`). Also a join request (`Request`, `ParseRequest`, `.ezc/requests/<name>.yaml`), the secrets that need a new value (`Due`, `.ezc/rotation-due.yaml`), the change sequence every access change runs (`Apply`: registry, policy, re-wrap, check, and everything put back when a step fails), `Differences` between the files and the registry, and `Printable`, which makes text from a remote safe for a terminal. |
 | `cli/internal/proc` | The description of a child process (`Command`) and the runner type the backend is given, so tests can fake it. |
 | `cli/internal/valuefile` | Edits plaintext values files and manifests in place (`ezc set` and `unset`): comments kept, written through a temp file and rename, read back before it replaces the old. |
 | `cli/internal/storeaudit` | Audits a store's values files against its manifest (`ezc store audit`): undeclared, missing, secret-boundary, leak, placeholder and shape findings, never a value. |
@@ -21,12 +21,13 @@ The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-
 | `cli/internal/cli/sync.go` | What a command learns about the store before it uses it: the fetch every 10 minutes recorded in `$EZC_HOME/state.json`, the `store:` line on stderr, the pending access requests (`requests`, `pendingRequests`), the refusal to write while behind or while the store's state cannot be read, and the commit after a write. |
 | `cli/internal/cli/storecmd.go` | `ezc store status`, `pull`, `push`, `rewrap` and `audit`. Pull turns the files `gitstore` replaced into the `ezc set -g` lines to run again, from `valuefile.ChangedNames`: names only. |
 | `cli/internal/cli/access.go` | The one path every change to who can decrypt the store takes: `openAccess` (the store, its registry, this machine's key, and every refusal before a write) and `access.apply` (the sequence, one commit, the push, and the restore when a step fails). |
-| `cli/internal/cli/usercmd.go` | `ezc user list`, `add` and `remove` (and `dueFor`, what a removal leaves to rotate), and `requests`, `approve` and `deny` (the approver's side of `ezc join`). `ezc store rewrap` is in `storecmd.go`. |
+| `cli/internal/cli/usercmd.go` | `ezc user list`, `add` and `remove` (and `dueFor`, what a removal leaves to rotate), `requests`, `approve` and `deny` (the approver's side of `ezc join`), and `rotate` (a new key in a new file, `freshKeyFile`, and `key_file` in `config.toml`). `ezc store rewrap` is in `storecmd.go`. |
 | `cli/internal/cli/botcmd.go` | `ezc bot add`, `remove` and `rotate`: `giveBotKey` runs the change with the proof (`Backend.CanDecrypt` on every file) and the delivery (`ghcli.SecretSet`, the key on stdin) in `change.extra`, before the commit; `deleteBotSecrets` after a removal. The secret names `botSecret` (`EZC_AGE_KEY`) and `storeTokenSecret` (`EZC_STORE_TOKEN`). |
 | `cli/internal/cli/joincmd.go` | `ezc join`: the clone, the key and the config as setup makes them, then a request (`recipients.Request`) pushed on its own branch `ezc/join-<name>` through `gitstore.PushBranch`, and the pull request. `ezc join --print` prints the `ezc user add` line instead. |
 | `cli/internal/ghcli` | The `gh` command lines that are not setup's: `pr create` for a join request, `secret set` (the value on stdin only) and `secret delete`. An error carries one line of gh's stderr, each URL through `gitstore.ShowURL`, never stdin's content. |
 | `cli/internal/setup` | What `ezc setup` does to a machine: creates the key file, creates the store as a git repo (manifest, `recipients.yaml`, policy, one commit) or clones it (`CloneShallowStore` for a CI job: with git and a token, one commit deep), adopts one made by hand (`Adopt`: a git repo, a manifest, and a registry and a policy where they are missing and the store holds no encrypted values yet), and publishes it to GitHub through `gh`. Flags, prompts and printing are in `cli/internal/cli/setupcmd.go`. It leaves alone whatever is already there. |
 | `cli/internal/doctor` | Reports the health of the machine, the store and the repo (`ezc doctor`): checks, warnings and problems with their fixes, and the files in a `.ezc/` that ezc does not read. Never a value. |
+| `cli/cmd/ezc` | `main.go` wires the process into `cli.Run` and holds the version. Its tests drive the built binary: `store_test.go` (setup, two machines, sync, `setup --ci`) and `access_test.go` (join and approve, remove, bots, rotate) with real git and real sops, and a fake `gh` that only records. |
 | `bin/ezc` | Shim that builds `cli/bin/ezc` when a Go source changes and runs it; `direnv allow` puts `bin/` on PATH. |
 | `docs/superpowers/` | Design specs and implementation plans. Historical: never rewrite them to match the code. |
 | `LICENSE` | MIT. |
@@ -44,7 +45,7 @@ In a repo, `.ezc/` holds:
 | `.ezc/.sops.yaml` | The encryption policy, without which nothing can be encrypted in the folder. In the store `ezc setup` writes it from `recipients.yaml`; in a repo it is a copy of the store's. |
 | `.ezc/env.sh` | The shim mise or direnv sources, written by `ezc repo init` from `cli/share/env.sh`. |
 
-The store's `.ezc/` holds the same files without `env.sh`, and `recipients.yaml`: who can decrypt the store, by name and public key.
+The store's `.ezc/` holds the same files without `env.sh`, and `recipients.yaml` (who can decrypt the store, by name and public key), `rotation-due.yaml` (the secrets a removed key could read, until each gets a new value; absent when there are none) and `requests/<name>.yaml` (a join request whose pull request was merged; a request normally stays on its branch `ezc/join-<name>`).
 
 ## Conventions
 

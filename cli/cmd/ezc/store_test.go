@@ -74,11 +74,10 @@ func (e *e2e) stale() {
 	}
 }
 
-// twoMachines are A, whose new store is published to a bare repo, and B, which has a copy of A's key file and a clone.
-func twoMachines(t *testing.T) (a, b *e2e, bare string) {
+// publishedStore is machine A under root, whose new store holds one secret and is published to a bare repo.
+func publishedStore(t *testing.T, root string) (a *e2e, bare string) {
 	t.Helper()
-	root := t.TempDir()
-	a, b = newMachine(t, root, "a"), newMachine(t, root, "b")
+	a = newMachine(t, root, "a")
 	a.mustRun(a.repo, "", "setup", "--new-local", "--name", "gene", "--yes")
 	a.mustRun(a.repo, e2eSecret, "set", "-g", "API_TOKEN", "--type", "secret", "--desc", "d")
 
@@ -91,6 +90,15 @@ func twoMachines(t *testing.T) (a, b *e2e, bare string) {
 	if out := a.mustRun(a.repo, "", "store", "push"); out != "pushed 2 commits to origin\n" {
 		t.Fatalf("push: %q", out)
 	}
+	return a, bare
+}
+
+// twoMachines are A, whose new store is published to a bare repo, and B, which has a copy of A's key file and a clone.
+func twoMachines(t *testing.T) (a, b *e2e, bare string) {
+	t.Helper()
+	root := t.TempDir()
+	a, bare = publishedStore(t, root)
+	b = newMachine(t, root, "b")
 
 	key, err := os.ReadFile(a.key)
 	if err != nil {
@@ -135,7 +143,7 @@ func wantNoValue(t *testing.T, e *e2e, value string) {
 
 func TestSetupEndToEnd(t *testing.T) {
 	e := newMachine(t, t.TempDir(), "a")
-	if out := e.mustRun(e.repo, "", "version"); out != "ezc 0.3.0\n" {
+	if out := e.mustRun(e.repo, "", "version"); out != "ezc 0.4.0\n" {
 		t.Fatalf("version: %q", out)
 	}
 	out := e.mustRun(e.repo, "", "setup", "--new-local", "--name", "gene", "--yes")
