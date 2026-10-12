@@ -74,10 +74,8 @@ func openAccess(sys System, write bool) (*access, error) {
 		return nil, err
 	}
 	// Whoever can push to the store names these files, and the errors of what follows name them too.
-	for _, name := range a.enc {
-		if shown := recipients.Printable(name); shown != name {
-			return nil, fmt.Errorf("an encrypted file in %s has a name that cannot be shown (%s). Rename it, then run this again.", a.dir, shown)
-		}
+	if err := unshowable(a.dir, a.enc); err != nil {
+		return nil, err
 	}
 	if inFile {
 		key, err := a.b.PublicKey(file)

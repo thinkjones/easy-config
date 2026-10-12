@@ -517,3 +517,131 @@ func TestRotateEndToEnd(t *testing.T) {
 	cannotRead(t, w, b)
 	w.done(a, b)
 }
+
+// refused runs a command that must exit 1 and say want on stderr, and returns that stderr.
+func (w *watch) refused(e *e2e, stdin, want string, args ...string) string {
+	w.t.Helper()
+	stdout, stderr, code := w.run(e, stdin, args...)
+	if code != 1 || !strings.Contains(stderr, want) {
+		w.t.Fatalf("ezc %v: exit %d, want 1 and %q\nstdout: %s\nstderr: %s", args, code, want, stdout, stderr)
+	}
+	return stderr
+}
+
+// onRemote are the commits of the bare repo that touched a file of the store's .ezc.
+func onRemote(t *testing.T, e *e2e, bare, file string) string {
+	t.Helper()
+	out, errOut, code := e.exec(bare, "", "git", "log", "--all", "--format=%H", "--", ".ezc/"+file)
+	if code != 0 {
+		t.Fatalf("git log in the remote: exit %d\n%s", code, errOut)
+	}
+	return strings.TrimSpace(out)
+}
+
+// A key is removed and the removal pushed while another machine, whose last fetch is minutes old, writes a secret to
+// a new file under the policy it still has, which names the removed key. Nothing of that file leaves the machine,
+// and nothing more is written to it, until it is re-wrapped: the removed key never unwraps the key it has then.
+func TestWriteUnderAStalePolicyEndToEnd(t *testing.T) {
+	const fresh, fresher = "n3w-value-under-the-old-policy", "n3w-value-after-the-rewrap"
+	w, a, b, _ := joined(t)
+	bare := a.git("remote", "get-url", "origin")
+	w.hide("the new secret's value", fresh)
+	w.hide("the new secret's second value", fresher)
+
+	// The key that will be removed is a bot's, printed once: it is kept in a file only for wantShutOut to try.
+	botKey, stderr, code := a.run(a.repo, "", "bot", "add", "ci", "--print-private")
+	if code != 0 || !strings.HasPrefix(botKey, "AGE-SECRET-KEY-") {
+		t.Fatalf("bot add --print-private: exit %d\nstderr: %s", code, stderr)
+	}
+	w.hide("the bot's private key", botKey)
+	botKeyFile := filepath.Join(t.TempDir(), "bot-key.txt")
+	if err := os.WriteFile(botKeyFile, []byte(botKey), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w.ok(b, "", "store", "pull")
+	w.ok(a, "", "bot", "remove", "ci")
+
+	// B fetched a moment ago, so this write asks the remote nothing: the new file is made for the bot's key too.
+	w.ok(b, fresh, "set", "-g", "NEW_KEY", "--env", "staging", "--type", "secret", "--desc", "d")
+	made, err := os.ReadFile(filepath.Join(b.store(), ".ezc", "env.staging.enc.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dataKeys(t, made, botKeyFile)) != 1 {
+		t.Fatal("the new file is not encrypted for the removed key: this test proves nothing")
+	}
+
+	w.refused(b, "", "behind origin", "store", "push")
+	w.refused(b, "", "! env.staging.enc.yaml is not encrypted for the registry. Run ezc store rewrap before you set anything.\n", "store", "pull")
+	w.refused(b, "", "env.staging.enc.yaml is not encrypted for the people recipients.yaml names, so nothing was pushed. Run ezc store rewrap.", "store", "push")
+	w.refused(b, fresher, "env.staging.enc.yaml is not encrypted for the people recipients.yaml names. Run ezc store rewrap.", "set", "-g", "NEW_KEY", "--env", "staging")
+	if commits := onRemote(t, b, bare, "env.staging.enc.yaml"); commits != "" {
+		t.Fatalf("the remote has the file that the removed key reads, in %s", commits)
+	}
+
+	if out := w.ok(b, "", "store", "rewrap"); !strings.Contains(out, "✓ rewrap\n") || !strings.Contains(out, "✓ pushed to "+bare+"\n") {
+		t.Fatalf("rewrap: %q", out)
+	}
+	wantShutOut(t, b, "env.staging.enc.yaml", b.key, botKeyFile)
+	w.ok(b, fresher, "set", "-g", "NEW_KEY", "--env", "staging")
+	w.ok(b, "", "store", "push")
+	wantShutOut(t, b, "env.staging.enc.yaml", b.key, botKeyFile)
+	for _, m := range []*e2e{a, b} {
+		w.ok(m, "", "store", "pull")
+		if out := w.ok(m, "", "user", "list"); strings.Contains(out, "✗") {
+			t.Errorf("user list:\n%s", out)
+		}
+	}
+	w.done(a, b)
+}
+
+// A removal that was committed and could not be pushed, then a value changed on the remote in the same file. The
+// pull keeps the remote's file, which the removed key still reads: it says so, the value it used to say to set
+// again is refused, and so is the push, until the file is re-wrapped.
+func TestAccessChangeThatWasNotPushedEndToEnd(t *testing.T) {
+	const theirs, fresh = "th3ir-value-before-the-pull", "n3w-value-after-the-rewrap"
+	w, a, b, _ := joined(t)
+	bare := a.git("remote", "get-url", "origin")
+	w.hide("the value B set", theirs)
+	w.hide("the secret's new value", fresh)
+
+	// The remote takes no push for a while: the removal is committed on A and goes nowhere.
+	hook := filepath.Join(bare, "hooks", "pre-receive")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	w.refused(a, "", "Committed, but the push failed (", "user", "remove", "sam")
+	if err := os.Remove(hook); err != nil {
+		t.Fatal(err)
+	}
+	// B, a recipient still as far as the remote knows, changes the secret.
+	w.ok(b, theirs, "set", "-g", "API_TOKEN")
+	w.ok(b, "", "store", "push")
+
+	// A does what it was told to.
+	w.refused(a, "", "behind origin", "store", "push")
+	said := w.refused(a, "", "! common.enc.yaml was re-wrapped here and changed on the remote.", "store", "pull")
+	if strings.Contains(said, "set these again") || strings.Contains(said, "ezc set -g") {
+		t.Fatalf("the pull names a value to set in a file the removed key reads:\n%s", said)
+	}
+	w.refused(a, fresh, "common.enc.yaml is not encrypted for the people recipients.yaml names. Run ezc store rewrap.", "set", "-g", "API_TOKEN")
+	w.refused(a, "", "so nothing was pushed. Run ezc store rewrap.", "store", "push")
+	if out := w.ok(a, "", "store", "status", "--due"); !strings.Contains(out, "API_TOKEN") {
+		t.Fatalf("the secret is no longer due before it has a new value: %q", out)
+	}
+
+	w.ok(a, "", "store", "rewrap")
+	w.ok(a, fresh, "set", "-g", "API_TOKEN")
+	reads(t, a, fresh)
+	wantShutOut(t, a, "common.enc.yaml", a.key, b.key)
+	if out := w.ok(a, "", "store", "status", "--due"); out != "" {
+		t.Fatalf("status --due after the new value: %q", out)
+	}
+	w.ok(a, "", "store", "push")
+	w.ok(b, "", "store", "pull")
+	cannotRead(t, w, b)
+	if got := a.git("status", "--porcelain"); got != "" {
+		t.Errorf("the store has uncommitted changes:\n%s", got)
+	}
+	w.done(a, b)
+}

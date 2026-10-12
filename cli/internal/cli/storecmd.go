@@ -183,7 +183,9 @@ func newStorePullCmd(sys System) *cobra.Command {
 		Short: "bring the remote's commits into the store",
 		Long: `Fetch from the store's remote and bring its commits in; commits made here are replayed on top of them.
 
-An encrypted file changed both here and on the remote cannot be merged: the remote's version is kept, the names to set again are listed on stderr and the command exits 1. A plaintext file changed in the same place on both sides stops the pull with the store as it was. Prints names and files, never a value.`,
+An encrypted file changed both here and on the remote cannot be merged: the remote's version is kept, the names to set again are listed on stderr and the command exits 1. A plaintext file changed in the same place on both sides stops the pull with the store as it was.
+
+Afterwards every encrypted file that is not encrypted for the people recipients.yaml names is named on stderr, and the command exits 1: run ` + "`ezc store rewrap`" + ` before anything is set in it. Prints names and files, never a value.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			p, g, err := storeRepo(sys, "pull")
@@ -211,16 +213,35 @@ An encrypted file changed both here and on the remote cannot be merged: the remo
 			storeContacted(sys, p)
 			if res.Commits == 0 {
 				fmt.Fprintln(sys.Stdout, "already up to date")
-				return nil
+			} else {
+				fmt.Fprintf(sys.Stdout, "pulled %s from origin\n", count(res.Commits, "commit"))
 			}
-			fmt.Fprintf(sys.Stdout, "pulled %s from origin\n", count(res.Commits, "commit"))
-			if len(res.Replaced) == 0 {
-				return nil
-			}
+			// What the store holds now is judged whatever the pull brought: a file that is encrypted for
+			// somebody the registry does not name must not be written to, and the write would say no more.
+			differs, derr := storeDiffers(sys, p.StoreEzc())
+			var said []string
 			for _, r := range res.Replaced {
+				file := strings.TrimPrefix(r.Path, ezcDir+"/")
+				if slices.Contains(differs, file) && rewrapped(sys, backendFor(sys), r.Base, r.Local) {
+					// The commit made here changed who the file is for, and that is what was lost.
+					fmt.Fprintf(sys.Stderr, "! %s was re-wrapped here and changed on the remote. The remote's version was kept, and it is not encrypted for the people %s names. Run ezc store rewrap, then set again any value you changed in it since your last push.\n", file, recipients.File)
+					said = append(said, file)
+					continue
+				}
 				fmt.Fprint(sys.Stderr, replacedNote(r))
 			}
-			return &ExitError{1}
+			if derr != nil {
+				fmt.Fprintf(sys.Stderr, "! Cannot tell whether the store's files are encrypted for the registry: %s\n", firstLineOf(derr))
+			}
+			for _, file := range differs {
+				if !slices.Contains(said, file) {
+					fmt.Fprintf(sys.Stderr, "! %s is not encrypted for the registry. Run ezc store rewrap before you set anything.\n", file)
+				}
+			}
+			if len(res.Replaced) > 0 || len(differs) > 0 || derr != nil {
+				return &ExitError{1}
+			}
+			return nil
 		},
 	}
 }
@@ -295,7 +316,7 @@ func newStorePushCmd(sys System) *cobra.Command {
 		Short: "send the store's commits to its remote",
 		Long: `Fetch from the store's remote, then send it the commits made here.
 
-Refused while the store is behind its remote or has diverged from it (run ` + "`ezc store pull`" + ` first), while it holds uncommitted changes, and when it has no remote.`,
+Refused while the store is behind its remote or has diverged from it (run ` + "`ezc store pull`" + ` first), while it holds uncommitted changes, and when it has no remote. Also refused while an encrypted file is not encrypted for the people recipients.yaml names: ` + "`ezc store rewrap`" + ` fixes that.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			p, g, err := storeRepo(sys, "push")
@@ -325,6 +346,14 @@ Refused while the store is behind its remote or has diverged from it (run ` + "`
 			}
 			if st.Behind > 0 {
 				return errors.New("the store is behind origin. Run `ezc store pull` first.")
+			}
+			if st.Ahead > 0 {
+				// A commit made here may hold a file written under a policy the remote has since replaced.
+				if differs, err := storeDiffers(sys, p.StoreEzc()); err != nil {
+					return err
+				} else if len(differs) > 0 {
+					return fmt.Errorf("%s, so nothing was pushed. Run ezc store rewrap.", notForRegistry(differs...))
+				}
 			}
 			pushed, err := g.Push(dir)
 			if err != nil {

@@ -35,6 +35,9 @@ type Backend interface {
 	// WritePolicy writes the backend's policy file in dir for these recipients, replacing one that is there.
 	// No recipients is an error.
 	WritePolicy(dir string, recipients []string) error
+	// PolicyRecipients returns the public keys a new file at path would be encrypted for, sorted: what the policy
+	// in its folder says. It needs no key and no tool, and wraps ErrNoPolicy when the policy says nothing for the file.
+	PolicyRecipients(path string) ([]string, error)
 	// Recipients returns the public keys the file is encrypted for, sorted. It needs no key and no tool.
 	Recipients(path string) ([]string, error)
 	// Rewrap re-encrypts the file's data key for the policy in its folder, and gives the file a new data key when

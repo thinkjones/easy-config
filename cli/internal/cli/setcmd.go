@@ -54,8 +54,8 @@ func scopeFor(sys System, global bool) (scope, error) {
 	return scope{"store", p.StoreEzc(), true}, nil
 }
 
-// guard is guardStoreWrite and guardStoreFiles when the scope is the store; any other scope has nothing to wait for.
-// files are the ones the write may change.
+// guard is guardStoreWrite, guardStoreFiles and guardRecipients when the scope is the store; any other scope has
+// nothing to wait for. files are the ones the write may change.
 func (s scope) guard(sys System, files ...string) (storeSync, error) {
 	if !s.store {
 		return storeSync{}, nil
@@ -64,7 +64,10 @@ func (s scope) guard(sys System, files ...string) (storeSync, error) {
 	if err != nil {
 		return st, err
 	}
-	return st, guardStoreFiles(sys, st, files...)
+	if err := guardStoreFiles(sys, st, files...); err != nil {
+		return st, err
+	}
+	return st, s.guardRecipients(sys, files...)
 }
 
 // commit commits, as "<what> (<files>)", those of names whose file in the scope is not as before says.
@@ -286,6 +289,11 @@ A name the scope's manifest does not declare is declared by this command, as req
 			st, err := sc.guard(sys, watched...)
 			if err != nil {
 				return err
+			}
+			if v.IsSecret() {
+				if err := sc.guardNewFile(sys, file); err != nil {
+					return err
+				}
 			}
 			value, err := valueToSet(sys, name, v.IsSecret(), args[1:])
 			if err != nil {

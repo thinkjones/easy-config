@@ -20,6 +20,14 @@ A store that is ahead or has no remote takes the write; when the remote cannot b
 
 A write is also refused when ezc cannot tell how the store stands, because then it cannot tell whether the change could be merged or even committed. A store that is not on a branch is the usual case, and a rebase left open is the usual cause: `the store in <store> is not on a branch (a rebase may be in progress). Finish or abort it with git, then run this again.` A store that is a git repo on a machine without git is refused the same way: `git is not installed, so a change to the store could not be committed. Install git, then run this again.` Commands that only read (`ezc env`, `ezc run`, `ezc list`, `ezc get`) still work in both cases; they say `store: cannot tell how the store stands in <store> (the store is not on a branch)` on stderr and carry on.
 
+A secret is written only to a file that is encrypted for exactly the people `recipients.yaml` names. A file that somebody else can still open, because they were removed on another machine and this one's copy was made or kept under the old list, would hand them the new value, so `ezc set -g`, `ezc unset -g` and `ezc edit -g --secrets` refuse it before anything is written or asked:
+
+```
+env.prod.enc.yaml is not encrypted for the people recipients.yaml names. Run ezc store rewrap.
+```
+
+A file that does not exist yet is made from the store's encryption policy, so a policy that names other keys than `recipients.yaml` is refused the same way: `The store's encryption policy does not name the people recipients.yaml names, so env.prod.enc.yaml would not be encrypted for them. Run ezc store rewrap.` [`ezc store rewrap`](access.md#removing-someone) makes the policy and the files match the registry again. The check reads who each file is encrypted for from the file itself and needs no key. A store with no `recipients.yaml` is not checked: ezc does not know who should read it.
+
 A store that is not a git repo (an `EZC_STORE` pointing at a plain folder) is written with no commit, and is neither fetched nor reported on. A write to any other repo never touches git.
 
 ## Syncing the store
@@ -53,6 +61,18 @@ requests  none
 
 The list holds the names you changed in that file, never a value; a name you removed is listed as an `ezc unset -g` command, under `run these again:`. When the names cannot be worked out, the file is named and its local changes must be set again. Everything else in the pull went through.
 
+After every pull, also one that brought nothing, ezc compares who each encrypted file is encrypted for with `recipients.yaml` as the store now has it. A file that differs is named on stderr and the command exits 1:
+
+```
+! env.staging.enc.yaml is not encrypted for the registry. Run ezc store rewrap before you set anything.
+```
+
+It happens when a change to who can read the store and a write to a file crossed: somebody was removed and the removal pushed while this machine, which had not fetched yet, wrote a secret to a file under the list it still had. Until `ezc store rewrap` has run, writes to that file and `ezc store push` are refused, so the file does not reach the remote while a removed key opens it. When the commit that was made here and lost its file was itself a change to who can read the store (it was committed and its push failed), the pull does not list values to set again, because the file it kept is still encrypted for the old list:
+
+```
+! common.enc.yaml was re-wrapped here and changed on the remote. The remote's version was kept, and it is not encrypted for the people recipients.yaml names. Run ezc store rewrap, then set again any value you changed in it since your last push.
+```
+
 A plaintext file changed in the same place on both sides stops the pull, and the store is left exactly as it was:
 
 ```
@@ -65,7 +85,7 @@ A pull is also refused when the store holds uncommitted changes (commit or disca
 
 One more limit: a file that git ignores does not count as an uncommitted change, so a pull replaces it without a word when the remote tracks a file at that path. It takes a `.gitignore` written by hand in the store and a file added past it on another machine; keep anything you want to keep out of the store's folder.
 
-`ezc store push` fetches, then prints `pushed 2 commits to origin` or `nothing to push`. It is refused while the store is behind the remote or has diverged from it (``the store is behind origin. Run `ezc store pull` first.``), while it holds uncommitted changes, and when it has no remote.
+`ezc store push` fetches, then prints `pushed 2 commits to origin` or `nothing to push`. It is refused while the store is behind the remote or has diverged from it (``the store is behind origin. Run `ezc store pull` first.``), while it holds uncommitted changes, and when it has no remote. It is also refused while a commit made here waits to be sent and an encrypted file is not encrypted for the people `recipients.yaml` names: `env.staging.enc.yaml is not encrypted for the people recipients.yaml names, so nothing was pushed. Run ezc store rewrap.`
 
 You do not have to ask. `ezc env`, `ezc run`, `ezc list`, `ezc get`, `ezc store audit` and the commands that write to the store (`ezc set -g`, `ezc unset -g`, `ezc edit -g`) look at the store before they use it, and print one line on stderr when there is something to say:
 

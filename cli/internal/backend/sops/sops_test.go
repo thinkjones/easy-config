@@ -824,6 +824,36 @@ func TestWritePolicyBytes(t *testing.T) {
 	}
 }
 
+// The policy is read as sops reads it for a new file: the first rule that matches the name, and its age keys only.
+func TestPolicyRecipientsOfAPolicyWrittenByHand(t *testing.T) {
+	for _, c := range []struct {
+		name, policy string
+		want         []string
+		noPolicy     bool
+	}{
+		{"the first matching rule", "creation_rules:\n  - path_regex: ^env\\.prod\\.\n    age: age1prod\n  - path_regex: \\.enc\\.yaml$\n    age: >-\n      age1bbb,\n      age1aaa,age1bbb\n", []string{"age1aaa", "age1bbb"}, false},
+		{"a rule with no path matches every file", "creation_rules:\n  - age: age1all\n", []string{"age1all"}, false},
+		{"no rule matches", "creation_rules:\n  - path_regex: \\.json$\n    age: age1aaa\n", nil, true},
+		{"a key of another kind", "creation_rules:\n  - path_regex: \\.enc\\.yaml$\n    age: age1aaa\n    pgp: FINGERPRINT\n", nil, false},
+		{"key groups", "creation_rules:\n  - path_regex: \\.enc\\.yaml$\n    key_groups:\n      - age: [age1aaa]\n", nil, false},
+		{"not YAML", "creation_rules: [\n", nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, PolicyFile), []byte(c.policy), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := New(Options{}).PolicyRecipients(filepath.Join(dir, "common.enc.yaml"))
+			switch {
+			case c.want != nil && (err != nil || !slices.Equal(got, c.want)):
+				t.Fatalf("got %v, %v, want %v", got, err, c.want)
+			case c.want == nil && (err == nil || errors.Is(err, backend.ErrNoPolicy) != c.noPolicy):
+				t.Fatalf("got %v, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestPublicKeyIsTheFirstIdentity(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "keys.txt")

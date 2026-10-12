@@ -412,6 +412,35 @@ func Run(t *testing.T, newEnv func(t *testing.T) Env) {
 		wantRecipients(t, e, file, e.Public, second) // needs no key
 	})
 
+	run("PolicyRecipients", func(t *testing.T, e Env, file string) {
+		second, _ := newKey(t, e)
+		writePolicy(t, e, second, e.Public, second)
+		want := []string{e.Public, second}
+		slices.Sort(want)
+		e.Lock() // needs no key
+		got, err := e.Backend.PolicyRecipients(file)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("PolicyRecipients = %v, %v, want %v", got, err, want)
+		}
+	})
+
+	run("PolicyRecipientsAreANewFilesRecipients", func(t *testing.T, e Env, file string) {
+		second, _ := newKey(t, e)
+		writePolicy(t, e, e.Public, second)
+		keys, err := e.Backend.PolicyRecipients(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		set(t, e.Backend, file, "A", "a1")
+		wantRecipients(t, e, file, keys...)
+	})
+
+	run("PolicyRecipientsWithoutAPolicy", func(t *testing.T, e Env, _ string) {
+		if _, err := e.Backend.PolicyRecipients(filepath.Join(e.NoPolicyDir, "common.enc.yaml")); !errors.Is(err, backend.ErrNoPolicy) {
+			t.Fatalf("PolicyRecipients error = %v, want ErrNoPolicy", err)
+		}
+	})
+
 	run("RewrapAddsARecipient", func(t *testing.T, e Env, file string) {
 		second, _ := newKey(t, e)
 		third, _ := newKey(t, e)

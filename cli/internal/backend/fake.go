@@ -329,6 +329,15 @@ func fakeFileRecipients(path string) ([]string, error) {
 
 func (f *Fake) Recipients(path string) ([]string, error) { return fakeFileRecipients(path) }
 
+func (f *Fake) PolicyRecipients(path string) ([]string, error) {
+	if ok, err := f.HasPolicy(filepath.Dir(path)); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, fmt.Errorf("%s: %w", path, ErrNoPolicy)
+	}
+	return f.policyRecipients(filepath.Dir(path))
+}
+
 func (f *Fake) Rewrap(path string) error {
 	if _, err := fakeFileRecipients(path); err != nil {
 		return err

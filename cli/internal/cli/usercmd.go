@@ -341,6 +341,12 @@ func requestArrived(name string) string {
 // dropRequest removes a request's file from the store and commits that alone as message, then pushes. A failure
 // before the commit is made puts the file back; a push that fails leaves the commit.
 func (a *access) dropRequest(name, message string) error {
+	// The push sends every commit the store is ahead by.
+	if differs, err := storeDiffers(a.sys, a.dir); err != nil {
+		return err
+	} else if len(differs) > 0 {
+		return errors.New(notForRegistry(differs...) + ". Run ezc store rewrap.")
+	}
 	files := []string{recipients.RequestPath(name)}
 	before := fileStates(a.dir, files)
 	undo := func(err error) error {
