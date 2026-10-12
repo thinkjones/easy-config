@@ -131,7 +131,7 @@ Needs this machine's key file, and the key must be one recipients.yaml names. Re
 			if err != nil {
 				return fmt.Errorf("%w.", err)
 			}
-			return a.apply(change{next: next, message: "add " + name})
+			return a.apply(change{next: next, message: "add " + name, subject: name})
 		},
 	}
 	cmd.Flags().StringVar(&kind, "kind", recipients.KindUser, "user, or machine for a second key of a user")
@@ -182,7 +182,7 @@ Refused for a bot (` + "`ezc bot remove`" + `), for the last recipient, for a us
 			if err != nil {
 				return err
 			}
-			err = a.apply(change{next: next, message: "remove " + name, due: due})
+			err = a.apply(change{next: next, message: "remove " + name, subject: name, due: due})
 			var unpushed *unpushedError
 			if err != nil && !errors.As(err, &unpushed) {
 				return err
@@ -413,7 +413,7 @@ Needs this machine's key file, as ` + "`ezc user add`" + ` does, and refuses a n
 			// Approved already, by a run whose push or whose clean-up failed: only what is left of the request goes.
 			cur, already := a.reg.Recipients[name]
 			already = already && cur.Key == q.Req.Key
-			c := change{message: "approve " + name}
+			c := change{message: "approve " + name, subject: name}
 			if q.File {
 				c.remove = []string{recipients.RequestPath(name)}
 			}
@@ -630,7 +630,7 @@ Needs this machine's key file, as every change to who can read the store does, a
 				return giveUp(fmt.Errorf("%w.", err))
 			}
 			// A rotation that stays on this machine leaves it reading with a key the remote's files are not for.
-			c := change{next: next, message: "rotate " + a.myName, pushed: true}
+			c := change{next: next, message: "rotate " + a.myName, subject: a.myName, pushed: true}
 			was := a.myName + " (old key)"
 			var list []string
 			if compromised {

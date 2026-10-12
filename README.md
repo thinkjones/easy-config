@@ -78,7 +78,7 @@ ezc user remove sam                # sam can no longer read it; lists the secret
 ezc bot add ci --repo owner/app    # a key for CI, saved as an Actions secret of owner/app
 ```
 
-Who can read the store is written in one file, `recipients.yaml`, and every encrypted file is encrypted for exactly the keys it names. Removing a key re-encrypts each file from scratch and records every secret that key could read as due for a new value, because only a new value protects a secret that was once readable. See [Access](docs/access.md) and [Bots and CI](docs/ci.md).
+Who can read the store is written in one file, `recipients.yaml`, and every encrypted file is encrypted for exactly the keys it names. Removing a key re-encrypts each file from scratch and records every secret that key could read as due for a new value, because only a new value protects a secret that was once readable. That file is on the store's default branch, so protect the branch on GitHub: let only the people who can read the store push to it. See [Access](docs/access.md) and [Bots and CI](docs/ci.md).
 
 ## Commands
 

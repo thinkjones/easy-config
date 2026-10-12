@@ -269,6 +269,10 @@ func someNames(names []string) string {
 	return fmt.Sprintf("%s and %d more", strings.Join(names[:shown], ", "), len(names)-shown)
 }
 
+// recipientsFix is what to do about files that are not encrypted for the registry. The registry may be the side
+// that is wrong: a re-wrap lets in every name it holds.
+const recipientsFix = "Run ezc user list and check who it names, then ezc store rewrap."
+
 // recipientsItem says whether the encrypted files are encrypted for the registry's recipients. It is left out
 // when the store has no usable registry.
 func recipientsItem(o Options) []Item {
@@ -278,13 +282,13 @@ func recipientsItem(o Options) []Item {
 	case o.DifferErr != "":
 		return []Item{{Broken, "recipients", o.DifferErr, "Run ezc store rewrap, or ezc store audit for the detail."}}
 	case len(o.Differ) == 1:
-		return []Item{{Broken, "recipients", "1 file is not encrypted for the registry: " + displayName(o.Differ[0]), "Run ezc store rewrap."}}
+		return []Item{{Broken, "recipients", "1 file is not encrypted for the registry: " + displayName(o.Differ[0]), recipientsFix}}
 	case len(o.Differ) > 1:
 		names := make([]string, len(o.Differ))
 		for i, f := range o.Differ {
 			names[i] = displayName(f)
 		}
-		return []Item{{Broken, "recipients", fmt.Sprintf("%d files are not encrypted for the registry: %s", len(o.Differ), someNames(names)), "Run ezc store rewrap."}}
+		return []Item{{Broken, "recipients", fmt.Sprintf("%d files are not encrypted for the registry: %s", len(o.Differ), someNames(names)), recipientsFix}}
 	case o.Recipients == 1:
 		return []Item{{OK, "recipients", "every file is encrypted for the 1 recipient", ""}}
 	}

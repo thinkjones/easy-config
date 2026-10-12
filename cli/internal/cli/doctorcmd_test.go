@@ -384,7 +384,7 @@ func TestDoctorFilesThatDifferFromTheRegistry(t *testing.T) {
 
 	out, err := doctorRun(t, f)
 	wantExit(t, err, 1)
-	want := "✗ recipients 2 files are not encrypted for the registry: common.enc.yaml, env.prod.enc.yaml\nRun ezc store rewrap.\n"
+	want := "✗ recipients 2 files are not encrypted for the registry: common.enc.yaml, env.prod.enc.yaml\nRun ezc user list and check who it names, then ezc store rewrap.\n"
 	if !strings.Contains(doctorSquash(out), want) {
 		t.Errorf("no differing files in\n%s", out)
 	}
@@ -395,7 +395,7 @@ func TestDoctorFilesThatDifferFromTheRegistry(t *testing.T) {
 		t.Errorf("doctor printed a key:\n%s", out)
 	}
 
-	if _, _, err := accessRun(f, "store", "rewrap"); err != nil {
+	if _, _, err := accessRun(f, "store", "rewrap", "--yes"); err != nil {
 		t.Fatal(err)
 	}
 	out, err = doctorRun(t, f)

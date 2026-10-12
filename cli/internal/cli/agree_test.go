@@ -192,7 +192,7 @@ func TestPullSaysWhenAReplacedFileWasRewrappedHere(t *testing.T) {
 	}
 	storeCmdRefused(t, f, "common.enc.yaml is not encrypted for the people recipients.yaml names, so nothing was pushed. Run ezc store rewrap.", "push")
 
-	if _, _, err := accessRun(f, "store", "rewrap"); err != nil {
+	if _, _, err := accessRun(f, "store", "rewrap", "--yes"); err != nil {
 		t.Fatal(err)
 	}
 	accessReaders(t, f, filepath.Join(x.store, ezcDir), accessGene, accessSam, accessStray)

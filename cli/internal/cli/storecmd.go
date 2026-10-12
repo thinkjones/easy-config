@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"maps"
@@ -186,7 +187,7 @@ func newStorePullCmd(sys System) *cobra.Command {
 
 An encrypted file changed both here and on the remote cannot be merged: the remote's version is kept, the names to set again are listed on stderr and the command exits 1. A plaintext file changed in the same place on both sides stops the pull with the store as it was; when it is recipients.yaml or the encryption policy, the message says how to drop the commits made here and make the change again.
 
-Afterwards every encrypted file that is not encrypted for the people recipients.yaml names is named on stderr, and the command exits 1: run ` + "`ezc store rewrap`" + ` before anything is set in it. Prints names and files, never a value.`,
+When the commits it brought changed the names or keys of recipients.yaml, a ! line on stderr says who was added, removed or given a new key. Afterwards every encrypted file that is not encrypted for the people recipients.yaml names is named on stderr, and the command exits 1: run ` + "`ezc store rewrap`" + ` before anything is set in it. Prints names and files, never a value.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			p, g, err := storeRepo(sys, "pull")
@@ -194,6 +195,8 @@ Afterwards every encrypted file that is not encrypted for the people recipients.
 				return err
 			}
 			dir := p.Store()
+			// Who the registry names before the pull; one that is not there or not valid names nobody.
+			was, _, _ := recipients.Load(p.StoreEzc())
 			res, err := g.Pull(dir, storePullTimeout, resolve.IsEncrypted)
 			// Only the conflict itself: when more went wrong, the error says what.
 			if conflict, ok := err.(*gitstore.ConflictError); ok {
@@ -223,6 +226,15 @@ Afterwards every encrypted file that is not encrypted for the people recipients.
 			}
 			// What the store holds now is judged whatever the pull brought: a file that is encrypted for
 			// somebody the registry does not name must not be written to, and the write would say no more.
+			if now, found, err := recipients.Load(p.StoreEzc()); err == nil && res.Commits > 0 {
+				// The names passed the registry's rule when it was loaded.
+				switch change := registryChange(was, now); {
+				case !found && len(was.Recipients) > 0:
+					fmt.Fprintf(sys.Stderr, "! %s was deleted on the remote, so ezc no longer knows who can read the store.\n", recipients.File)
+				case change != "":
+					fmt.Fprintf(sys.Stderr, "! %s changed on the remote: %s. ezc user list shows who can read the store.\n", recipients.File, change)
+				}
+			}
 			differs, derr := storeDiffers(sys, p.StoreEzc())
 			var said []string
 			for _, r := range res.Replaced {
@@ -249,6 +261,35 @@ Afterwards every encrypted file that is not encrypted for the people recipients.
 			return nil
 		},
 	}
+}
+
+// registryChange is how the names and keys of two registries differ: "+ a, b" for the names now has and was lacks,
+// "- c" for the ones it lost and "~ d (new key)" for a name whose key changed; "" when they agree.
+func registryChange(was, now recipients.Registry) string {
+	var added, removed, rekeyed []string
+	for _, name := range slices.Sorted(maps.Keys(now.Recipients)) {
+		switch old, had := was.Recipients[name]; {
+		case !had:
+			added = append(added, name)
+		case old.Key != now.Recipients[name].Key:
+			rekeyed = append(rekeyed, name+" (new key)")
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(was.Recipients)) {
+		if _, has := now.Recipients[name]; !has {
+			removed = append(removed, name)
+		}
+	}
+	var parts []string
+	for _, part := range []struct {
+		sign  string
+		names []string
+	}{{"+", added}, {"-", removed}, {"~", rekeyed}} {
+		if len(part.names) > 0 {
+			parts = append(parts, part.sign+" "+strings.Join(part.names, ", "))
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // conflictRefusal says which files stopped a pull, and where to resolve them. The registry and the policy are
@@ -384,10 +425,13 @@ Refused while the store is behind its remote or has diverged from it (run ` + "`
 }
 
 func newStoreRewrapCmd(sys System) *cobra.Command {
-	return &cobra.Command{
-		Use:   "rewrap",
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "rewrap [--yes]",
 		Short: "encrypt every file of the store for the people recipients.yaml names",
 		Long: `Write the store's encryption policy from recipients.yaml and re-wrap every encrypted file for exactly the keys it names, in one commit, then push. It is the fix when ` + "`ezc user list`" + ` says a file's recipients differ from the registry.
+
+Read ` + "`ezc user list`" + ` first. recipients.yaml is a file in a repo, and whoever can push to the store can add a name to it: a re-wrap lets every name it holds read every secret. Each name that would gain access to a file, and each key that would lose it, is printed before anything is changed. When a name would gain access the command asks ` + "`Let <names> read the store? [y/N]`" + ` on a terminal, and needs --yes without one. The secrets in a file that a key recipients.yaml does not name could read are recorded in rotation-due.yaml.
 
 Needs this machine's key file, and the key must be one recipients.yaml names. Refused when the store's remote cannot be reached, while the store is behind it, and while it holds uncommitted changes to the files it rewrites. A failure puts the store back as it was. No value is read or printed.`,
 		Args: noArgs,
@@ -396,7 +440,23 @@ Needs this machine's key file, and the key must be one recipients.yaml names. Re
 			if err != nil {
 				return err
 			}
-			changed, err := a.run(change{next: a.reg, message: "rewrap"})
+			// The registry is taken as it is, and it is a file anybody who can push can write to.
+			confirm := func(names []string) error {
+				who := someNames(names)
+				switch {
+				case yes:
+					return nil
+				case !sys.StdinIsTerminal():
+					return usagef("%s: this would let %s read the store. Say --yes to do that without being asked: there is no terminal to ask on. Try `%s`.", cmd.CommandPath(), who, helpFor(cmd))
+				}
+				switch strings.ToLower((&asker{sys: sys, in: bufio.NewReader(sys.Stdin)}).ask("Let " + who + " read the store? [y/N] ")) {
+				case "y", "yes":
+					return nil
+				}
+				fmt.Fprintln(sys.Stdout, "Not re-wrapped.")
+				return &ExitError{1}
+			}
+			changed, err := a.run(change{next: a.reg, message: "rewrap", confirm: confirm})
 			if err == nil && !changed {
 				fmt.Fprintln(sys.Stdout, "✓ every file is encrypted for the registry")
 			}
@@ -407,6 +467,8 @@ Needs this machine's key file, and the key must be one recipients.yaml names. Re
 			return err
 		},
 	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "let in whoever recipients.yaml names without being asked; needed when there is no terminal")
+	return cmd
 }
 
 func newStoreAuditCmd(sys System) *cobra.Command {

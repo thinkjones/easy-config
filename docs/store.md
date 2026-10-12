@@ -61,6 +61,8 @@ requests  none
 
 The list holds the names you changed in that file, never a value; a name you removed is listed as an `ezc unset -g` command, under `run these again:`. When the names cannot be worked out, the file is named and its local changes must be set again. Everything else in the pull went through.
 
+When the commits a pull brought changed who `recipients.yaml` names, it says so on stderr, whether or not you expected it: `! recipients.yaml changed on the remote: + sam - kim. ezc user list shows who can read the store.` (`~ name (new key)` is a key that was replaced). See [Who can change the registry](access.md#who-can-change-the-registry).
+
 After every pull, also one that brought nothing, ezc compares who each encrypted file is encrypted for with `recipients.yaml` as the store now has it. A file that differs is named on stderr and the command exits 1:
 
 ```

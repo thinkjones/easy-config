@@ -607,7 +607,7 @@ func TestRecipientsItem(t *testing.T) {
 		t.Errorf("agree: %+v", it)
 	}
 	o.Differ = []string{"common.enc.yaml", "prod.enc.yaml"}
-	want := Item{Broken, "recipients", "2 files are not encrypted for the registry: common.enc.yaml, prod.enc.yaml", "Run ezc store rewrap."}
+	want := Item{Broken, "recipients", "2 files are not encrypted for the registry: common.enc.yaml, prod.enc.yaml", "Run ezc user list and check who it names, then ezc store rewrap."}
 	if it := item(t, Collect(o), "store", "recipients"); it != want {
 		t.Errorf("differ: %+v", it)
 	}

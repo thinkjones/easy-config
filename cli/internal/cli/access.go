@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -136,6 +137,12 @@ type change struct {
 	due     func(d recipients.Due) // edits rotation-due.yaml; nil leaves the file alone
 	extra   func() error           // runs after the sequence and before the commit; its failure restores
 	remove  []string               // files in .ezc to delete in the commit, as paths inside it
+	// subject is the name the change is about: its key comes or goes without a word. Anybody else who gains or
+	// loses access to a file by the change is named before it is made.
+	subject string
+	// confirm is asked, before anything is written, when the change lets names other than its subject read a
+	// file they could not read; its error stops the change. nil does not ask.
+	confirm func(names []string) error
 	// pushed says the change is of no use until the remote has it: a push that fails for any reason takes the
 	// commit back. Without it only a push the remote refused because it moved does.
 	pushed bool
@@ -178,8 +185,98 @@ func (a *access) apply(c change) error {
 	return err
 }
 
+// effect is what a change does to who reads the store's files beyond what it was asked to do. The registry is a
+// file in a repo: whoever can push to the store can put a name in it, and the next re-wrap would let that name in.
+type effect struct {
+	gains map[string][]string // a name of the next registry, and the files it could not read until now
+	loses map[string][]string // a key the next registry does not name, and the files it could read until now
+}
+
+// effect compares who each encrypted file is for with c.next, leaving out the keys of c.subject. It needs no key.
+func (a *access) effect(c change) (effect, error) {
+	e := effect{map[string][]string{}, map[string][]string{}}
+	var own []string
+	for _, reg := range []recipients.Registry{a.reg, c.next} {
+		if r, ok := reg.Recipients[c.subject]; ok {
+			own = append(own, r.Key)
+		}
+	}
+	for _, file := range a.enc {
+		got, err := a.b.Recipients(filepath.Join(a.dir, file))
+		if err != nil {
+			return e, fmt.Errorf("%s: cannot read who this file is encrypted for.", file)
+		}
+		for _, name := range slices.Sorted(maps.Keys(c.next.Recipients)) {
+			if key := c.next.Recipients[name].Key; !slices.Contains(got, key) && !slices.Contains(own, key) {
+				e.gains[name] = append(e.gains[name], file)
+			}
+		}
+		for _, key := range got {
+			if c.next.NameOf(key) == "" && !slices.Contains(own, key) {
+				e.loses[key] = append(e.loses[key], file)
+			}
+		}
+	}
+	return e, nil
+}
+
+// announce prints one ! line for each name and each key of e. A name passed the registry's rule; a key comes
+// from a file, and is made printable.
+func (a *access) announce(e effect) {
+	for _, name := range slices.Sorted(maps.Keys(e.gains)) {
+		fmt.Fprintf(a.sys.Stdout, "! %s gains access to %s.\n", name, strings.Join(e.gains[name], ", "))
+	}
+	for _, key := range slices.Sorted(maps.Keys(e.loses)) {
+		fmt.Fprintf(a.sys.Stdout, "! %s, a key %s does not name, loses access to %s. The secrets it could read are recorded as needing new values: ezc store status --due lists them.\n", recipients.Printable(key), recipients.File, strings.Join(e.loses[key], ", "))
+	}
+}
+
+// strangersDue is due with, after it, an entry for every name in a file that a key of e.loses could read: a secret
+// written while a key nobody names could read its file is as leaked as one a removed recipient read.
+func (a *access) strangersDue(e effect, due func(recipients.Due)) (func(recipients.Due), error) {
+	if len(e.loses) == 0 {
+		return due, nil
+	}
+	today := a.sys.Now().Format("2006-01-02")
+	type held struct{ file, name, key string }
+	var all []held
+	for _, key := range slices.Sorted(maps.Keys(e.loses)) {
+		for _, file := range e.loses[key] {
+			names, _, err := a.b.Inspect(filepath.Join(a.dir, file))
+			if err != nil {
+				return nil, fmt.Errorf("%s: cannot read the names in this file.", file)
+			}
+			for _, name := range names {
+				all = append(all, held{file, name, key})
+			}
+		}
+	}
+	return func(d recipients.Due) {
+		if due != nil {
+			due(d)
+		}
+		for _, h := range all {
+			d.Add(h.file, h.name, h.key, today)
+		}
+	}, nil
+}
+
 // run is apply, and whether it changed a file: a change that leaves every byte as it was commits and pushes nothing.
 func (a *access) run(c change) (changed bool, err error) {
+	// Who else the change lets in or shuts out is said, and asked about, before a byte is written.
+	e, err := a.effect(c)
+	if err != nil {
+		return false, err
+	}
+	if c.due, err = a.strangersDue(e, c.due); err != nil {
+		return false, err
+	}
+	a.announce(e)
+	if len(e.gains) > 0 && c.confirm != nil {
+		if err := c.confirm(slices.Sorted(maps.Keys(e.gains))); err != nil {
+			return false, err
+		}
+	}
 	files := append([]string{recipients.File, recipients.DueFile}, policyFiles(a.sys)...)
 	files = append(append(files, a.enc...), c.remove...)
 	before := fileStates(a.dir, files)

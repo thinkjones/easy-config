@@ -510,11 +510,11 @@ func TestUserListDifferencesAndRewrap(t *testing.T) {
 		t.Fatal("user list made a commit")
 	}
 
-	accessWant(t, f, "✓ rewrap\n✓ pushed to "+x.bare+"\n", "store", "rewrap")
+	accessWant(t, f, effectGains+effectLoses+"✓ rewrap\n✓ pushed to "+x.bare+"\n", "store", "rewrap", "--yes")
 	if got := x.git("log", "-1", "--format=%s"); got != "rewrap" {
 		t.Fatalf("the last commit is %q", got)
 	}
-	if got, want := x.git("show", "--name-only", "--format=", "HEAD"), ".ezc/.fakepolicy\n.ezc/common.enc.yaml\n.ezc/env.prod.enc.yaml"; got != want {
+	if got, want := x.git("show", "--name-only", "--format=", "HEAD"), ".ezc/.fakepolicy\n.ezc/common.enc.yaml\n.ezc/env.prod.enc.yaml\n.ezc/rotation-due.yaml"; got != want {
 		t.Fatalf("the commit holds %q", got)
 	}
 	x.wantClean()
@@ -586,6 +586,7 @@ func TestAccessApplyChange(t *testing.T) {
 	c := change{
 		next:    next,
 		message: "approve sam",
+		subject: "sam",
 		due:     func(d recipients.Due) { d.Add("common.enc.yaml", "TOKEN", "zed", "2026-10-11") },
 		extra: func() error {
 			ran = true
@@ -642,6 +643,7 @@ func TestAccessApplyRestoresWhenExtraFails(t *testing.T) {
 		err = a.apply(change{
 			next:    next,
 			message: "add bot sam",
+			subject: "sam",
 			due:     func(d recipients.Due) { d.Add("common.enc.yaml", "TOKEN", "zed", "2026-10-11") },
 			extra:   func() error { return errors.New("the delivery failed") },
 			remove:  []string{"requests/sam.yaml"},

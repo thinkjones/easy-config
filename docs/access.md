@@ -117,7 +117,7 @@ Change the secret itself, at the service that issued it, then give ezc the new v
 
 The command refuses a bot (`ezc bot remove`), the last recipient, a user who still owns machines (remove the machines first), and this machine's own key when no other entry of the same person could read the store: `<name> is this machine's key and your only one. Removing it would lock you out.`
 
-`ezc store rewrap` runs the same steps with the registry as it is, in a commit named `rewrap`. When every file already matches it says `✓ every file is encrypted for the registry` and commits nothing.
+`ezc store rewrap` runs the same steps with the registry as it is, in a commit named `rewrap`. When every file already matches it says `✓ every file is encrypted for the registry` and commits nothing. It takes `recipients.yaml` at its word, so read `ezc user list` before you run it; see [Who can change the registry](#who-can-change-the-registry).
 
 Every change to access follows the same rules:
 
@@ -137,6 +137,20 @@ When two machines did change access without seeing each other, and one of the co
 Do what it says: look at the commits you are about to drop, since a value you set since your last push is among them and has to be set again, run the `git reset --hard`, then run your `ezc user add`, `remove` or other change again. Do not try to merge the two files by hand.
 
 Re-wrapping changes who can open the files from now on. It does not change the values, and it reads and prints none.
+
+## Who can change the registry
+
+`recipients.yaml` is a file in a git repo, so whoever can push to the store's branch can write a name and a key into it with git alone, without `ezc user approve` and without anybody seeing the key. That does not let them read anything yet: the files are still encrypted for the old list. The next re-wrap would, because every change to who can read the store re-wraps for everybody `recipients.yaml` names. `ezc join` pushes its request to the store's remote, so everybody who can ask for access can also push.
+
+**Protect the store's default branch.** On GitHub, add a branch protection rule or a ruleset for the store's branch that lets only the people who are recipients push to it, and no force pushes. The `ezc/join-*` branches need no protection: a request on one is read as one file, shown whole and asked about, and never merged. With the branch protected, somebody who is not a recipient can file a request and nothing else.
+
+ezc also says what it sees, so that a name written in by hand does not pass unnoticed:
+
+- `ezc store pull` prints a line when the commits it brought changed the names or keys of the registry: `! recipients.yaml changed on the remote: + mallory - sam ~ kim (new key). ezc user list shows who can read the store.` After a change made with `ezc` by somebody you know, that line is what you expect to see. After a commit called `tidy`, it is not.
+- A registry changed by hand leaves the files encrypted for the old list, so the same pull names them and exits 1, `ezc user list` and `ezc doctor` report them, and writes to those files and `ezc store push` are refused until somebody re-wraps.
+- Every change to who can read the store prints, before it changes anything, each name that would gain access to a file and each key that would lose it, apart from the one the command is about: `! mallory gains access to common.enc.yaml, env.prod.enc.yaml.` The command was asked for its own change and goes on to make it, so the line is a warning, not a question: when it names somebody who should not read the store, take them out with `ezc user remove <name>` straight away and give the secrets it lists new values. Reading `ezc user list` before a change to access avoids the surprise, and `ezc user remove <name>` of a name that was written in lets nobody in.
+- `ezc store rewrap` does nothing but trust the registry, so when a name would gain access it asks `Let mallory read the store? [y/N]` on a terminal, and without one it stops unless it is given `--yes`. Anything but `y` or `yes` prints `Not re-wrapped.` and changes nothing.
+- A key that `recipients.yaml` does not name and that a file is still encrypted for loses access in the re-wrap: `! age1…, a key recipients.yaml does not name, loses access to env.staging.enc.yaml. The secrets it could read are recorded as needing new values: ezc store status --due lists them.` Those secrets get entries in `rotation-due.yaml` like the ones a removal writes, under the key itself, because a value written while that key could read the file is as exposed as one a removed person read.
 
 `ezc user rotate` replaces the key of the machine you run it on. It creates the new key in a new file beside the old one, re-wraps every encrypted file for it and saves the new file as `key_file` in `config.toml` once every file is proved readable with it, then commits as `rotate <name>` and pushes; if the change fails and the store is put back, the new file is removed and `config.toml` is as it was. A rotation is not finished until the remote has it, because until then this machine would read with a key the remote's files are not encrypted for. So when the push fails, for any reason, the commit is taken back, the new key file is removed, `config.toml` is as it was and the command says `The push failed (<why>). Nothing was changed.`: you still have the key you had. If the store or the commit cannot be put back, both key files are kept and the message names them. The old key file is never rewritten or deleted. Once the command has printed `✓ new key in <file>` the old key no longer opens the store, but it still opens every older commit, so delete it when you are sure and use `--compromised` when it may have leaked. Nobody can rotate another person's key, because there is no safe way to hand them the private half.
 

@@ -246,7 +246,7 @@ func TestBotKeyIsProvedBeforeItIsDelivered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, done, err := giveBotKey(f.sys(), a, "ci", "the same ezc bot add", change{next: next, message: "add bot ci"}, []byte("FAKE-KEY-dd04\n"), []string{"o/a"}, false)
+	_, done, err := giveBotKey(f.sys(), a, "ci", "the same ezc bot add", change{next: next, message: "add bot ci", subject: "ci"}, []byte("FAKE-KEY-dd04\n"), []string{"o/a"}, false)
 	if done || err == nil || err.Error() != "the new key cannot read common.enc.yaml. Nothing was changed." {
 		t.Fatalf("done %v, err %v", done, err)
 	}

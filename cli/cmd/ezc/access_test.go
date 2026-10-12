@@ -572,18 +572,32 @@ func TestWriteUnderAStalePolicyEndToEnd(t *testing.T) {
 	}
 
 	w.refused(b, "", "behind origin", "store", "push")
-	w.refused(b, "", "! env.staging.enc.yaml is not encrypted for the registry. Run ezc store rewrap before you set anything.\n", "store", "pull")
+	said := w.refused(b, "", "! env.staging.enc.yaml is not encrypted for the registry. Run ezc store rewrap before you set anything.\n", "store", "pull")
+	if !strings.Contains(said, "! recipients.yaml changed on the remote: - ci. ezc user list shows who can read the store.\n") {
+		t.Fatalf("the pull does not say who was removed:\n%s", said)
+	}
 	w.refused(b, "", "env.staging.enc.yaml is not encrypted for the people recipients.yaml names, so nothing was pushed. Run ezc store rewrap.", "store", "push")
 	w.refused(b, fresher, "env.staging.enc.yaml is not encrypted for the people recipients.yaml names. Run ezc store rewrap.", "set", "-g", "NEW_KEY", "--env", "staging")
 	if commits := onRemote(t, b, bare, "env.staging.enc.yaml"); commits != "" {
 		t.Fatalf("the remote has the file that the removed key reads, in %s", commits)
 	}
 
-	if out := w.ok(b, "", "store", "rewrap"); !strings.Contains(out, "✓ rewrap\n") || !strings.Contains(out, "✓ pushed to "+bare+"\n") {
-		t.Fatalf("rewrap: %q", out)
+	out := w.ok(b, "", "store", "rewrap")
+	for _, want := range []string{", a key recipients.yaml does not name, loses access to env.staging.enc.yaml.", "✓ rewrap\n", "✓ pushed to " + bare + "\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rewrap: no %q in\n%s", want, out)
+		}
 	}
 	wantShutOut(t, b, "env.staging.enc.yaml", b.key, botKeyFile)
+	// The value was written while the removed key could read its file, and the commit that holds it is now on the
+	// remote: it is due for a new one, and the new one clears it.
+	if out := w.ok(b, "", "store", "status", "--due"); !strings.Contains(out, "env.staging.enc.yaml/NEW_KEY") {
+		t.Fatalf("the secret written under the old policy is not due: %q", out)
+	}
 	w.ok(b, fresher, "set", "-g", "NEW_KEY", "--env", "staging")
+	if out := w.ok(b, "", "store", "status", "--due"); strings.Contains(out, "NEW_KEY") {
+		t.Fatalf("the secret is still due after its new value: %q", out)
+	}
 	w.ok(b, "", "store", "push")
 	wantShutOut(t, b, "env.staging.enc.yaml", b.key, botKeyFile)
 	for _, m := range []*e2e{a, b} {
@@ -699,4 +713,77 @@ func TestRotateThatCannotBePushedEndToEnd(t *testing.T) {
 	w.ok(b, "", "store", "pull")
 	cannotRead(t, w, b)
 	w.done(a, b)
+}
+
+// Whoever can push to the store can write a name into recipients.yaml with git alone. The files do not change by
+// that, and nothing ezc does lets the name in without saying so: the pull names it, a re-wrap asks, and until
+// somebody answers yes the key reads nothing.
+func TestRegistryChangedWithGitAloneEndToEnd(t *testing.T) {
+	w, a, _, _ := joined(t)
+	root := t.TempDir()
+	bare := a.git("remote", "get-url", "origin")
+	// The key that names itself: a machine that only made a key.
+	m := newMachine(t, root, "m")
+	line := strings.Fields(m.mustRun(m.repo, "", "join", "--print", "--name", "mallory"))
+	if len(line) != 5 || line[3] != "mallory" {
+		t.Fatalf("join --print: %q", line)
+	}
+	w.hide("the intruder's private key", secretLineOf(t, m.key))
+	clone := filepath.Join(root, "clone")
+	git := func(args ...string) {
+		t.Helper()
+		if out, errOut, code := m.exec(root, "", "git", args...); code != 0 {
+			t.Fatalf("git %v: exit %d\n%s%s", args, code, out, errOut)
+		}
+	}
+	git("clone", "--quiet", bare, clone)
+	registry := filepath.Join(clone, ".ezc", "recipients.yaml")
+	data, err := os.ReadFile(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := "    mallory:\n        key: " + line[4] + "\n        kind: user\n        added: \"2026-10-11\"\n        addedBy: mallory\n"
+	if err := os.WriteFile(registry, append(data, entry...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("-C", clone, "-c", "user.name=m", "-c", "user.email=m@example.invalid", "commit", "--quiet", "-am", "tidy")
+	git("-C", clone, "push", "--quiet", "origin", "HEAD")
+
+	said := w.refused(a, "", "! recipients.yaml changed on the remote: + mallory. ezc user list shows who can read the store.\n", "store", "pull")
+	if !strings.Contains(said, "! common.enc.yaml is not encrypted for the registry.") {
+		t.Fatalf("the pull does not name the file:\n%s", said)
+	}
+	if stdout, _, code := w.run(a, "", "doctor"); code != 1 || !strings.Contains(stdout, "Run ezc user list and check who it names, then ezc store rewrap.") {
+		t.Fatalf("doctor: exit %d\n%s", code, stdout)
+	}
+	// No terminal, no --yes: the fix doctor names lets nobody in.
+	head := a.git("rev-parse", "HEAD")
+	stdout, stderr, code := w.run(a, "", "store", "rewrap")
+	if code != 2 || !strings.Contains(stdout, "! mallory gains access to common.enc.yaml.\n") || !strings.Contains(stderr, "this would let mallory read the store") {
+		t.Fatalf("rewrap: exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+	file, err := os.ReadFile(filepath.Join(a.store(), ".ezc", "common.enc.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.git("rev-parse", "HEAD") != head || a.git("status", "--porcelain") != "" || len(dataKeys(t, file, m.key)) != 0 {
+		t.Fatal("the refused re-wrap changed the store, or the key that was written in reads the file")
+	}
+
+	// Another access change says who else it would let in; taking the name out again is one that lets nobody in.
+	if out := w.ok(a, "", "user", "remove", "mallory"); strings.Contains(out, "gains access") || !strings.Contains(out, "✓ remove mallory\n") {
+		t.Fatalf("remove: %q", out)
+	}
+	if out := w.ok(a, "", "user", "list"); strings.Contains(out, "mallory") || strings.Contains(out, "✗") {
+		t.Fatalf("user list:\n%s", out)
+	}
+	file, err = os.ReadFile(filepath.Join(a.store(), ".ezc", "common.enc.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dataKeys(t, file, m.key)) != 0 {
+		t.Fatal("the key that was written in reads the file")
+	}
+	reads(t, a, e2eSecret)
+	w.done(a)
 }
