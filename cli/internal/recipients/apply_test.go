@@ -179,6 +179,7 @@ type failAfter struct {
 	policy bool // WritePolicy writes, then fails
 	lie    bool // Rewrap does nothing
 	hook   func()
+	spoil  bool // Rewrap rewrites the file, then fails: a re-wrap that stopped part way
 }
 
 func (f failAfter) WritePolicy(dir string, keys []string) error {
@@ -197,6 +198,12 @@ func (f failAfter) Rewrap(path string) error {
 	}
 	if f.lie {
 		return nil
+	}
+	if f.spoil {
+		if err := os.WriteFile(path, []byte("half: rewrapped\n"), 0o644); err != nil {
+			return err
+		}
+		return errors.New("the last step of the re-wrap failed")
 	}
 	return f.Fake.Rewrap(path)
 }
@@ -227,6 +234,7 @@ func TestApplyRemovesCreatedFiles(t *testing.T) {
 		"rewrap":    func(b *backend.Fake) Backend { b.RewrapFail = "dev.enc.yaml"; return b },
 		"mismatch":  func(b *backend.Fake) Backend { return failAfter{Fake: b, lie: true} },
 		"first one": func(b *backend.Fake) Backend { b.RewrapFail = "common.enc.yaml"; return b },
+		"part way":  func(b *backend.Fake) Backend { return failAfter{Fake: b, spoil: true} },
 	}
 	for label, mk := range steps {
 		dir, b := bareFolder(t)

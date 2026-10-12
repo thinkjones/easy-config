@@ -106,8 +106,8 @@ func (a *access) guard() error {
 	if s.Offline && s.Status.Remote != "" {
 		return errors.New("The store's remote could not be reached, so nobody else would get this change. Run this again when it can be.")
 	}
-	if s.Status.Behind > 0 {
-		return errors.New("The store is behind its remote. Run ezc store pull, then run this again.")
+	if err := behind(s.Status); err != nil {
+		return err
 	}
 	if !s.Status.Dirty {
 		return nil

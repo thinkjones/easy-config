@@ -1265,6 +1265,8 @@ type leaving struct {
 	file      string
 	rotated   []byte // the file as rotate found it
 	rotateErr error
+	failWrap  int // the updatekeys run that fails, counted from 1; 0 for none
+	wraps     int
 }
 
 const twoRecipients = "A: ENC[x]\nsops:\n    age:\n        - recipient: age1first\n          enc: one\n        - recipient: age1second\n          enc: two\n"
@@ -1273,6 +1275,9 @@ func (l *leaving) run(c proc.Command) ([]byte, []byte, error) {
 	l.cmds = append(l.cmds, c)
 	switch c.Args[0] {
 	case "updatekeys":
+		if l.wraps++; l.wraps == l.failWrap {
+			return nil, []byte(l.stderr), errors.New("exit status 1")
+		}
 		return nil, nil, os.WriteFile(l.file, []byte("A: ENC[x]\nsops:\n    age:\n        - recipient: age1first\n          enc: one\n"), 0o644)
 	case "rotate":
 		l.rotated, _ = os.ReadFile(l.file)
@@ -1312,8 +1317,39 @@ func TestRewrapRotatesTheFileAsItWasThenWrapsAgain(t *testing.T) {
 	if string(l.rotated) != twoRecipients {
 		t.Errorf("rotate found the file without the recipient that leaves:\n%s", l.rotated)
 	}
-	if got, err := l.backend(t).Recipients(l.file); err != nil || !slices.Equal(got, []string{"age1first", "age1second"}) {
-		t.Fatalf("the test's own file: %v, %v", got, err)
+	// What Rewrap left is the file the last updatekeys wrote: the recipient that left is gone from it.
+	if got, err := New(Options{}).Recipients(l.file); err != nil || !slices.Equal(got, []string{"age1first"}) {
+		t.Fatalf("the file Rewrap left is for %v (%v)", got, err)
+	}
+}
+
+// Whether a recipient leaves is the security decision: a file whose recipients cannot be read before the re-wrap
+// is refused, not taken for one that nobody leaves.
+func TestRewrapRefusesAFileWhoseRecipientsCannotBeRead(t *testing.T) {
+	l := &leaving{file: filepath.Join(t.TempDir(), "common.enc.yaml")}
+	b := l.backend(t)
+	if err := os.WriteFile(l.file, []byte("A: [not yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Rewrap(l.file); err == nil {
+		t.Fatal("Rewrap of a file whose recipients cannot be read succeeded")
+	}
+	if len(l.cmds) != 0 {
+		t.Fatalf("ran %d commands", len(l.cmds))
+	}
+}
+
+// The second updatekeys fails: the file is rotated and still lists the recipient that leaves, which is for the
+// caller to put back, and the failure is the backend's own sentence.
+func TestRewrapSaysWhenTheLastWrapFails(t *testing.T) {
+	l := &leaving{file: filepath.Join(t.TempDir(), "common.enc.yaml"), failWrap: 2}
+	l.stderr = "boom s3cr3t-value"
+	err := l.backend(t).Rewrap(l.file)
+	if err == nil || strings.Contains(err.Error(), "s3cr3t-value") {
+		t.Fatalf("Rewrap error = %v", err)
+	}
+	if len(l.cmds) != 3 {
+		t.Errorf("ran %d commands, want 3", len(l.cmds))
 	}
 }
 

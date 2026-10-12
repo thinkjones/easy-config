@@ -320,7 +320,7 @@ func TestTwoMachinesEndToEnd(t *testing.T) {
 	}
 	head := b.git("rev-parse", "HEAD")
 	stdout, stderr, code := b.run(b.repo, "", "set", "-g", "X", "y", "--type", "str", "--desc", "d")
-	if want := behind + "ezc: the store is 1 commit behind origin. Run `ezc store pull` first: a change made now could not be merged.\n"; code != 1 || stdout != "" || stderr != want {
+	if want := behind + "ezc: the store is 1 commit behind origin. Run `ezc store pull`, then run this again.\n"; code != 1 || stdout != "" || stderr != want {
 		t.Fatalf("set while behind: exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
 	}
 	if b.git("rev-parse", "HEAD") != head || b.git("status", "--porcelain") != "" {

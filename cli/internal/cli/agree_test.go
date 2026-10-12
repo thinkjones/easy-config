@@ -211,3 +211,22 @@ func TestDenyRefusedWhileAFileIsNotForTheRegistry(t *testing.T) {
 	x.push(x.store)
 	accessUntouched(t, f, x, "common.enc.yaml, env.prod.enc.yaml are not encrypted for the people recipients.yaml names. Run ezc store rewrap.", "user", "deny", "sam")
 }
+
+// A registry that cannot be read stops a write to an encrypted file, whose readers it would have named, and no other.
+func TestStoreWriteWithARegistryThatCannotBeRead(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	x.commit(x.store, recipients.File, "recipients: [not, a, map\n")
+	x.push(x.store)
+	if _, _, err := accessRun(f, "set", "-g", "NAME", "n2"); err != nil {
+		t.Fatal(err)
+	}
+	f.stdin = "v\n"
+	want := x.file(recipients.File) + ": not valid YAML"
+	if _, _, err := accessRun(f, "set", "-g", "TOKEN"); err == nil || err.Error() != want {
+		t.Fatalf("got %v\nwant %s", err, want)
+	}
+	if _, _, err := accessRun(f, "set", "-g", "TOKEN", "--env", "staging"); err == nil || err.Error() != want {
+		t.Fatalf("a new file: got %v\nwant %s", err, want)
+	}
+}

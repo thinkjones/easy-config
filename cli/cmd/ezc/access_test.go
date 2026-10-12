@@ -136,7 +136,8 @@ func dataKeys(t *testing.T, file []byte, keyFile string) (keys []string) {
 
 // wantShutOut fails when the key in gone, which was a recipient of the machine's store once, unwraps from any
 // commit of file the key that encrypts the file's values now: whoever holds it and the store's history would
-// read every value written since. reader is the key file the machine reads the store with.
+// read every value written since. reader is the key file the machine reads the store with. A key that unwraps
+// nothing from any commit was never a recipient of the file, and proves nothing: that fails too.
 func wantShutOut(t *testing.T, e *e2e, file, reader, gone string) {
 	t.Helper()
 	path := filepath.Join(e.store(), ".ezc", file)
@@ -148,12 +149,17 @@ func wantShutOut(t *testing.T, e *e2e, file, reader, gone string) {
 	if len(current) != 1 {
 		t.Fatalf("the machine's key unwraps %d keys from %s", len(current), file)
 	}
+	unwrapped := 0
 	for _, commit := range strings.Fields(e.git("log", "--all", "--diff-filter=AM", "--format=%H", "--", ".ezc/"+file)) {
 		for _, old := range dataKeys(t, []byte(e.git("show", commit+":.ezc/"+file)), gone) {
+			unwrapped++
 			if old == current[0] {
 				t.Fatalf("the removed key unwraps, from commit %s, the key that encrypts %s now", commit[:7], file)
 			}
 		}
+	}
+	if unwrapped == 0 {
+		t.Fatalf("the key in %s unwraps nothing from any commit of %s: it was never a recipient, and the check proves nothing", gone, file)
 	}
 }
 
@@ -306,7 +312,7 @@ func TestRemoveEndToEnd(t *testing.T) {
 	w.hide("the secret's new value", fresh)
 
 	out := w.ok(a, "", "user", "remove", "sam")
-	for _, want := range []string{"✓ remove sam\n", "1 secret was readable by sam and needs a new value:\n  common.enc.yaml/API_TOKEN\n", "ezc set -g NAME"} {
+	for _, want := range []string{"✓ remove sam\n", "1 secret was readable by sam and needs a new value. Give it one with:\n  ezc set -g API_TOKEN\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("remove: no %q in\n%s", want, out)
 		}
@@ -402,6 +408,8 @@ func TestBotEndToEnd(t *testing.T) {
 	// A job: the key gh was given and a token, both in its environment, and nothing else.
 	job := func(name string) *e2e {
 		m := newMachine(t, root, name)
+		// The real gh may sit beside git on the PATH that follows: a job that reached for it would find the fake.
+		fakeGh(t, root, m)
 		m.env = append(m.env, "EZC_AGE_KEY="+botKey, "EZC_STORE_TOKEN=x")
 		return m
 	}
@@ -423,7 +431,7 @@ func TestBotEndToEnd(t *testing.T) {
 	}
 
 	out = w.ok(a, "", "bot", "remove", "ci")
-	for _, want := range []string{"✓ remove bot ci\n", "✓ EZC_AGE_KEY deleted from o/a\n", "1 secret was readable by ci and needs a new value:\n  common.enc.yaml/API_TOKEN\n"} {
+	for _, want := range []string{"✓ remove bot ci\n", "✓ EZC_AGE_KEY deleted from o/a\n", "1 secret was readable by ci and needs a new value. Give it one with:\n  ezc set -g API_TOKEN\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("bot remove: no %q in\n%s", want, out)
 		}
@@ -446,6 +454,10 @@ func TestBotEndToEnd(t *testing.T) {
 		t.Fatalf("setup --ci with the removed key: exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
 	}
 	cannotRead(t, w, late)
+	// Nothing a job ran reached for gh: the two calls are still A's.
+	if calls := ghCalls(t, log); len(calls) != 2 {
+		t.Fatalf("gh ran %d times, want the 2 of bot add and bot remove: %+v", len(calls), calls[len(calls)-1].args)
+	}
 	w.done(a, ci)
 }
 
@@ -453,6 +465,7 @@ func TestRotateEndToEnd(t *testing.T) {
 	w := newWatch(t)
 	// B holds only a copy of A's key file, as a second machine of the same person did before part 4.
 	a, b, bare := twoMachines(t)
+	log := fakeGh(t, t.TempDir(), a, b)
 	w.hide("the secret's value", e2eSecret)
 	oldKey := secretLineOf(t, a.key)
 	w.hide("A's old private key", oldKey)
@@ -515,6 +528,9 @@ func TestRotateEndToEnd(t *testing.T) {
 		t.Fatalf("pull: %q", out)
 	}
 	cannotRead(t, w, b)
+	if calls := ghCalls(t, log); len(calls) != 0 {
+		t.Fatalf("a rotation ran gh: %+v", calls)
+	}
 	w.done(a, b)
 }
 
@@ -571,7 +587,7 @@ func TestWriteUnderAStalePolicyEndToEnd(t *testing.T) {
 		t.Fatal("the new file is not encrypted for the removed key: this test proves nothing")
 	}
 
-	w.refused(b, "", "behind origin", "store", "push")
+	w.refused(b, "", "the store has diverged from origin (1 ahead, 1 behind). Run `ezc store pull`, then run this again.", "store", "push")
 	said := w.refused(b, "", "! env.staging.enc.yaml is not encrypted for the registry. Run ezc store rewrap before you set anything.\n", "store", "pull")
 	if !strings.Contains(said, "! recipients.yaml changed on the remote: - ci. ezc user list shows who can read the store.\n") {
 		t.Fatalf("the pull does not say who was removed:\n%s", said)
@@ -633,7 +649,7 @@ func TestAccessChangeThatWasNotPushedEndToEnd(t *testing.T) {
 	w.ok(b, "", "store", "push")
 
 	// A does what it was told to.
-	w.refused(a, "", "behind origin", "store", "push")
+	w.refused(a, "", "the store has diverged from origin (1 ahead, 1 behind). Run `ezc store pull`, then run this again.", "store", "push")
 	said := w.refused(a, "", "! common.enc.yaml was re-wrapped here and changed on the remote.", "store", "pull")
 	if strings.Contains(said, "set these again") || strings.Contains(said, "ezc set -g") {
 		t.Fatalf("the pull names a value to set in a file the removed key reads:\n%s", said)
@@ -724,6 +740,7 @@ func TestRegistryChangedWithGitAloneEndToEnd(t *testing.T) {
 	bare := a.git("remote", "get-url", "origin")
 	// The key that names itself: a machine that only made a key.
 	m := newMachine(t, root, "m")
+	fakeGh(t, root, m)
 	line := strings.Fields(m.mustRun(m.repo, "", "join", "--print", "--name", "mallory"))
 	if len(line) != 5 || line[3] != "mallory" {
 		t.Fatalf("join --print: %q", line)

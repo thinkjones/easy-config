@@ -20,7 +20,7 @@ func removeStore(t *testing.T, f *fake) storeWriteFix {
 	}, accessGene, accessSam)
 }
 
-const removeSamList = "2 secrets were readable by sam and need new values:\n  common.enc.yaml/TOKEN\n  env.prod.enc.yaml/TOKEN\nGive each a new value with ezc set -g NAME.\n"
+const removeSamList = "2 secrets were readable by sam and need new values. Give each one with:\n  ezc set -g TOKEN\n  ezc set -g TOKEN --env prod\n"
 
 func TestUserRemove(t *testing.T) {
 	f := newFake(t)
@@ -300,5 +300,29 @@ func TestUserRemoveOneSecret(t *testing.T) {
 	x.git("add", "-A")
 	x.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "one file")
 	x.push(x.store)
-	accessWant(t, f, "✓ remove sam\n✓ pushed to "+x.bare+"\n1 secret was readable by sam and needs a new value:\n  common.enc.yaml/TOKEN\nGive each a new value with ezc set -g NAME.\n", "user", "remove", "sam")
+	accessWant(t, f, "✓ remove sam\n✓ pushed to "+x.bare+"\n1 secret was readable by sam and needs a new value. Give it one with:\n  ezc set -g TOKEN\n", "user", "remove", "sam")
+}
+
+// An entry whose secret is no longer in its file, because it was removed in an editor or the file is gone, is
+// cleared by the unset that finds nothing to remove.
+func TestUnsetClearsAnEntryWhoseSecretIsGone(t *testing.T) {
+	f := newFake(t)
+	x := removeDue(t, f)
+	if err := os.Remove(x.file("env.prod.enc.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	x.git("add", "-A")
+	x.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "by hand")
+	x.git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+	accessWant(t, f, "TOKEN is not set in store/env.prod.yaml or store/env.prod.enc.yaml; it no longer needs a new value there\n", "unset", "-g", "TOKEN", "--env", "prod")
+	x.wantCommit("unset TOKEN (rotation-due.yaml)", recipients.DueFile)
+	due, _ := recipients.LoadDue(filepath.Join(x.store, ezcDir))
+	if len(due) != 1 || due["common.enc.yaml/TOKEN"].Removed != "sam" {
+		t.Fatalf("due %v", due)
+	}
+	// With no entry, a name that is not set is still an error.
+	if _, _, err := accessRun(f, "unset", "-g", "TOKEN", "--env", "prod"); err == nil || err.Error() != "TOKEN is not set in store/env.prod.yaml or store/env.prod.enc.yaml." {
+		t.Fatalf("got %v", err)
+	}
 }

@@ -69,9 +69,16 @@ func (b *sopsBackend) Rewrap(path string) error {
 	if err := b.requirePolicy(path); err != nil {
 		return err
 	}
-	// A file that cannot be read is for sops to refuse.
-	original, _ := os.ReadFile(path)
-	before, _ := b.Recipients(path)
+	// Whether a recipient leaves is judged from these: a file that cannot be read is refused here, never taken
+	// for one that nobody leaves.
+	original, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("%s: could not read this file", path)
+	}
+	before, err := b.Recipients(path)
+	if err != nil {
+		return err
+	}
 	updatekeys := func() error {
 		_, stderr, err := b.run(proc.Command{Dir: filepath.Dir(path), Args: []string{"updatekeys", "--yes", filepath.Base(path)}})
 		if err != nil {

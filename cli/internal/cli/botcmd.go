@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -127,7 +128,7 @@ func newBotAddCmd(sys System) *cobra.Command {
 		Short: "give a bot a key that reads the store, and save it in the repos that use it",
 		Long: `Create a key for a bot, add its public half to recipients.yaml under name with kind bot, write the encryption policy and re-wrap every encrypted file of the store for the new list, in one commit named ` + "`add bot <name>`" + `, then push.
 
-The private half is never written to disk. Before the commit, ezc checks that it opens every encrypted file and saves it as the ` + botSecret + ` Actions secret of each --repo, through gh, which reads it on stdin. When a repo cannot be given the key, the store is put back as it was and nothing is committed. The repos are recorded in the bot's entry.
+The private half is never written to disk. Before the commit, ezc checks that it opens every encrypted file and saves it as the ` + botSecret + ` Actions secret of each --repo, through gh, which reads it on stdin. When a repo cannot be given the key, the store is put back as it was and nothing is committed. The repos are recorded in the bot's entry. A repo holds one ` + botSecret + `, so a --repo that another bot's entry already names is refused.
 
 With --print-private the private key is printed on stdout as one line, with nothing else there: every other line goes to stderr. It is for a CI system that is not GitHub Actions; pipe it straight into that system's secret store. Give --repo, --print-private or both.
 
@@ -153,13 +154,22 @@ Needs this machine's key file, as every change to who can read the store does, a
 					to = append(to, repo)
 				}
 			}
-			// Decision 5: the repos are not checked against a registry of repos yet.
+			// Decision 5: the repos are not checked against a registry of repos yet, only against the other bots' below.
 			if len(to) > 0 && !botGh(sys).Installed() {
 				return errors.New(botNoGh)
 			}
 			a, err := openAccess(sys, true)
 			if err != nil {
 				return err
+			}
+			// A repo holds one secret of that name: a second bot there would take the first one's place, and
+			// removing either would delete what the other reads with. The registry's names passed its rule.
+			for _, repo := range to {
+				for _, other := range slices.Sorted(maps.Keys(a.reg.Recipients)) {
+					if r := a.reg.Recipients[other]; r.Kind == recipients.KindBot && slices.Contains(r.Repos, repo) {
+						return fmt.Errorf("%s already gets its key from the bot %s, and a repo holds one %s. Give that bot's key to the workflows that need it, or remove %s first.", repo, other, botSecret, other)
+					}
+				}
 			}
 			public, private, err := a.b.NewKey()
 			if err != nil {

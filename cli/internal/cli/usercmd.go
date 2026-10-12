@@ -17,6 +17,7 @@ import (
 
 	"github.com/thinkjones/easy-config/cli/internal/config"
 	"github.com/thinkjones/easy-config/cli/internal/gitstore"
+	"github.com/thinkjones/easy-config/cli/internal/manifest"
 	"github.com/thinkjones/easy-config/cli/internal/paths"
 	"github.com/thinkjones/easy-config/cli/internal/recipients"
 	"github.com/thinkjones/easy-config/cli/internal/setup"
@@ -143,7 +144,7 @@ func newUserRemoveCmd(sys System) *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove <name>",
 		Short: "stop a person or one of their machines reading the store",
-		Long: `Remove name from recipients.yaml, write the encryption policy from it and re-wrap every encrypted file for the new list, in one commit, then push. Then list the secrets the removed key could read, which need new values: they are recorded in rotation-due.yaml, and ` + "`ezc set -g`" + ` or ` + "`ezc unset -g`" + ` of one clears its entry.
+		Long: `Remove name from recipients.yaml, write the encryption policy from it and re-wrap every encrypted file for the new list, in one commit, then push. Then list the secrets the removed key could read, which need new values, as the ` + "`ezc set -g`" + ` command for each: they are recorded in rotation-due.yaml, and ` + "`ezc set -g`" + ` or ` + "`ezc unset -g`" + ` of one clears its entry.
 
 Re-wrapping does not un-leak anything: the removed key still opens every older commit of the store, so only a new value protects a secret.
 
@@ -216,7 +217,7 @@ func (a *access) otherWayIn(name string) bool {
 }
 
 // dueFor is what removing a recipient leaves to rotate: for every name in every encrypted file of the store, an entry
-// for removed dated today, and the "<file>/<NAME>" list to print. The names come from the files, which need no key.
+// for removed dated today, and the list to print, one dueLine each. The names come from the files, which need no key.
 func dueFor(a *access, removed string) (func(recipients.Due), []string, error) {
 	today := a.sys.Now().Format("2006-01-02")
 	type held struct{ file, name string }
@@ -229,7 +230,7 @@ func dueFor(a *access, removed string) (func(recipients.Due), []string, error) {
 		}
 		for _, name := range names {
 			all = append(all, held{file, name})
-			list = append(list, recipients.Printable(file+"/"+name))
+			list = append(list, dueLine(file, name))
 		}
 	}
 	return func(d recipients.Due) {
@@ -239,20 +240,29 @@ func dueFor(a *access, removed string) (func(recipients.Due), []string, error) {
 	}, list, nil
 }
 
+// dueLine is the command that gives a secret of the store a new value, `ezc set -g NAME` with the --env its file
+// calls for. The file and the name come from the store: when either could not be an argument of that command, the
+// line is "<file>/<NAME>" made printable.
+func dueLine(file, name string) string {
+	if env, ok := envFlag(file); ok && manifest.ValidName(name) {
+		return "ezc set -g " + name + env
+	}
+	return recipients.Printable(file + "/" + name)
+}
+
 // sayDue prints the secrets a key that is gone could read, dueFor's list, which need new values. who had the key.
 func sayDue(w io.Writer, who string, list []string) {
 	if len(list) == 0 {
 		return
 	}
-	was, need := "were", "need new values"
+	was, need := "were", "need new values. Give each one with:"
 	if len(list) == 1 {
-		was, need = "was", "needs a new value"
+		was, need = "was", "needs a new value. Give it one with:"
 	}
-	fmt.Fprintf(w, "%s %s readable by %s and %s:\n", count(len(list), "secret"), was, who, need)
+	fmt.Fprintf(w, "%s %s readable by %s and %s\n", count(len(list), "secret"), was, who, need)
 	for _, entry := range list {
 		fmt.Fprintf(w, "  %s\n", entry)
 	}
-	fmt.Fprintln(w, "Give each a new value with ezc set -g NAME.")
 }
 
 // userNameRule is the usage error for a name that could not be a recipient's. The argument is not repeated.
@@ -286,7 +296,7 @@ func newUserRequestsCmd(sys System) *cobra.Command {
 
 Everything in a request was written by whoever filed it, and anyone who can push to the store can file one under any name. The host, the date and the author are claims, not proof. Before ` + "`ezc user approve <name>`" + `, ask the person for their public key some other way and compare it with the key shown here.
 
-A request that does not hold to the rules is listed as not valid, and cannot be approved; ` + "`ezc user deny <name>`" + ` removes it.`,
+A request that does not hold to the rules is listed as not valid, and cannot be approved; ` + "`ezc user deny <name>`" + ` removes it. A request whose name cannot be shown is not listed: how many there are is said on stderr, and git removes them.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			p, err := storeFolder(sys)
@@ -297,7 +307,14 @@ A request that does not hold to the rules is listed as not valid, and cannot be 
 			if s.Offline {
 				fmt.Fprintln(sys.Stderr, "! The store's remote could not be reached: these are the requests as they were when it last was.")
 			}
-			all := pendingRequests(sys, p.Store(), s.Git && s.Status.Remote != "")
+			all, hidden := pendingRequests(sys, p.Store(), s.Git && s.Status.Remote != "")
+			// A name that is not shown can be seen nowhere else, and no command takes a name that is not valid.
+			switch {
+			case hidden == 1:
+				fmt.Fprintln(sys.Stderr, "! 1 request has a name that cannot be shown, so it is not listed and ezc user deny cannot remove it. Delete its branch or its file with git.")
+			case hidden > 1:
+				fmt.Fprintf(sys.Stderr, "! %d requests have names that cannot be shown, so they are not listed and ezc user deny cannot remove them. Delete their branches or their files with git.\n", hidden)
+			}
 			if len(all) == 0 {
 				fmt.Fprintln(sys.Stdout, "No pending requests.")
 			}
@@ -316,7 +333,8 @@ A request that does not hold to the rules is listed as not valid, and cannot be 
 // request is the pending request filed under name, as the remote holds it at the fetch openAccess just made, which
 // reached the remote: openAccess refuses when it did not.
 func (a *access) request(name string) (pending, error) {
-	for _, q := range pendingRequests(a.sys, filepath.Dir(a.dir), a.sync.Git && a.sync.Status.Remote != "") {
+	all, _ := pendingRequests(a.sys, filepath.Dir(a.dir), a.sync.Git && a.sync.Status.Remote != "")
+	for _, q := range all {
 		if q.Name == name {
 			return q, nil
 		}

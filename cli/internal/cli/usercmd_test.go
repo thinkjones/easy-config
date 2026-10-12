@@ -25,7 +25,8 @@ const (
 	accessStray       = "fake1cc03"
 
 	accessNoKeyFile    = "An access change needs a key file, and this machine uses none. Run this on a machine that keeps its key in a file."
-	accessBehind       = "The store is behind its remote. Run ezc store pull, then run this again."
+	accessBehind       = "the store is 1 commit behind origin. Run `ezc store pull`, then run this again."
+	accessDiverged     = "the store has diverged from origin (1 ahead, 1 behind). Run `ezc store pull`, then run this again."
 	accessNotRecipient = "This machine's key is not a recipient of the store, so it cannot re-wrap it. Run ezc join."
 )
 
@@ -283,7 +284,7 @@ func TestAccessRefusals(t *testing.T) {
 		{"diverged", func(f *fake, x storeWriteFix) string {
 			x.commit(x.store, "common.yaml", "NAME: mine\n")
 			x.theirs(1)
-			return accessBehind
+			return accessDiverged
 		}},
 		{"dirty registry", func(f *fake, x storeWriteFix) string {
 			write(t, x.file(recipients.File), readFile(t, x.file(recipients.File))+"# by hand\n")
@@ -986,7 +987,11 @@ func TestUserRequestsAreUntrusted(t *testing.T) {
 	listed := "bad: not a valid request (the name inside the request differs from its file name)\n" +
 		"empty: not a valid request (its branch holds no request)\n" +
 		requestShown(esc, j.author(requestBranch+"esc"))
-	accessWant(t, j.a, listed, "user", "requests")
+	// The one whose name cannot be shown is counted: nothing else says it is there, and no command can remove it.
+	out, hidden, err := accessRun(j.a, "user", "requests")
+	if err != nil || out != listed || hidden != "! 1 request has a name that cannot be shown, so it is not listed and ezc user deny cannot remove it. Delete its branch or its file with git.\n" {
+		t.Fatalf("%v\nstdout %q\nstderr %q", err, out, hidden)
+	}
 	status, errOut, err := accessRun(j.a, "store", "status")
 	if err != nil || !strings.Contains(status, "requests  bad, empty, esc\n") {
 		t.Fatalf("store status: %v\n%s", err, status)
@@ -1017,7 +1022,7 @@ func TestUserRequestsAreUntrusted(t *testing.T) {
 
 	// The one that is valid is approved as it was shown, and the one that is not is refused with deny.
 	head := j.x.git("rev-parse", "HEAD")
-	out, _, err := accessRun(j.a, "user", "approve", "esc", "--yes")
+	out, _, err = accessRun(j.a, "user", "approve", "esc", "--yes")
 	if err != nil || !strings.HasPrefix(out, "esc\n") || strings.ContainsAny(out, "\x1b\x07") || !strings.Contains(out, "  host       ?]0;x?\n") {
 		t.Fatalf("approve esc: %v\n%q", err, out)
 	}
@@ -1490,7 +1495,7 @@ func TestUserRotateCompromised(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"common.enc.yaml/TOKEN", "env.prod.enc.yaml/TOKEN", "readable by gene (old key)"} {
+	for _, want := range []string{"  ezc set -g TOKEN\n", "  ezc set -g TOKEN --env prod\n", "readable by gene (old key)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
 		}

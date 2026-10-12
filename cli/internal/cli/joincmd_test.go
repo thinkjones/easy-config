@@ -526,7 +526,7 @@ func TestJoinARequestThatWasMerged(t *testing.T) {
 	j.x.git("push", "--quiet", "origin", "--delete", joinBranch)
 
 	_, _, err := joinRun(t, j.b, "join", j.x.bare)
-	if err == nil || err.Error() != "The store is behind its remote. Run ezc store pull, then run ezc join again." {
+	if err == nil || err.Error() != "the store is 1 commit behind origin. Run `ezc store pull`, then run this again." {
 		t.Fatalf("behind: %v", err)
 	}
 	if _, _, err := joinRun(t, j.b, "store", "pull"); err != nil {

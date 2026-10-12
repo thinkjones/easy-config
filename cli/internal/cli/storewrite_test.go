@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	storeWriteBehind   = "the store is 2 commits behind origin. Run `ezc store pull` first: a change made now could not be merged."
-	storeWriteDiverged = "the store has diverged from origin. Run `ezc store pull` first: a change made now could not be merged."
+	storeWriteBehind   = "the store is 2 commits behind origin. Run `ezc store pull`, then run this again."
+	storeWriteDiverged = "the store has diverged from origin (1 ahead, 2 behind). Run `ezc store pull`, then run this again."
 )
 
 // storeWriteFix is a gitFix with what these tests ask of the store's history.
@@ -761,7 +761,7 @@ func TestWriteInsideTheStoreCommits(t *testing.T) {
 	x.theirs(1)
 	f.now = noon.Add(11 * time.Minute)
 	err := f.run("unset", "NAME")
-	if err == nil || !strings.Contains(err.Error(), "the store has diverged from origin.") {
+	if err == nil || !strings.Contains(err.Error(), "the store has diverged from origin (") {
 		t.Fatalf("got %v", err)
 	}
 }

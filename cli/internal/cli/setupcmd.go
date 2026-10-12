@@ -478,7 +478,7 @@ func localSource(sys System, source string) string {
 }
 
 // sameRemote reports whether a store whose origin is remote is the store source names:
-// the same URL or path, with or without .git, or a URL that ends in the owner/repo.
+// the same URL or path, with or without .git, or, for an owner/repo, that repo on github.com and nowhere else.
 func sameRemote(remote, source string) bool {
 	if remote == "" {
 		return false
@@ -488,7 +488,17 @@ func sameRemote(remote, source string) bool {
 	if r == s {
 		return true
 	}
-	return setup.IsSlug(source) && (strings.HasSuffix(r, "/"+s) || strings.HasSuffix(r, ":"+s))
+	if !setup.IsSlug(source) || !onGitHub(remote) {
+		return false
+	}
+	// What follows the host is the whole of the owner/repo: github.com/mirror/owner/repo is another repo.
+	shown := bare(gitstore.ShowURL(remote))
+	if _, rest, isURL := strings.Cut(shown, "://"); isURL {
+		_, path, _ := strings.Cut(rest, "/")
+		return path == s
+	}
+	_, path, _ := strings.Cut(shown, ":")
+	return path == s
 }
 
 // remoteNote is "remote <url>" for a message, the URL without what it may carry besides the host and the path.

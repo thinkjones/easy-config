@@ -84,7 +84,7 @@ Approving is a decision to trust a key, made on text that somebody else wrote. A
 - **The host** and **the date** are what the requesting machine wrote into the request. They help you tell two requests apart; they are claims.
 - **The author** is the Git author of the commit that filed the request, which is whatever the requester's git was set to say. It is a claim too. On GitHub, the account that pushed the branch or opened the pull request is better evidence than this line.
 
-The name, kind and owner must hold to the same rules as an entry of `recipients.yaml`, and the key must be a valid public key; the host, the date and the author are printed with every character outside printable ASCII shown as `?` and cut at 80 characters, so a request cannot write to your terminal. A request that breaks a rule is listed as `<name>: not a valid request (<why>)` and cannot be approved. A request whose branch is not named `ezc/join-<a valid name>` is not shown anywhere.
+The name, kind and owner must hold to the same rules as an entry of `recipients.yaml`, and the key must be a valid public key; the host, the date and the author are printed with every character outside printable ASCII shown as `?` and cut at 80 characters, so a request cannot write to your terminal. A request that breaks a rule is listed as `<name>: not a valid request (<why>)` and cannot be approved. A request whose branch or file is not named after a valid name is not shown anywhere, because its name could write to your terminal. `ezc user requests` counts them on stderr, `! 1 request has a name that cannot be shown, so it is not listed and ezc user deny cannot remove it. Delete its branch or its file with git.`, since no ezc command takes such a name.
 
 `ezc user approve <name>` fetches first and reads the request as the remote holds it at that moment, so a branch that was changed after you looked is approved as it is now, not as you saw it: the command prints the request again, key and all, before it changes anything, and then asks:
 
@@ -107,13 +107,12 @@ When the remote moved while the approval ran, nothing is changed and the command
 `ezc user remove <name>` takes the entry out, re-wraps every encrypted file without that key and commits as `remove <name>`, the same way `user add` does, and pushes. Re-wrapping does not un-leak anything: the removed key opened every value in the store while it was a recipient, and it still opens every older commit, which is still in the store's history and in every clone and backup of it. Each file a key leaves is also encrypted again from scratch, with a new data key (`sops rotate`), so the removed key opens nothing that is written from that commit on, with or without `ezc`; every line of the file changes in that commit. Only a new value protects a secret, so the command writes each secret the key could read to `rotation-due.yaml` (the file and the name, with who was removed and the date) and prints them:
 
 ```
-2 secrets were readable by sam and need new values:
-  common.enc.yaml/TOKEN
-  env.prod.enc.yaml/TOKEN
-Give each a new value with ezc set -g NAME.
+2 secrets were readable by sam and need new values. Give each one with:
+  ezc set -g TOKEN
+  ezc set -g TOKEN --env prod
 ```
 
-Change the secret itself, at the service that issued it, then give ezc the new value with `ezc set -g NAME` (add `--env` for an environment's file). Setting the secret, or removing it with `ezc unset -g NAME`, clears its entry in the same commit; the file goes with its last entry. `ezc store status` shows `rotation due: <n> secrets`, and `ezc store status --due` lists them, one `<file>/<NAME>  readable by removed <who> since <date>` line each. Nothing here prints a value. Whoever is removed is not told, and nothing here takes the values back from them.
+Change the secret itself, at the service that issued it, then give ezc the new value with the command listed for it, which names the file the secret is in (`--env prod` for `env.prod.enc.yaml`); a secret whose file or name could not be an argument of `ezc set` is listed as `<file>/<NAME>`. Setting the secret, or removing it with `ezc unset -g NAME`, clears its entry in the same commit; the file goes with its last entry. `ezc edit -g --secrets` does not clear an entry, whatever was changed in the editor: set the value with `ezc set -g`. When the secret is no longer in its file, because it was deleted in an editor or the file is gone, `ezc unset -g NAME` (with the file's `--env`) finds nothing to remove and clears the entry: `NAME is not set in store/env.prod.yaml or store/env.prod.enc.yaml; it no longer needs a new value there`. `ezc store status` shows `rotation due: <n> secrets`, and `ezc store status --due` lists them, one `<file>/<NAME>  readable by removed <who> since <date>` line each. Nothing here prints a value. Whoever is removed is not told, and nothing here takes the values back from them.
 
 The command refuses a bot (`ezc bot remove`), the last recipient, a user who still owns machines (remove the machines first), and this machine's own key when no other entry of the same person could read the store: `<name> is this machine's key and your only one. Removing it would lock you out.`
 
@@ -121,7 +120,7 @@ The command refuses a bot (`ezc bot remove`), the last recipient, a user who sti
 
 Every change to access follows the same rules:
 
-- It contacts the remote first, and is refused when the remote cannot be reached (`The store's remote could not be reached, so nobody else would get this change. Run this again when it can be.`), while the store is behind it (`The store is behind its remote. Run ezc store pull, then run this again.`), while git cannot say how the store stands, and while `recipients.yaml`, the policy file, `rotation-due.yaml` or an encrypted file has uncommitted changes. A store with no remote has nobody to tell and is changed as it is.
+- It contacts the remote first, and is refused when the remote cannot be reached (`The store's remote could not be reached, so nobody else would get this change. Run this again when it can be.`), while the store is behind it or has diverged from it (``the store is 1 commit behind origin. Run `ezc store pull`, then run this again.``), while git cannot say how the store stands, and while `recipients.yaml`, the policy file, `rotation-due.yaml` or an encrypted file has uncommitted changes. A store with no remote has nobody to tell and is changed as it is.
 - It needs this machine's key in a key file, and that key must be one `recipients.yaml` names: only someone who can read the store can re-wrap it.
 - If any step fails, every file is put back as it was and nothing is committed; the error ends with `Nothing was changed.`
 - It pushes, because a change to access that stays on one machine has changed nothing for anyone else. The push sends every commit the store is ahead by. A store with no remote is committed and not pushed; a store that is not a git repo is changed with no commit.

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -123,12 +122,11 @@ func storeOptions(sys System, storeEzc string, o *doctor.Options) {
 	}
 	// Who the files are encrypted for is read from the files, so this needs no key.
 	o.Recipients = len(reg.Recipients)
-	if enc, err := encryptedFiles(storeEzc); err != nil {
-		o.DifferErr = firstLineOf(err)
-	} else if diffs, err := recipients.Differences(storeEzc, reg, backendFor(sys), enc); err != nil {
+	// storeDiffers refuses a file whose name cannot be printed before the backend, whose errors name it, sees it.
+	if differ, err := storeDiffers(sys, storeEzc); err != nil {
 		o.DifferErr = firstLineOf(err)
 	} else {
-		o.Differ = slices.Sorted(maps.Keys(diffs))
+		o.Differ = differ
 	}
 	file, ok := keyFileInUse(sys)
 	if !ok {
@@ -147,7 +145,8 @@ func storeOptions(sys System, storeEzc string, o *doctor.Options) {
 // ownRequest is the state of this machine's request for access, and its name: pending when a valid request holds
 // this machine's key, not found when none does.
 func ownRequest(sys System, storeDir string, remote bool, public string) (state, name string) {
-	for _, q := range pendingRequests(sys, storeDir, remote) {
+	all, _ := pendingRequests(sys, storeDir, remote)
+	for _, q := range all {
 		if q.Err == nil && q.Req.Key == public {
 			return "pending", q.Name
 		}

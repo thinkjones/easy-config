@@ -482,7 +482,7 @@ func TestPushToAnEmptyRemote(t *testing.T) {
 }
 
 func TestPushRefused(t *testing.T) {
-	const behind = "the store is behind origin. Run `ezc store pull` first."
+	const behind = "the store is 1 commit behind origin. Run `ezc store pull`, then run this again."
 
 	// Behind, though the state file says the remote was just checked: push looks for itself.
 	f := newFake(t)
@@ -493,7 +493,7 @@ func TestPushRefused(t *testing.T) {
 
 	x.commit(x.store, "env.mine.yaml", "A: b\n")
 	head := x.git("rev-parse", "origin/main")
-	storeCmdRefused(t, f, behind, "push")
+	storeCmdRefused(t, f, "the store has diverged from origin (1 ahead, 1 behind). Run `ezc store pull`, then run this again.", "push")
 	if x.git("rev-parse", "origin/main") != head {
 		t.Fatal("something was pushed")
 	}

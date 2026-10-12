@@ -322,6 +322,15 @@ func quoted(name string) string {
 	return name
 }
 
+// envFlag is what names an encrypted file of the store to `ezc set -g`: nothing for common.enc.yaml, " --env <name>"
+// for env.<name>.enc.yaml. A file that is not one of the store's own has none, and ok is false.
+func envFlag(file string) (flag string, ok bool) {
+	if name, isEnv := strings.CutPrefix(strings.TrimSuffix(file, ".enc.yaml"), "env."); isEnv && resolve.ValidEnvName(name) {
+		return " --env " + name, true
+	}
+	return "", file == "common.enc.yaml"
+}
+
 // replacedNote says that a file took the remote's version, and the commands that make its local changes again.
 // It reads the names of an encrypted file, which are not encrypted, and never a value.
 func replacedNote(r gitstore.Replaced) string {
@@ -329,14 +338,8 @@ func replacedNote(r gitstore.Replaced) string {
 	note := fmt.Sprintf("! %s was changed here and on the remote. The remote's version was kept; ", quoted(file))
 	const unlisted = "its local changes must be set again.\n"
 
-	// The flag that names the file to `ezc set -g`; a file that is not the store's own has none.
-	env := ""
-	if name, ok := strings.CutPrefix(strings.TrimSuffix(file, ".enc.yaml"), "env."); ok && resolve.ValidEnvName(name) {
-		env = " --env " + name
-	} else if file != "common.enc.yaml" {
-		return note + unlisted
-	}
-	if !inEzc {
+	env, ok := envFlag(file)
+	if !ok || !inEzc {
 		return note + unlisted
 	}
 	changed, err := valuefile.ChangedNames(r.Base, r.Local)
@@ -371,7 +374,7 @@ func newStorePushCmd(sys System) *cobra.Command {
 		Short: "send the store's commits to its remote",
 		Long: `Fetch from the store's remote, then send it the commits made here.
 
-Refused while the store is behind its remote or has diverged from it (run ` + "`ezc store pull`" + ` first), while it holds uncommitted changes, and when it has no remote. Also refused while an encrypted file is not encrypted for the people recipients.yaml names: ` + "`ezc store rewrap`" + ` fixes that.`,
+Refused while the store is behind its remote or has diverged from it (run ` + "`ezc store pull`" + `, then this again), while it holds uncommitted changes, and when it has no remote. Also refused while an encrypted file is not encrypted for the people recipients.yaml names: ` + "`ezc store rewrap`" + ` fixes that.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			p, g, err := storeRepo(sys, "push")
@@ -399,8 +402,8 @@ Refused while the store is behind its remote or has diverged from it (run ` + "`
 			if st, err = g.Status(dir); err != nil {
 				return err
 			}
-			if st.Behind > 0 {
-				return errors.New("the store is behind origin. Run `ezc store pull` first.")
+			if err := behind(st); err != nil {
+				return err
 			}
 			if st.Ahead > 0 {
 				// A commit made here may hold a file written under a policy the remote has since replaced.

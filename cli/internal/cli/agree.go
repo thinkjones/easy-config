@@ -71,15 +71,19 @@ func (s scope) guardRecipients(sys System, files ...string) error {
 	if !s.store {
 		return nil
 	}
-	reg, found, err := recipients.Load(s.dir)
-	if err != nil || !found {
-		return err
-	}
 	var enc []string
 	for _, file := range files {
 		if _, err := os.Stat(filepath.Join(s.dir, file)); err == nil && resolve.IsEncrypted(file) {
 			enc = append(enc, file)
 		}
+	}
+	// A write to plaintext files alone asks nothing of the registry, not even that it can be read.
+	if len(enc) == 0 {
+		return nil
+	}
+	reg, found, err := recipients.Load(s.dir)
+	if err != nil || !found {
+		return err
 	}
 	diffs, err := recipients.Differences(s.dir, reg, backendFor(sys), enc)
 	if err != nil {

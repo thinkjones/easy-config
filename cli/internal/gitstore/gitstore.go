@@ -136,21 +136,30 @@ func (g Git) run(dir string, timeout time.Duration, args ...string) ([]byte, err
 }
 
 // reason is the line of git's stderr that says what went wrong: its first
-// "fatal:" or "error:" line, else its first line, with each URL as ShowURL gives it.
+// "fatal:" or "error:" line, else its first line, with each URL as ShowURL gives it
+// and each control character as ?: the line can be one the remote wrote.
 func reason(stderr []byte) string {
+	shown := func(line string) string {
+		return strings.Map(func(c rune) rune {
+			if c < 0x20 || c == 0x7f {
+				return '?'
+			}
+			return c
+		}, urlPattern.ReplaceAllStringFunc(line, ShowURL))
+	}
 	first := ""
 	for _, line := range strings.Split(string(stderr), "\n") {
 		line = strings.TrimSpace(line)
 		for _, prefix := range []string{"fatal: ", "error: "} {
 			if rest, ok := strings.CutPrefix(line, prefix); ok {
-				return urlPattern.ReplaceAllStringFunc(rest, ShowURL)
+				return shown(rest)
 			}
 		}
 		if first == "" {
 			first = line
 		}
 	}
-	return urlPattern.ReplaceAllStringFunc(first, ShowURL)
+	return shown(first)
 }
 
 // urlPattern is a URL as git quotes one in a message, up to the space or quote that ends it.

@@ -371,7 +371,7 @@ func TestBotAddPushFails(t *testing.T) {
 	}
 }
 
-const botDueList = "2 secrets were readable by ci and need new values:\n  common.enc.yaml/TOKEN\n  env.prod.enc.yaml/TOKEN\nGive each a new value with ezc set -g NAME.\n"
+const botDueList = "2 secrets were readable by ci and need new values. Give each one with:\n  ezc set -g TOKEN\n  ezc set -g TOKEN --env prod\n"
 
 func TestBotRemove(t *testing.T) {
 	f := newFake(t)
@@ -708,5 +708,22 @@ func TestBotDeliversTheSecretLineAlone(t *testing.T) {
 		if accessRegistry(t, filepath.Join(x.store, ezcDir)).Recipients["ci"].Key != public || !botOpens(f, x, out) {
 			t.Fatalf("%v: the line delivered is not the registered key", args[:2])
 		}
+	}
+}
+
+// A repo holds one EZC_AGE_KEY: a second bot there would replace the first one's key, and removing either would
+// delete the secret the other reads with.
+func TestBotAddRefusesARepoAnotherBotHas(t *testing.T) {
+	f := newFake(t)
+	x := botStore(t, f, "o/a", "o/b")
+	g := botFakeGh(f)
+	want := "o/b already gets its key from the bot ci, and a repo holds one EZC_AGE_KEY. Give that bot's key to the workflows that need it, or remove ci first."
+	accessUntouched(t, f, x, want, "bot", "add", "deploy", "--repo", "o/c", "--repo", "o/b")
+	if len(g.calls) != 0 {
+		t.Fatalf("gh ran: %+v", g.calls)
+	}
+	// A repo no bot has is taken.
+	if _, _, err := accessRun(f, "bot", "add", "deploy", "--repo", "o/c"); err != nil {
+		t.Fatal(err)
 	}
 }

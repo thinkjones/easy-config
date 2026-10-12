@@ -308,7 +308,7 @@ func rotationItem(o Options) []Item {
 		unit = "secret was"
 	}
 	return []Item{{Warn, "rotation", fmt.Sprintf("%d %s readable by a removed key", o.Due, unit),
-		"ezc store status --due lists them; give each a new value with ezc set -g NAME."}}
+		"ezc store status --due lists them; give each a new value with ezc set -g NAME, and --env for an environment's file."}}
 }
 
 func store(o Options) []Item {

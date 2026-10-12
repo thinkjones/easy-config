@@ -511,8 +511,10 @@ func newUnsetCmd(sys System) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "unset NAME",
 		Short: "remove a variable's value from the plaintext and encrypted file",
-		Long:  `Remove NAME from the repo's common.yaml and common.enc.yaml, or env.ENV.yaml and env.ENV.enc.yaml with --env, whichever hold it. With -g the store's files are used instead. The declaration in the scope's manifest stays unless --undeclare is given; that is refused while any other values file in the scope still holds NAME.`,
-		Args:  exactArgs(1, "a variable name"),
+		Long: `Remove NAME from the repo's common.yaml and common.enc.yaml, or env.ENV.yaml and env.ENV.enc.yaml with --env, whichever hold it. With -g the store's files are used instead. The declaration in the scope's manifest stays unless --undeclare is given; that is refused while any other values file in the scope still holds NAME.
+
+In the store, removing a secret that is recorded as needing a new value (rotation-due.yaml) clears its entry, also when the secret is no longer in its file.`,
+		Args: exactArgs(1, "a variable name"),
 		RunE: func(_ *cobra.Command, args []string) error {
 			name := args[0]
 			if !manifest.ValidName(name) {
@@ -585,7 +587,13 @@ func newUnsetCmd(sys System) *cobra.Command {
 						}
 					}
 				}
-				if removed == 0 && !(undeclare && declared) {
+				if removed == 0 && cleared {
+					// The secret left its file some other way (an editor, or the file went): the entry is all there is to remove.
+					if err := sc.clearRotation(due, encrypted, name); err != nil {
+						return err
+					}
+					fmt.Fprintf(sys.Stdout, "%s is not set in %s or %s; it no longer needs a new value there\n", name, sc.show(files[0]), sc.show(files[1]))
+				} else if removed == 0 && !(undeclare && declared) {
 					return fmt.Errorf("%s is not set in %s or %s.", name, sc.show(files[0]), sc.show(files[1]))
 				}
 				if undeclare && declared {

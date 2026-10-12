@@ -707,3 +707,16 @@ func TestVersion(t *testing.T) {
 		t.Errorf("%q, %v", v, err)
 	}
 }
+
+// A line of git's stderr can be one the remote wrote: no control character of it reaches a message.
+func TestReasonHoldsNoControlCharacter(t *testing.T) {
+	for stderr, want := range map[string]string{
+		"remote: \x1b]0;owned\x07 denied\x1b[31m\n": "remote: ?]0;owned? denied?[31m",
+		"fatal: bad\x7f thing\r\nmore":              "bad? thing",
+		"error: a\tb":                               "a?b",
+	} {
+		if got := reason([]byte(stderr)); got != want {
+			t.Errorf("%q:\n got %q\nwant %q", stderr, got, want)
+		}
+	}
+}

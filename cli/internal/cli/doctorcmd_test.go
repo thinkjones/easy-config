@@ -416,7 +416,7 @@ func TestDoctorRotationDue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a due list must only warn: %v\n%s", err, out)
 	}
-	want := "! rotation 1 secret was readable by a removed key\nezc store status --due lists them; give each a new value with ezc set -g NAME.\n"
+	want := "! rotation 1 secret was readable by a removed key\nezc store status --due lists them; give each a new value with ezc set -g NAME, and --env for an environment's file.\n"
 	if !strings.Contains(doctorSquash(out), want) {
 		t.Errorf("no rotation warning in\n%s", out)
 	}
@@ -460,5 +460,20 @@ func TestDoctorFilesWithoutAKey(t *testing.T) {
 	out, err := doctorRun(t, f2)
 	if err != nil || !strings.Contains(doctorSquash(out), "✓ recipients every file is encrypted for the 2 recipients") {
 		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Whoever can push names the store's files: doctor shows no name of one as it is when it cannot be printed.
+func TestDoctorNeverPrintsAFileNameRaw(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	write(t, x.file("env.x\x1b[31m.enc.yaml"), "\x1b]0;owned\x07: [not yaml\n")
+	out, err := doctorRun(t, f)
+	wantExit(t, err, 1)
+	if strings.ContainsAny(out, "\x1b\x07") {
+		t.Fatalf("doctor printed a control character:\n%q", out)
+	}
+	if !strings.Contains(doctorSquash(out), "✗ recipients an encrypted file in "+filepath.Join(x.store, ezcDir)+" has a name that cannot be shown (env.x?[31m.enc.yaml).") {
+		t.Errorf("the file is not reported:\n%s", out)
 	}
 }

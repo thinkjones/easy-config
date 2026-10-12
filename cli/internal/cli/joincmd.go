@@ -178,7 +178,7 @@ func runJoin(sys System, o joinFlags, source string) error {
 		case s.Offline:
 			return errors.New("The store's remote could not be reached. Run ezc join again when it can be.")
 		case s.Status.Behind > 0:
-			return errors.New("The store is behind its remote. Run ezc store pull, then run ezc join again.")
+			return behind(s.Status)
 		case s.Status.Ahead > 0:
 			// The request's branch is cut from the store's last commit, and must carry the request alone.
 			return errors.New("The store has commits its remote does not. Run ezc store push, then run ezc join again.")

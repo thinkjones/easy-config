@@ -630,7 +630,7 @@ func TestRotationItem(t *testing.T) {
 		t.Error("rotation shown with nothing due")
 	}
 	o.Due = 2
-	want := Item{Warn, "rotation", "2 secrets were readable by a removed key", "ezc store status --due lists them; give each a new value with ezc set -g NAME."}
+	want := Item{Warn, "rotation", "2 secrets were readable by a removed key", "ezc store status --due lists them; give each a new value with ezc set -g NAME, and --env for an environment's file."}
 	if it := item(t, Collect(o), "store", "rotation"); it != want {
 		t.Errorf("%+v", it)
 	}

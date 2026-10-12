@@ -17,7 +17,7 @@ A bot is a recipient with a key of its own, so that a CI job reads the store wit
 | `EZC_AGE_KEY` | The bot's private key, which decrypts the store's secrets. | `ezc bot add` |
 | `EZC_STORE_TOKEN` | A token that can read the store's repo, to clone it over HTTPS. | You: `ezc` cannot create it. |
 
-`ezc bot add <name> --repo owner/repo` creates the key in memory, adds its public half to `recipients.yaml` with kind `bot` and the repos it was given, writes the policy and re-wraps every encrypted file. Then, before anything is committed, it checks that the new private key opens every encrypted file and saves it as the `EZC_AGE_KEY` Actions secret of each repo with `gh secret set`, which reads it on stdin. Only then does it commit, as `add bot <name>`, and push:
+`ezc bot add <name> --repo owner/repo` creates the key in memory, adds its public half to `recipients.yaml` with kind `bot` and the repos it was given, writes the policy and re-wraps every encrypted file. Then, before anything is committed, it checks that the new private key opens every encrypted file and saves it as the `EZC_AGE_KEY` Actions secret of each repo with `gh secret set`, which reads it on stdin. Only then does it commit, as `add bot <name>`, and push. A repo holds one secret named `EZC_AGE_KEY`, so a `--repo` that another bot's entry already names is refused before anything is made (`owner/app already gets its key from the bot ci, and a repo holds one EZC_AGE_KEY. Give that bot's key to the workflows that need it, or remove ci first.`): a second bot there would replace the first one's key, and removing either would delete what the other reads with.
 
 ```
 ✓ add bot ci
