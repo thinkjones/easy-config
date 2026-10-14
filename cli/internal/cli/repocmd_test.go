@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -542,6 +544,194 @@ func TestRepoUses(t *testing.T) {
 	}
 	err := x.f.run("repo", "uses", "1\x1b[31m")
 	wantUsage(t, err, "variable name")
+	if strings.Contains(err.Error(), "\x1b") {
+		t.Fatalf("echoed: %q", err)
+	}
+}
+
+const rewrapValue = "s3cr3t-rewrap-value"
+
+// rewrapStore is gene's machine and a store whose registry is reg, with its files encrypted for storeKeys, and o/app
+// and o/gone registered.
+func rewrapStore(t *testing.T, reg map[string]recipients.Recipient, storeKeys ...string) (*fake, storeWriteFix) {
+	t.Helper()
+	f := newFake(t)
+	x := accessStoreWith(t, f, reg, storeKeys...)
+	repos := registry.Registry{Repos: map[string]registry.Repo{
+		"o/app":  {Added: "2026-10-01", AddedBy: "gene"},
+		"o/gone": {Added: "2026-10-01", AddedBy: "gene"},
+	}}
+	if err := repos.Save(filepath.Join(x.store, ezcDir)); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := x.g.Commit(x.store, "repos", gitstore.Author{}, ezcDir+"/"+registry.File); err != nil || !done {
+		t.Fatalf("commit: %v, %v", done, err)
+	}
+	x.push(x.store)
+	return f, x
+}
+
+// rewrapCheckout is o/app's checkout: a .ezc whose files each hold API_TOKEN encrypted for keys (none: no policy and
+// no encrypted file), recorded in config.toml.
+func rewrapCheckout(t *testing.T, f *fake, keys []string, files ...string) string {
+	t.Helper()
+	top := t.TempDir()
+	dir := filepath.Join(top, ezcDir)
+	write(t, filepath.Join(dir, manifestName), mToken)
+	if len(keys) > 0 {
+		if err := f.backend.WritePolicy(dir, keys); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range files {
+		if err := f.backend.Set(filepath.Join(dir, file), "API_TOKEN", rewrapValue); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := config.Save(setupConfig(f), config.Config{User: "gene", Checkouts: map[string]string{"o/app": top}}); err != nil {
+		t.Fatal(err)
+	}
+	return top
+}
+
+// folderBytes is every file of dir and its content.
+func folderBytes(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := map[string]string{}
+	for _, e := range ents {
+		m[e.Name()] = readFile(t, filepath.Join(dir, e.Name()))
+	}
+	return m
+}
+
+// noGitIn fails when a git command ran in one of the folders, or below it.
+func noGitIn(t *testing.T, f *fake, dirs ...string) {
+	t.Helper()
+	for _, c := range f.gits {
+		for _, dir := range dirs {
+			if c.Dir == dir || strings.HasPrefix(c.Dir, dir+string(filepath.Separator)) {
+				t.Errorf("git ran in %s: %v", c.Dir, c.Args)
+			}
+		}
+	}
+}
+
+func TestRepoRewrap(t *testing.T) {
+	reg := map[string]recipients.Recipient{"gene": accessEntry(accessGene), "sam": accessEntry(accessSam)}
+	f, _ := rewrapStore(t, reg, accessGene, accessSam)
+	top := rewrapCheckout(t, f, []string{accessGene}, "common.enc.yaml")
+	ezc := filepath.Join(top, ezcDir)
+
+	accessWant(t, f, "✓ o/app: re-wrapped common.enc.yaml in "+ezc+". Commit it there.\n", "repo", "rewrap", "o/app")
+	noGitIn(t, f, top)
+	got, err := f.backend.Recipients(filepath.Join(ezc, "common.enc.yaml"))
+	if err != nil || !slices.Equal(got, []string{accessGene, accessSam}) {
+		t.Fatalf("recipients = %v, %v", got, err)
+	}
+	if keys, err := f.backend.PolicyRecipients(filepath.Join(ezc, "common.enc.yaml")); err != nil || !slices.Equal(keys, []string{accessGene, accessSam}) {
+		t.Fatalf("policy = %v, %v", keys, err)
+	}
+
+	before := folderBytes(t, ezc)
+	accessWant(t, f, "✓ o/app: already encrypted for the store's recipients\n", "repo", "rewrap", "o/app")
+	noGitIn(t, f, top)
+	if after := folderBytes(t, ezc); !maps.Equal(before, after) {
+		t.Errorf("a second run changed the checkout")
+	}
+}
+
+func TestRepoRewrapSkipsARepoWithNoSecrets(t *testing.T) {
+	f, _ := rewrapStore(t, map[string]recipients.Recipient{"gene": accessEntry(accessGene)}, accessGene)
+	top := rewrapCheckout(t, f, nil)
+	before := folderBytes(t, filepath.Join(top, ezcDir))
+	accessWant(t, f, "- o/app: no secrets to re-wrap\n", "repo", "rewrap", "o/app")
+	if after := folderBytes(t, filepath.Join(top, ezcDir)); !maps.Equal(before, after) {
+		t.Errorf("wrote to the checkout:\n%v", after)
+	}
+}
+
+func TestRepoRewrapNamesWhatAKeyThatLeftCouldRead(t *testing.T) {
+	f, _ := rewrapStore(t, map[string]recipients.Recipient{"gene": accessEntry(accessGene)}, accessGene)
+	top := rewrapCheckout(t, f, []string{accessGene, accessStray}, "common.enc.yaml", "env.prod.enc.yaml")
+	ezc := filepath.Join(top, ezcDir)
+	want := "✓ o/app: re-wrapped common.enc.yaml, env.prod.enc.yaml in " + ezc + ". Commit them there.\n" +
+		"! o/app: common.enc.yaml/API_TOKEN could be read by a key that has left. Give it a new value there: ezc set API_TOKEN.\n" +
+		"! o/app: env.prod.enc.yaml/API_TOKEN could be read by a key that has left. Give it a new value there: ezc set API_TOKEN --env prod.\n"
+	out, errOut, err := accessRun(f, "repo", "rewrap", "o/app")
+	if err != nil || out != want {
+		t.Fatalf("%v\ngot  %q\nwant %q\nstderr %q", err, out, want, errOut)
+	}
+	if strings.Contains(out+errOut, accessStray) || strings.Contains(out+errOut, rewrapValue) {
+		t.Fatalf("a key or a value was printed:\n%s%s", out, errOut)
+	}
+	for _, file := range []string{"common.enc.yaml", "env.prod.enc.yaml"} {
+		if got, _ := f.backend.Recipients(filepath.Join(ezc, file)); !slices.Equal(got, []string{accessGene}) {
+			t.Errorf("%s recipients = %v", file, got)
+		}
+	}
+}
+
+func TestRepoRewrapRefusedUntilTheStoreAgrees(t *testing.T) {
+	// recipients.yaml names sam, and no file of the store is encrypted for sam.
+	reg := map[string]recipients.Recipient{"gene": accessEntry(accessGene), "sam": accessEntry(accessSam)}
+	f, x := rewrapStore(t, reg, accessGene)
+	top := rewrapCheckout(t, f, []string{accessGene}, "common.enc.yaml")
+	before := folderBytes(t, filepath.Join(top, ezcDir))
+	_, _, err := accessRun(f, "repo", "rewrap", "o/app")
+	if err == nil || !strings.HasSuffix(err.Error(), "Run ezc store rewrap first.") {
+		t.Fatalf("got %v", err)
+	}
+	if after := folderBytes(t, filepath.Join(top, ezcDir)); !maps.Equal(before, after) {
+		t.Errorf("wrote to the checkout")
+	}
+	noGitIn(t, f, top)
+
+	// A store with no registry: nobody said who the secrets are for.
+	if err := os.Remove(filepath.Join(x.store, ezcDir, recipients.File)); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = accessRun(f, "repo", "rewrap", "o/app")
+	if err == nil || !strings.Contains(err.Error(), "has no recipients.yaml") {
+		t.Fatalf("got %v", err)
+	}
+	if after := folderBytes(t, filepath.Join(top, ezcDir)); !maps.Equal(before, after) {
+		t.Errorf("wrote to the checkout")
+	}
+}
+
+func TestRepoRewrapAFileThisKeyCannotOpen(t *testing.T) {
+	reg := map[string]recipients.Recipient{"gene": accessEntry(accessGene), "sam": accessEntry(accessSam)}
+	f, _ := rewrapStore(t, reg, accessGene, accessSam)
+	top := rewrapCheckout(t, f, []string{accessSam}, "common.enc.yaml")
+	before := folderBytes(t, filepath.Join(top, ezcDir))
+	f.backend.Locked = true
+	out, _, err := accessRun(f, "repo", "rewrap", "o/app")
+	wantExit(t, err, 1)
+	if !strings.HasPrefix(out, "✗ o/app could not be re-wrapped (") || !strings.HasSuffix(out, "cannot decrypt). Nothing was changed there.\n") || strings.Count(out, "\n") != 1 {
+		t.Fatalf("got %q", out)
+	}
+	if after := folderBytes(t, filepath.Join(top, ezcDir)); !maps.Equal(before, after) {
+		t.Errorf("the checkout changed:\nbefore %v\nafter  %v", before, after)
+	}
+	noGitIn(t, f, top)
+}
+
+func TestRepoRewrapAll(t *testing.T) {
+	reg := map[string]recipients.Recipient{"gene": accessEntry(accessGene), "sam": accessEntry(accessSam)}
+	f, _ := rewrapStore(t, reg, accessGene, accessSam)
+	top := rewrapCheckout(t, f, []string{accessGene}, "common.enc.yaml")
+	want := "✓ o/app: re-wrapped common.enc.yaml in " + filepath.Join(top, ezcDir) + ". Commit it there.\n" +
+		"- o/gone: no checkout on this machine. Run ezc repo add inside it, then run this again.\n"
+	accessWant(t, f, want, "repo", "rewrap", "--all")
+	noGitIn(t, f, top)
+
+	wantUsage(t, f.run("repo", "rewrap", "--all", "o/app"), "--all")
+	err := f.run("repo", "rewrap", "a/b/\x1b[31m")
+	wantUsage(t, err, "repo ID")
 	if strings.Contains(err.Error(), "\x1b") {
 		t.Fatalf("echoed: %q", err)
 	}

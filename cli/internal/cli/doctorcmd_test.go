@@ -477,3 +477,47 @@ func TestDoctorNeverPrintsAFileNameRaw(t *testing.T) {
 		t.Errorf("the file is not reported:\n%s", out)
 	}
 }
+
+// doctorRepoSection is the repo section of doctor's output, squashed.
+func doctorRepoSection(out string) string {
+	_, repo, _ := strings.Cut(doctorSquash(out), "\nrepo\n")
+	return repo
+}
+
+func TestDoctorRepoRecipients(t *testing.T) {
+	f := newFake(t)
+	accessStore(t, f)
+	repo(t, f, map[string]string{"manifest.yaml": mToken})
+	ezc := filepath.Join(f.wd, ezcDir)
+	if err := f.backend.WritePolicy(ezc, []string{accessGene, accessStray}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.backend.Set(filepath.Join(ezc, "common.enc.yaml"), "TOKEN", "s3cr3t-marker-value"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := doctorRun(t, f)
+	wantExit(t, err, 1)
+	if want := "✗ recipients 1 file is not encrypted for the store's registry: common.enc.yaml\nRun ezc repo rewrap.\n"; !strings.Contains(doctorRepoSection(out), want) {
+		t.Errorf("no repo recipients item in\n%s", out)
+	}
+	if strings.Contains(out, accessStray) {
+		t.Errorf("doctor printed a key:\n%s", out)
+	}
+
+	if _, _, err := accessRun(f, "repo", "rewrap"); err != nil {
+		t.Fatalf("rewrap: %v\n%s", err, f.out.String())
+	}
+	out, _ = doctorRun(t, f)
+	if !strings.Contains(doctorRepoSection(out), "✓ recipients every file is encrypted for the store's recipients") {
+		t.Errorf("repo recipients not clear:\n%s", out)
+	}
+
+	// With no registry in the store there is nothing to compare with.
+	if err := os.Remove(filepath.Join(setupStore(f), ezcDir, recipients.File)); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = doctorRun(t, f)
+	if strings.Contains(doctorRepoSection(out), "recipients") {
+		t.Errorf("repo recipients shown with no registry:\n%s", out)
+	}
+}

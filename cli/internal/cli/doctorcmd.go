@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -60,6 +61,9 @@ Each line is a check, a warning (!) or a problem (✗), with what to do about it
 			machineOptions(sys, &o)
 			if only == "" || only == "store" {
 				storeOptions(sys, p.StoreEzc(), &o)
+			}
+			if only == "" || only == "repo" {
+				repoOptions(sys, p.StoreEzc(), repo, &o)
 			}
 			report := doctor.Collect(o)
 			fmt.Fprint(sys.Stdout, report.String())
@@ -140,6 +144,35 @@ func storeOptions(sys System, storeEzc string, o *doctor.Options) {
 	if o.Recipient == "" {
 		o.Request, o.RequestName = ownRequest(sys, filepath.Dir(storeEzc), remote != "", public)
 	}
+}
+
+// repoOptions fills in whether the repo's encrypted files are encrypted for the store's registry. They are compared
+// only when the store has a registry and the repo has an encrypted file, and never in the store's own folder.
+// Who the files are encrypted for is read from the files, so this needs no key.
+func repoOptions(sys System, storeEzc, repo string, o *doctor.Options) {
+	if repo == "" || sameDir(repo, storeEzc) {
+		return
+	}
+	// A registry that cannot be loaded is the store's access item.
+	reg, found, err := recipients.Load(storeEzc)
+	if err != nil || !found {
+		return
+	}
+	enc, err := encryptedFiles(repo)
+	if err != nil {
+		o.RepoRecipients, o.RepoDifferErr = true, firstLineOf(err)
+		return
+	}
+	if len(enc) == 0 {
+		return
+	}
+	o.RepoRecipients = true
+	diffs, err := repoDiffers(sys, repo, reg)
+	if err != nil {
+		o.RepoDifferErr = firstLineOf(err)
+		return
+	}
+	o.RepoDiffer = slices.Sorted(maps.Keys(diffs))
 }
 
 // ownRequest is the state of this machine's request for access, and its name: pending when a valid request holds

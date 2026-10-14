@@ -11,19 +11,34 @@ import (
 	"strings"
 )
 
-// Backend is what Apply needs of the encryption backend.
+// Backend is what Apply and Rewrap need of the encryption backend.
 type Backend interface {
 	WritePolicy(dir string, recipients []string) error
 	Rewrap(path string) error
 	Recipients(path string) ([]string, error)
 }
 
-// Apply is the one sequence every access change runs: save next, write the policy from its keys, re-wrap
-// each file in encFiles (base names in dir) and check that each is now encrypted for exactly next's keys.
-// Any failure puts back recipients.yaml, the encrypted files and every dot file in dir (the policy file,
-// whose name recipients does not know), removes what it created, and returns the first error.
+// Apply is the one sequence every access change runs: save next, then Rewrap for its keys. Any failure puts back
+// recipients.yaml with the rest of what Rewrap puts back, and returns the first error.
 func Apply(dir string, next Registry, b Backend, encFiles []string) (err error) {
-	saved, err := snapshotFiles(dir, encFiles)
+	return guarded(dir, append([]string{File}, encFiles...), func() error {
+		if err := next.Save(dir); err != nil {
+			return err
+		}
+		return rewrap(dir, next.Keys(), b, encFiles)
+	})
+}
+
+// Rewrap writes the policy for keys, re-wraps each file in encFiles (base names in dir) and checks that each is now
+// encrypted for exactly those keys. Any failure puts back the encrypted files and every dot file in dir (the policy
+// file, whose name recipients does not know), removes what it created, and returns the first error.
+func Rewrap(dir string, keys []string, b Backend, encFiles []string) error {
+	return guarded(dir, encFiles, func() error { return rewrap(dir, keys, b, encFiles) })
+}
+
+// guarded runs step and, when it fails, puts back the files named and every dot file in dir as they were before.
+func guarded(dir string, names []string, step func() error) (err error) {
+	saved, err := snapshotFiles(dir, names)
 	if err != nil {
 		return err
 	}
@@ -34,23 +49,24 @@ func Apply(dir string, next Registry, b Backend, encFiles []string) (err error) 
 			}
 		}
 	}()
-	if err = next.Save(dir); err != nil {
-		return err
-	}
-	want := slices.Clone(next.Keys())
+	return step()
+}
+
+func rewrap(dir string, keys []string, b Backend, encFiles []string) error {
+	want := slices.Clone(keys)
 	sort.Strings(want)
 	want = slices.Compact(want)
-	if err = b.WritePolicy(dir, next.Keys()); err != nil {
+	if err := b.WritePolicy(dir, keys); err != nil {
 		return fmt.Errorf("the policy: %w", err)
 	}
 	for _, f := range encFiles {
 		path := filepath.Join(dir, f)
-		if err = b.Rewrap(path); err != nil {
+		if err := b.Rewrap(path); err != nil {
 			return fmt.Errorf("%s: %w", f, err)
 		}
-		got, rerr := b.Recipients(path)
-		if rerr != nil {
-			return fmt.Errorf("%s: %w", f, rerr)
+		got, err := b.Recipients(path)
+		if err != nil {
+			return fmt.Errorf("%s: %w", f, err)
 		}
 		got = slices.Clone(got)
 		sort.Strings(got)
@@ -61,9 +77,9 @@ func Apply(dir string, next Registry, b Backend, encFiles []string) (err error) 
 	return nil
 }
 
-// snapshotFiles reads the bytes of the registry, the encrypted files and every dot file; absent is nil.
-func snapshotFiles(dir string, encFiles []string) (map[string][]byte, error) {
-	names := append([]string{File}, encFiles...)
+// snapshotFiles reads the bytes of the files named and every dot file; absent is nil.
+func snapshotFiles(dir string, names []string) (map[string][]byte, error) {
+	names = slices.Clone(names)
 	ents, err := os.ReadDir(dir)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("%s: cannot read this folder", dir)

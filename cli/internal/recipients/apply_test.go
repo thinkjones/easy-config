@@ -282,3 +282,44 @@ func TestApplyReportsAFailedRollback(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestRewrapLeavesNoRegistry(t *testing.T) {
+	_, next := twoKeys()
+	dir, b := bareFolder(t)
+	if err := Rewrap(dir, next.Keys(), b, encFiles); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range encFiles {
+		if got, _ := b.Recipients(filepath.Join(dir, f)); !reflect.DeepEqual(got, next.Keys()) {
+			t.Errorf("%s recipients = %v", f, got)
+		}
+	}
+	if ok, _ := b.HasPolicy(dir); !ok {
+		t.Error("policy not written")
+	}
+	if _, err := os.Stat(filepath.Join(dir, File)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("%s written: %v", File, err)
+	}
+}
+
+func TestRewrapPutsTheFolderBack(t *testing.T) {
+	_, next := twoKeys()
+	// With a policy that was there, and with none: the one Rewrap wrote is removed.
+	for _, hadPolicy := range []bool{true, false} {
+		dir, b := bareFolder(t)
+		if hadPolicy {
+			if err := b.WritePolicy(dir, []string{"fake1aa"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		b.RewrapFail = "dev.enc.yaml"
+		before := snapshot(t, dir)
+		err := Rewrap(dir, next.Keys(), b, encFiles)
+		if err == nil || !strings.Contains(err.Error(), "dev.enc.yaml") {
+			t.Fatalf("policy %v: err = %v", hadPolicy, err)
+		}
+		if after := snapshot(t, dir); !reflect.DeepEqual(before, after) {
+			t.Errorf("policy %v: folder changed:\nbefore %v\nafter  %v", hadPolicy, before, after)
+		}
+	}
+}

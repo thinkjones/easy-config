@@ -2,12 +2,18 @@ package cli
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
+	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/config"
 	"github.com/thinkjones/easy-config/cli/internal/gitstore"
+	"github.com/thinkjones/easy-config/cli/internal/manifest"
+	"github.com/thinkjones/easy-config/cli/internal/recipients"
 	"github.com/thinkjones/easy-config/cli/internal/registry"
 	"github.com/thinkjones/easy-config/cli/internal/setup"
 )
@@ -134,4 +140,109 @@ func repoUsers(sys System, name string) (required, optional, unchecked, unread [
 		}
 	}
 	return required, optional, unchecked, unread, nil
+}
+
+// repoRewrap is what rewrapRepo did to a checkout: the encrypted files it re-wrapped, whether it wrote the policy,
+// and the secrets a key that left a file could read, as <file>/<NAME> made printable. Skipped is a checkout with
+// neither an encrypted file nor a policy.
+type repoRewrap struct {
+	Changed []string
+	Leaked  []string
+	Policy  bool
+	Skipped bool
+}
+
+// repoLeftError is a re-wrap that failed and whose files could not all be put back as they were.
+type repoLeftError struct {
+	err   error
+	files []string
+}
+
+func (e *repoLeftError) Error() string { return e.err.Error() }
+func (e *repoLeftError) Unwrap() error { return e.err }
+
+// rewrapRepo re-wraps the checkout's .ezc for the registry's keys with recipients.Rewrap, which puts everything back
+// when it fails. A checkout whose files and policy are already for them is not written to, and finding that out needs
+// no key. No git runs there: the result is for the repo's owner to commit.
+func rewrapRepo(sys System, b backend.Backend, ezc string, reg recipients.Registry) (repoRewrap, error) {
+	enc, err := encryptedFiles(ezc)
+	if err != nil {
+		return repoRewrap{}, err
+	}
+	// The backend's errors name the file.
+	if err := unshowable(ezc, enc); err != nil {
+		return repoRewrap{}, err
+	}
+	hasPolicy, err := b.HasPolicy(ezc)
+	if err != nil {
+		return repoRewrap{}, err
+	}
+	if len(enc) == 0 && !hasPolicy {
+		return repoRewrap{Skipped: true}, nil
+	}
+	diffs, err := recipients.Differences(ezc, reg, b, enc)
+	if err != nil {
+		return repoRewrap{}, err
+	}
+	want := slices.Clone(reg.Keys())
+	slices.Sort(want)
+	// A policy this cannot read is not known to be the registry's.
+	if policy, err := b.PolicyRecipients(filepath.Join(ezc, "common.enc.yaml")); len(diffs) == 0 && err == nil && slices.Equal(policy, slices.Compact(want)) {
+		return repoRewrap{}, nil
+	}
+	var r repoRewrap
+	for _, file := range enc {
+		if len(diffs[file].Extra) == 0 {
+			continue
+		}
+		names, _, err := b.Inspect(filepath.Join(ezc, file))
+		if err != nil {
+			return repoRewrap{}, err
+		}
+		for _, name := range names {
+			r.Leaked = append(r.Leaked, recipients.Printable(file+"/"+name))
+		}
+	}
+	watched := append(slices.Clone(enc), policyFiles(sys)...)
+	before := fileStates(ezc, watched)
+	if err := recipients.Rewrap(ezc, reg.Keys(), b, enc); err != nil {
+		if left := changedFiles(ezc, watched, before); len(left) > 0 {
+			return repoRewrap{}, &repoLeftError{err, left}
+		}
+		return repoRewrap{}, err
+	}
+	for _, file := range changedFiles(ezc, watched, before) {
+		if slices.Contains(enc, file) {
+			r.Changed = append(r.Changed, file)
+		} else {
+			r.Policy = true
+		}
+	}
+	return r, nil
+}
+
+// sayRewrap prints what rewrapRepo did to the checkout of id, whose .ezc is ezc. A failure is the caller's to say.
+func sayRewrap(w io.Writer, id, ezc string, r repoRewrap) {
+	switch {
+	case r.Skipped:
+		fmt.Fprintf(w, "- %s: no secrets to re-wrap\n", id)
+	case len(r.Changed) == 1:
+		fmt.Fprintf(w, "✓ %s: re-wrapped %s in %s. Commit it there.\n", id, r.Changed[0], ezc)
+	case len(r.Changed) > 1:
+		fmt.Fprintf(w, "✓ %s: re-wrapped %s in %s. Commit them there.\n", id, strings.Join(r.Changed, ", "), ezc)
+	case r.Policy:
+		fmt.Fprintf(w, "✓ %s: wrote the encryption policy in %s. Commit it there.\n", id, ezc)
+	default:
+		fmt.Fprintf(w, "✓ %s: already encrypted for the store's recipients\n", id)
+	}
+	for _, secret := range r.Leaked {
+		fix := "."
+		// Printable left a name that could be an argument as it was.
+		if file, name, _ := strings.Cut(secret, "/"); manifest.ValidName(name) {
+			if env, ok := envFlag(file); ok {
+				fix = ": ezc set " + name + env + "."
+			}
+		}
+		fmt.Fprintf(w, "! %s: %s could be read by a key that has left. Give it a new value there%s\n", id, secret, fix)
+	}
 }

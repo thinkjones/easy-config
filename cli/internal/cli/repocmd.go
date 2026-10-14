@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -415,6 +416,91 @@ func checkOne(sys System, t repoTarget, env string, reg recipients.Registry, hav
 		line(fmt.Sprintf("✗ %s is not encrypted for exactly the store's recipients. Run ezc repo rewrap %s.", recipients.Printable(f), t.ID))
 	}
 	return b.String(), ok
+}
+
+func newRepoRewrapCmd(sys System) *cobra.Command {
+	var all bool
+	cmd := &cobra.Command{
+		Use:   "rewrap [<owner/repo>]",
+		Short: "encrypt a repo's secrets for the people the store's recipients.yaml names",
+		Long: `Write the encryption policy of a repo's checkout from the store's recipients.yaml, and re-wrap each encrypted file there for exactly the keys it names. With no argument it re-wraps the working repo; with an ID, that repo; with --all, every repo in repos.yaml that has a checkout on this machine. The result is left in the checkout's .ezc for you to commit there: no git runs in a repo.
+
+Refused before anything is written when the store has no recipients.yaml, and while an encrypted file of the store is not encrypted for the people it names: a name somebody pushed into recipients.yaml is let in by ` + "`ezc store rewrap`" + `, which asks, before any repo follows it. A checkout with neither an encrypted file nor a policy is skipped, and one whose files are already for the store's recipients is not written to. Each secret a key that has left a file could read is named, with the command that gives it a new value.
+
+Needs this machine's key for a file it re-wraps. A repo that fails is put back as it was and the command exits 1. Prints names and paths, never a value.`,
+		Args: maxArgs(1, "a repo ID"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if all && len(args) > 0 {
+				return usagef("%s: --all takes no repo ID. Try `%s`.", cmd.CommandPath(), helpFor(cmd))
+			}
+			if len(args) > 0 && !registry.ValidID(args[0]) {
+				return repoIDUsage(cmd)
+			}
+			return repoRewrapAll(sys, args, all)
+		},
+	}
+	cmd.Flags().BoolVar(&all, "all", false, "re-wrap every repo in repos.yaml that has a checkout here")
+	return cmd
+}
+
+func repoRewrapAll(sys System, args []string, all bool) error {
+	touchStore(sys)
+	targets, err := repoTargets(sys, args, all)
+	if err != nil {
+		return err
+	}
+	p, err := storePaths(sys)
+	if err != nil {
+		return err
+	}
+	reg, found, err := recipients.Load(p.StoreEzc())
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("%s has no %s, so ezc does not know who a repo's secrets are for. Write one (README, \"Access\"), then run ezc store rewrap.", p.Store(), recipients.File)
+	}
+	differs, err := storeDiffers(sys, p.StoreEzc())
+	if err != nil {
+		return err
+	}
+	if len(differs) > 0 {
+		return fmt.Errorf("%s, so no repo is re-wrapped for it. Run ezc store rewrap first.", notForRegistry(differs...))
+	}
+	if len(targets) == 0 {
+		_, err := fmt.Fprintln(sys.Stdout, "No repos are registered. Run ezc repo add inside a repo.")
+		return err
+	}
+	b := backendFor(sys)
+	failed := false
+	for _, t := range targets {
+		switch {
+		case !t.Here:
+			fmt.Fprintf(sys.Stdout, "- %s: no checkout on this machine. Run ezc repo add inside it, then run this again.\n", t.ID)
+			continue
+		case sameDir(t.Ezc, p.StoreEzc()):
+			// A hand-written [checkouts] entry: the store's own files change through ezc store rewrap only.
+			failed = true
+			fmt.Fprintf(sys.Stdout, "✗ %s's checkout is the store's own folder. Nothing was changed there.\n", t.ID)
+			continue
+		}
+		r, err := rewrapRepo(sys, b, t.Ezc, reg)
+		var left *repoLeftError
+		switch {
+		case errors.As(err, &left):
+			failed = true
+			fmt.Fprintf(sys.Stdout, "✗ %s could not be re-wrapped (%s), and %s in %s could not be put back as it was. Restore it with git there.\n", t.ID, firstLineOf(err), strings.Join(left.files, ", "), t.Ezc)
+		case err != nil:
+			failed = true
+			fmt.Fprintf(sys.Stdout, "✗ %s could not be re-wrapped (%s). Nothing was changed there.\n", t.ID, firstLineOf(err))
+		default:
+			sayRewrap(sys.Stdout, t.ID, t.Ezc, r)
+		}
+	}
+	if failed {
+		return &ExitError{1}
+	}
+	return nil
 }
 
 func newRepoUsesCmd(sys System) *cobra.Command {
