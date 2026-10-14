@@ -4,6 +4,7 @@ package registry
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -128,16 +129,18 @@ var (
 	nullRE  = regexp.MustCompile(`^(?i:null|true|false|yes|no|on|off|y|n)$`)
 )
 
-// scalar writes s as it reads best: bare when that is safe, else quoted by the encoder.
+// scalar writes s as it reads best: bare when that is safe, else double-quoted. A JSON string is a YAML
+// double-quoted scalar on one line whatever it holds; the encoder's own choice can be a block scalar, which is not
+// valid inside a flow mapping.
 func scalar(s string) string {
 	if plainRE.MatchString(s) && !nullRE.MatchString(s) {
 		return s
 	}
-	out, err := yaml.Marshal(s)
+	out, err := json.Marshal(s)
 	if err != nil {
-		return fmt.Sprintf("%q", s)
+		return `""`
 	}
-	return strings.TrimSpace(string(out))
+	return string(out)
 }
 
 // With returns a copy that also holds the repo.

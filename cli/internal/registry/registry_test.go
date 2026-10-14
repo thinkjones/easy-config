@@ -3,6 +3,7 @@ package registry
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -60,6 +61,26 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if ids := back.IDs(); ids[0] != "scratch-tool" || ids[1] != "thinkjones/app" {
 		t.Fatalf("ids %v", ids)
+	}
+}
+
+// Whoever can push to the store writes addedBy: whatever Load accepts, Save must write back as a file Load reads.
+func TestSaveKeepsAnAddedByThatIsNotPlain(t *testing.T) {
+	for _, by := range []string{"a\nb", "a: b", "{x}", "- x", "yes", "", " lead", "a\x1b[31m", "#x", "a\"b'c", "\u2028", "|"} {
+		dir := t.TempDir()
+		write(t, dir, "repos:\n  app: {added: 2026-10-13, addedBy: "+strconv.Quote(by)+"}\n")
+		r, _, err := Load(dir)
+		if err != nil {
+			t.Fatalf("%q: %v", by, err)
+		}
+		if err := r.Save(dir); err != nil {
+			t.Fatal(err)
+		}
+		back, _, err := Load(dir)
+		if err != nil || back.Repos["app"].AddedBy != by {
+			data, _ := os.ReadFile(filepath.Join(dir, File))
+			t.Fatalf("%q: got %q, %v\n%s", by, back.Repos["app"].AddedBy, err, data)
+		}
 	}
 }
 
