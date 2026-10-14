@@ -11,6 +11,7 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/config"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
+	"github.com/thinkjones/easy-config/cli/internal/registry"
 )
 
 // setRepo is a repo with manifest (else m1 and a TOKEN secret) and an encryption policy.
@@ -943,6 +944,28 @@ func TestUnsetGlobalOptionalAndUnchecked(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in %q", want, out)
 		}
+	}
+	x.wantCommit("unset NAME (common.yaml)", "common.yaml")
+}
+
+// A repos.yaml nobody can load checks no repo: unset -g refuses, and --force gets past it with a ! line.
+func TestUnsetGlobalWhenReposYamlCannotBeRead(t *testing.T) {
+	x := unsetGuardFix(t, map[string]string{"o/app": guardReq})
+	write(t, x.file(registry.File), "repos:\n  \"\\e[31mo/app\": {added: 2026-10-01, addedBy: gene}\n")
+	x.git("commit", "--quiet", "-am", "break repos.yaml")
+	x.push(x.store)
+	head := x.git("rev-parse", "HEAD")
+	err := x.f.run("unset", "-g", "NAME")
+	if err == nil || err.Error() != "repos.yaml cannot be read, so no repo was checked for NAME. Run ezc repo list to see why, or pass --force to unset it anyway." {
+		t.Fatalf("got %v", err)
+	}
+	if x.git("rev-parse", "HEAD") != head {
+		t.Fatal("the refusal changed the store")
+	}
+	x.f.out.Reset()
+	out := x.out("unset", "-g", "NAME", "--force")
+	if !strings.HasPrefix(out, "! repos.yaml cannot be read, so no repo was checked for NAME.\n") || strings.Contains(out, "\x1b") {
+		t.Fatalf("got %q", out)
 	}
 	x.wantCommit("unset NAME (common.yaml)", "common.yaml")
 }
