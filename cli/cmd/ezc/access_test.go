@@ -367,6 +367,8 @@ func TestBotEndToEnd(t *testing.T) {
 	w.hide("the secret's value", e2eSecret)
 	w.hide("A's private key", secretLineOf(t, a.key))
 
+	// A bot's key goes only to a registered repo.
+	w.ok(a, "", "repo", "add", "o/a")
 	out := w.ok(a, "", "bot", "add", "ci", "--repo", "o/a")
 	for _, want := range []string{"✓ add bot ci\n", "✓ pushed to " + bare + "\n", "✓ EZC_AGE_KEY set in o/a\n", "EZC_STORE_TOKEN"} {
 		if !strings.Contains(out, want) {

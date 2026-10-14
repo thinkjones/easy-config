@@ -532,7 +532,7 @@ func repoRewrapAll(sys System, cmd *cobra.Command, args []string, all, yes bool)
 				}
 			}
 		}
-		r, err := rewrapRepo(sys, b, t.Ezc, reg)
+		r, err := rewrapRepo(sys, b, t.Ezc, reg, "")
 		var left *repoLeftError
 		switch {
 		case errors.As(err, &left):

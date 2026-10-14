@@ -163,8 +163,9 @@ func (e *repoLeftError) Unwrap() error { return e.err }
 
 // rewrapRepo re-wraps the checkout's .ezc for the registry's keys with recipients.Rewrap, which puts everything back
 // when it fails. A checkout whose files and policy are already for them is not written to, and finding that out needs
-// no key. No git runs there: the result is for the repo's owner to commit.
-func rewrapRepo(sys System, b backend.Backend, ezc string, reg recipients.Registry) (repoRewrap, error) {
+// no key. No git runs there: the result is for the repo's owner to commit. A file that only retired leaves lists no
+// leaked secret; "" is no such key.
+func rewrapRepo(sys System, b backend.Backend, ezc string, reg recipients.Registry, retired string) (repoRewrap, error) {
 	enc, err := encryptedFiles(ezc)
 	if err != nil {
 		return repoRewrap{}, err
@@ -190,7 +191,7 @@ func rewrapRepo(sys System, b backend.Backend, ezc string, reg recipients.Regist
 	}
 	var r repoRewrap
 	for _, file := range enc {
-		if len(diffs[file].Extra) == 0 {
+		if !slices.ContainsFunc(diffs[file].Extra, func(k string) bool { return k != retired }) {
 			continue
 		}
 		names, _, err := b.Inspect(filepath.Join(ezc, file))

@@ -97,6 +97,7 @@ func TestAccessChangeStaysWhenItCannotBeTakenBack(t *testing.T) {
 func TestBotAddWhenTheRemoteMoved(t *testing.T) {
 	f := newFake(t)
 	x := accessStore(t, f)
+	registerRepos(t, x, "o/a")
 	botFakeGh(f)
 	movesOnPush(f, x)
 	head := x.git("rev-parse", "HEAD")

@@ -146,12 +146,13 @@ func botOpens(f *fake, x storeWriteFix, private string) bool {
 func TestBotAdd(t *testing.T) {
 	f := newFake(t)
 	x := accessStore(t, f)
+	registerRepos(t, x, "o/a", "o/b")
 	g := botFakeGh(f)
 	out, errOut, err := accessRun(f, "bot", "add", "ci", "--repo", "o/a", "--repo", "o/b")
 	if err != nil || errOut != "" {
 		t.Fatalf("%v, stderr %q", err, errOut)
 	}
-	if want := "✓ add bot ci\n✓ pushed to " + x.bare + "\n✓ EZC_AGE_KEY set in o/a\n✓ EZC_AGE_KEY set in o/b\n" + botNote; out != want {
+	if want := "✓ add bot ci\n✓ pushed to " + x.bare + "\n" + noCheckoutHere("o/a", "o/b") + "✓ EZC_AGE_KEY set in o/a\n✓ EZC_AGE_KEY set in o/b\n" + botNote; out != want {
 		t.Fatalf("stdout %q\nwant   %q", out, want)
 	}
 	private := g.sets(t, "o/a", "o/b")
@@ -176,6 +177,7 @@ func TestBotAdd(t *testing.T) {
 func TestBotAddNamesARepoOnce(t *testing.T) {
 	f := newFake(t)
 	x := accessStore(t, f)
+	registerRepos(t, x, "o/a")
 	g := botFakeGh(f)
 	if _, _, err := accessRun(f, "bot", "add", "ci", "--repo", "o/a", "--repo", "o/a"); err != nil {
 		t.Fatal(err)
@@ -200,6 +202,7 @@ func TestBotAddWithoutGh(t *testing.T) {
 func TestBotAddDeliveryFails(t *testing.T) {
 	f := newFake(t)
 	x := accessStore(t, f)
+	registerRepos(t, x, "o/a", "o/b")
 	g := botFakeGh(f)
 
 	g.fail = "o/a"
@@ -290,12 +293,13 @@ func TestBotAddPrintPrivate(t *testing.T) {
 func TestBotAddPrintPrivateWithRepos(t *testing.T) {
 	f := newFake(t)
 	x := accessStore(t, f)
+	registerRepos(t, x, "o/a")
 	g := botFakeGh(f)
 	out, errOut, err := accessRun(f, "bot", "add", "ci", "--repo", "o/a", "--print-private")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "✓ add bot ci\n✓ pushed to " + x.bare + "\n✓ EZC_AGE_KEY set in o/a\n" + botNote; errOut != want {
+	if want := "✓ add bot ci\n✓ pushed to " + x.bare + "\n" + noCheckoutHere("o/a") + "✓ EZC_AGE_KEY set in o/a\n" + botNote; errOut != want {
 		t.Fatalf("stderr %q\nwant   %q", errOut, want)
 	}
 	if private := g.sets(t, "o/a"); out != strings.TrimSpace(private)+"\n" {
@@ -342,6 +346,7 @@ func TestBotUsage(t *testing.T) {
 func TestBotAddRefused(t *testing.T) {
 	f := newFake(t)
 	x := accessStore(t, f)
+	registerRepos(t, x, "o/a")
 	g := botFakeGh(f)
 	accessUntouched(t, f, x, "gene is already a recipient.", "bot", "add", "gene", "--repo", "o/a")
 	if len(g.calls) != 0 {
@@ -352,6 +357,7 @@ func TestBotAddRefused(t *testing.T) {
 func TestBotAddPushFails(t *testing.T) {
 	f := newFake(t)
 	x := accessStore(t, f)
+	registerRepos(t, x, "o/a")
 	g := botFakeGh(f)
 	f.gitFail = pushFails
 	out, _, err := accessRun(f, "bot", "add", "ci", "--repo", "o/a")
@@ -360,7 +366,7 @@ func TestBotAddPushFails(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 	// The commit is made and the repo holds its key: the rest is said, and the push is owed.
-	if want := "✓ add bot ci\n✓ EZC_AGE_KEY set in o/a\n" + botNote; out != want {
+	if want := "✓ add bot ci\n" + noCheckoutHere("o/a") + "✓ EZC_AGE_KEY set in o/a\n" + botNote; out != want {
 		t.Fatalf("stdout %q\nwant   %q", out, want)
 	}
 	if !botOpens(f, x, g.sets(t, "o/a")) {
@@ -590,6 +596,7 @@ func TestBotRotateDeliveryFails(t *testing.T) {
 func TestBotAddCommitFails(t *testing.T) {
 	f := newFake(t)
 	x := accessStore(t, f)
+	registerRepos(t, x, "o/a", "o/b")
 	g := botFakeGh(f)
 	f.gitFail = "commit"
 	accessUntouched(t, f, x, "the change could not be committed: made to fail. "+botHolds("o/a, o/b")+" Run the same ezc bot add again.", "bot", "add", "ci", "--repo", "o/a", "--repo", "o/b", "--print-private")
@@ -646,6 +653,7 @@ func TestBotPrintPrivateSaysWhenStdoutFails(t *testing.T) {
 	} {
 		f := newFake(t)
 		x := accessStore(t, f)
+		registerRepos(t, x, "o/a")
 		botFakeGh(f)
 		sys := f.sys()
 		sys.Stdout = closed{}
@@ -691,6 +699,7 @@ func TestBotDeliversTheSecretLineAlone(t *testing.T) {
 		var x storeWriteFix
 		if args[1] == "add" {
 			x = accessStore(t, f)
+			registerRepos(t, x, "o/a")
 		} else {
 			x = botStore(t, f, "o/a")
 		}
@@ -716,6 +725,7 @@ func TestBotDeliversTheSecretLineAlone(t *testing.T) {
 func TestBotAddRefusesARepoAnotherBotHas(t *testing.T) {
 	f := newFake(t)
 	x := botStore(t, f, "o/a", "o/b")
+	registerRepos(t, x, "o/a", "o/b", "o/c")
 	g := botFakeGh(f)
 	want := "o/b already gets its key from the bot ci, and a repo holds one EZC_AGE_KEY. Give that bot's key to the workflows that need it, or remove ci first."
 	accessUntouched(t, f, x, want, "bot", "add", "deploy", "--repo", "o/c", "--repo", "o/b")

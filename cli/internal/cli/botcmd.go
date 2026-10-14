@@ -14,6 +14,7 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/ghcli"
 	"github.com/thinkjones/easy-config/cli/internal/recipients"
+	"github.com/thinkjones/easy-config/cli/internal/registry"
 	"github.com/thinkjones/easy-config/cli/internal/setup"
 )
 
@@ -128,7 +129,7 @@ func newBotAddCmd(sys System) *cobra.Command {
 		Short: "give a bot a key that reads the store, and save it in the repos that use it",
 		Long: `Create a key for a bot, add its public half to recipients.yaml under name with kind bot, write the encryption policy and re-wrap every encrypted file of the store for the new list, in one commit named ` + "`add bot <name>`" + `, then push.
 
-The private half is never written to disk. Before the commit, ezc checks that it opens every encrypted file and saves it as the ` + botSecret + ` Actions secret of each --repo, through gh, which reads it on stdin. When a repo cannot be given the key, the store is put back as it was and nothing is committed. The repos are recorded in the bot's entry. A repo holds one ` + botSecret + `, so a --repo that another bot's entry already names is refused.
+The private half is never written to disk. Before the commit, ezc checks that it opens every encrypted file and saves it as the ` + botSecret + ` Actions secret of each --repo, through gh, which reads it on stdin. When a repo cannot be given the key, the store is put back as it was and nothing is committed. The repos are recorded in the bot's entry. A --repo must be in repos.yaml (ezc repo add), and a repo holds one ` + botSecret + `, so a --repo that another bot's entry already names is refused.
 
 With --print-private the private key is printed on stdout as one line, with nothing else there: every other line goes to stderr. It is for a CI system that is not GitHub Actions; pipe it straight into that system's secret store. Give --repo, --print-private or both.
 
@@ -154,13 +155,24 @@ Needs this machine's key file, as every change to who can read the store does, a
 					to = append(to, repo)
 				}
 			}
-			// Decision 5: the repos are not checked against a registry of repos yet, only against the other bots' below.
 			if len(to) > 0 && !botGh(sys).Installed() {
 				return errors.New(botNoGh)
 			}
 			a, err := openAccess(sys, true)
 			if err != nil {
 				return err
+			}
+			// Decision 11: a key goes only to a repo of repos.yaml, as the store holds it after openAccess's fetch.
+			if len(to) > 0 {
+				registered, _, _, err := loadRepos(sys)
+				if err != nil {
+					return fmt.Errorf("%s cannot be read, so --repo cannot be checked. Run ezc repo list to see why.", registry.File)
+				}
+				for _, repo := range to {
+					if !slices.Contains(registered.IDs(), repo) {
+						return fmt.Errorf("%s is not in %s. Run ezc repo add %s first.", repo, registry.File, repo)
+					}
+				}
 			}
 			// A repo holds one secret of that name: a second bot there would take the first one's place, and
 			// removing either would delete what the other reads with. The registry's names passed its rule.
@@ -329,6 +341,8 @@ Needs this machine's key file, and gh when the entry names a repo.`,
 				if c.due, list, err = dueFor(a, old); err != nil {
 					return err
 				}
+			} else {
+				c.retired = rec.Key
 			}
 			out, done, err := giveBotKey(sys, a, name, "ezc bot rotate "+name, c, private, rec.Repos, printPrivate)
 			if done {

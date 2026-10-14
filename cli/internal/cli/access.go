@@ -17,6 +17,7 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/gitstore"
 	"github.com/thinkjones/easy-config/cli/internal/recipients"
+	"github.com/thinkjones/easy-config/cli/internal/registry"
 	"github.com/thinkjones/easy-config/cli/internal/resolve"
 )
 
@@ -37,6 +38,9 @@ type access struct {
 	myName string // the registry's name for myKey; "" when it has none
 	b      backend.Backend
 	enc    []string // the store's encrypted files, base names
+	// letIn are the names a change may open a repo's secrets to without asking: its subject, and the names its
+	// confirm was asked about and let in.
+	letIn []string
 }
 
 // openAccess loads the store, its registry and this machine's public key. A store with no registry is an error.
@@ -150,6 +154,9 @@ type change struct {
 	// pushed says the change is of no use until the remote has it: a push that fails for any reason takes the
 	// commit back. Without it only a push the remote refused because it moved does.
 	pushed bool
+	// retired is a key the change takes out without it having leaked: the old key of a routine rotation. A repo
+	// secret it could read is not listed when it leaves the repo's file (decision 6).
+	retired string
 }
 
 // unchangedError is a failure of an access change after which the store is as it was.
@@ -310,7 +317,22 @@ func alsoYes(cmd *cobra.Command, yes *bool) {
 }
 
 // run is apply, and whether it changed a file: a change that leaves every byte as it was commits and pushes nothing.
+// A change that is committed here, pushed or not, then re-wraps the repos checked out on this machine (decision 8).
 func (a *access) run(c change) (changed bool, err error) {
+	changed, err = a.runStore(c)
+	var unpushed *unpushedError
+	if changed && (err == nil || errors.As(err, &unpushed)) {
+		a.rewrapRepos(c)
+	}
+	return changed, err
+}
+
+// runStore is run without the repos: the store's part of the change.
+func (a *access) runStore(c change) (changed bool, err error) {
+	a.letIn = nil
+	if c.subject != "" {
+		a.letIn = []string{c.subject}
+	}
 	// Who else the change lets in or shuts out is said, and asked about, before a byte is written.
 	e, err := a.effect(c)
 	if err != nil {
@@ -321,10 +343,12 @@ func (a *access) run(c change) (changed bool, err error) {
 	}
 	a.announce(e)
 	if len(e.gains) > 0 && c.confirm != nil {
-		if err := c.confirm(slices.Sorted(maps.Keys(e.gains))); err != nil {
+		names := slices.Sorted(maps.Keys(e.gains))
+		if err := c.confirm(names); err != nil {
 			// The answer's own error, a usage error or an exit status, is what the command ends with.
 			return false, &unchangedError{err: err, said: true}
 		}
+		a.letIn = append(a.letIn, names...)
 	}
 	files := append([]string{recipients.File, recipients.DueFile}, policyFiles(a.sys)...)
 	files = append(append(files, a.enc...), c.remove...)
@@ -395,6 +419,68 @@ func (a *access) run(c change) (changed bool, err error) {
 // puts the commit's files back.
 func (a *access) uncommit(parent, made string) bool {
 	return made != parent && storeGit(a.sys).Uncommit(a.sync.Dir, parent, made) == nil
+}
+
+// rewrapRepos re-wraps for c.next every repo of repos.yaml that has a checkout on this machine, with a.b: the backend
+// openAccess built, so a rotation of this machine's key re-wraps them with the old one. The change is made by now
+// and nothing here fails it: a repo that is not re-wrapped is a ! line naming the command that does it. A repo whose
+// secrets would be opened to a name the change was neither about nor asked about is left as it was. No git runs in
+// a checkout, and what is written there is its owner's to commit.
+func (a *access) rewrapRepos(c change) {
+	next := c.next
+	w := a.sys.Stdout
+	repos, found, _, err := loadRepos(a.sys)
+	if err == nil && !found {
+		return
+	}
+	cfg, cfgErr := loadConfig(a.sys)
+	switch {
+	case err != nil:
+		// Whoever can push to the store wrote the file: what is wrong with it is repo list's to say.
+		fmt.Fprintf(w, "! %s cannot be read, so no repo was re-wrapped. Run ezc repo list to see why, then ezc repo rewrap --all.\n", registry.File)
+		return
+	case cfgErr != nil:
+		fmt.Fprintln(w, "! config.toml cannot be read, so no repo was re-wrapped. Run ezc doctor, then ezc repo rewrap --all.")
+		return
+	}
+	for _, id := range repos.IDs() {
+		ezc, ok := checkoutOf(a.sys, cfg, id)
+		switch {
+		case !ok:
+			fmt.Fprintf(w, "! %s has no checkout on this machine, so its secrets are still encrypted for the old recipients. Run ezc repo rewrap %s where it has one.\n", id, id)
+			continue
+		case sameDir(ezc, a.dir):
+			// A hand-written [checkouts] entry: the store's own files were re-wrapped as the store's.
+			fmt.Fprintf(w, "! %s's checkout is the store's own folder, so it was not re-wrapped as a repo. Correct [checkouts] in config.toml.\n", id)
+			continue
+		}
+		gains, err := repoGains(a.b, ezc, next)
+		if err != nil {
+			fmt.Fprintf(w, "! %s could not be re-wrapped (%s). Run ezc repo rewrap %s.\n", id, firstLineOf(err), id)
+			continue
+		}
+		var others []string
+		for _, name := range gains {
+			if !slices.Contains(a.letIn, name) {
+				others = append(others, name)
+			}
+		}
+		if len(others) > 0 {
+			// The names passed recipients.Load's rule. ezc repo rewrap asks about them.
+			fmt.Fprintf(w, "! %s: %s would also gain access to its secrets. Run ezc repo rewrap %s.\n", id, someNames(others), id)
+			continue
+		}
+		r, err := rewrapRepo(a.sys, a.b, ezc, next, c.retired)
+		var left *repoLeftError
+		switch {
+		case errors.As(err, &left):
+			fmt.Fprintf(w, "! %s could not be re-wrapped (%s), and %s in %s could not be put back as it was. Restore it with git there, then run ezc repo rewrap %s.\n", id, firstLineOf(err), strings.Join(left.files, ", "), ezc, id)
+		case err != nil:
+			fmt.Fprintf(w, "! %s could not be re-wrapped (%s). Run ezc repo rewrap %s.\n", id, firstLineOf(err), id)
+		default:
+			sayRewrap(w, id, ezc, r)
+		}
+	}
 }
 
 // write does everything of a change that comes before its commit.

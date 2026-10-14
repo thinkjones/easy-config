@@ -664,6 +664,8 @@ Needs this machine's key file, as every change to who can read the store does, a
 				if c.due, list, err = dueFor(a, was); err != nil {
 					return giveUp(err)
 				}
+			} else {
+				c.retired = a.myKey
 			}
 			c.extra = func() error {
 				for _, file := range a.enc {
