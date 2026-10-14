@@ -521,3 +521,41 @@ func TestDoctorRepoRecipients(t *testing.T) {
 		t.Errorf("repo recipients shown with no registry:\n%s", out)
 	}
 }
+
+func TestDoctorRepoFileLacksARegistryKey(t *testing.T) {
+	f := newFake(t)
+	accessStoreWith(t, f, map[string]recipients.Recipient{"gene": accessEntry(accessGene), "sam": accessEntry(accessSam)}, accessGene, accessSam)
+	repo(t, f, map[string]string{"manifest.yaml": mToken})
+	ezc := filepath.Join(f.wd, ezcDir)
+	if err := f.backend.WritePolicy(ezc, []string{accessGene}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.backend.Set(filepath.Join(ezc, "common.enc.yaml"), "TOKEN", "s3cr3t-marker-value"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := doctorRun(t, f)
+	wantExit(t, err, 1)
+	if want := "✗ recipients 1 file is not encrypted for the store's registry: common.enc.yaml\nRun ezc repo rewrap.\n"; !strings.Contains(doctorRepoSection(out), want) {
+		t.Errorf("no repo recipients item in\n%s", out)
+	}
+}
+
+func TestDoctorOnlyRepoSaysTheRegistryCannotBeRead(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	write(t, filepath.Join(x.store, ezcDir, recipients.File), "recipients: [\n")
+	repo(t, f, map[string]string{"manifest.yaml": mToken})
+	ezc := filepath.Join(f.wd, ezcDir)
+	if err := f.backend.WritePolicy(ezc, []string{accessGene}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.backend.Set(filepath.Join(ezc, "common.enc.yaml"), "TOKEN", "s3cr3t-marker-value"); err != nil {
+		t.Fatal(err)
+	}
+	f.out.Reset()
+	err := f.run("doctor", "--only", "repo")
+	wantExit(t, err, 1)
+	if line := doctorCmdLine(f.out.String(), "recipients"); !strings.HasPrefix(strings.TrimSpace(line), "✗ recipients") || !strings.Contains(line, recipients.File) {
+		t.Errorf("recipients: %q\n%s", line, f.out.String())
+	}
+}

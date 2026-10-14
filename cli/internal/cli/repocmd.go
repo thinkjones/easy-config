@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -419,15 +420,17 @@ func checkOne(sys System, t repoTarget, env string, reg recipients.Registry, hav
 }
 
 func newRepoRewrapCmd(sys System) *cobra.Command {
-	var all bool
+	var all, yes bool
 	cmd := &cobra.Command{
-		Use:   "rewrap [<owner/repo>]",
+		Use:   "rewrap [<owner/repo>] [--all] [--yes]",
 		Short: "encrypt a repo's secrets for the people the store's recipients.yaml names",
 		Long: `Write the encryption policy of a repo's checkout from the store's recipients.yaml, and re-wrap each encrypted file there for exactly the keys it names. With no argument it re-wraps the working repo; with an ID, that repo; with --all, every repo in repos.yaml that has a checkout on this machine. The result is left in the checkout's .ezc for you to commit there: no git runs in a repo.
 
-Refused before anything is written when the store has no recipients.yaml, and while an encrypted file of the store is not encrypted for the people it names: a name somebody pushed into recipients.yaml is let in by ` + "`ezc store rewrap`" + `, which asks, before any repo follows it. A checkout with neither an encrypted file nor a policy is skipped, and one whose files are already for the store's recipients is not written to. Each secret a key that has left a file could read is named, with the command that gives it a new value.
+Refused before anything is written when the store has no recipients.yaml, while an encrypted file of the store is not encrypted for the people it names, and while the store's encryption policy does not name exactly them: a name somebody pushed into recipients.yaml is let in by ` + "`ezc store rewrap`" + `, which asks, before any repo follows it. A checkout with neither an encrypted file nor a policy is skipped, and one whose files are already for the store's recipients is not written to. Each secret a key that has left a file could read is named, with the command that gives it a new value.
 
-Needs this machine's key for a file it re-wraps. A repo that fails is put back as it was and the command exits 1. Prints names and paths, never a value.`,
+Read ` + "`ezc user list`" + ` first. Each name that would gain access to a repo's secrets is printed before anything is written there, and the command asks ` + "`Let <names> read <id>'s secrets? [y/N]`" + ` on a terminal; anything but y leaves that repo as it is. Without a terminal it needs --yes.
+
+Needs this machine's key for a file it re-wraps. A repo that fails, or is not let in, is left as it was and the command exits 1. Prints names and paths, never a value.`,
 		Args: maxArgs(1, "a repo ID"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if all && len(args) > 0 {
@@ -436,14 +439,15 @@ Needs this machine's key for a file it re-wraps. A repo that fails is put back a
 			if len(args) > 0 && !registry.ValidID(args[0]) {
 				return repoIDUsage(cmd)
 			}
-			return repoRewrapAll(sys, args, all)
+			return repoRewrapAll(sys, cmd, args, all, yes)
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "re-wrap every repo in repos.yaml that has a checkout here")
+	cmd.Flags().BoolVar(&yes, "yes", false, "let in whoever recipients.yaml names without being asked; needed for that when there is no terminal")
 	return cmd
 }
 
-func repoRewrapAll(sys System, args []string, all bool) error {
+func repoRewrapAll(sys System, cmd *cobra.Command, args []string, all, yes bool) error {
 	touchStore(sys)
 	targets, err := repoTargets(sys, args, all)
 	if err != nil {
@@ -467,13 +471,39 @@ func repoRewrapAll(sys System, args []string, all bool) error {
 	if len(differs) > 0 {
 		return fmt.Errorf("%s, so no repo is re-wrapped for it. Run ezc store rewrap first.", notForRegistry(differs...))
 	}
+	b := backendFor(sys)
+	// In a store with no encrypted file the policy is all that says who recipients.yaml was let in for.
+	if ok, err := policyIsFor(b, p.StoreEzc(), reg.Keys()); err != nil || !ok {
+		return fmt.Errorf("The store's encryption policy does not name the people %s names, so no repo is re-wrapped for it. Run ezc store rewrap first.", recipients.File)
+	}
 	if len(targets) == 0 {
 		_, err := fmt.Fprintln(sys.Stdout, "No repos are registered. Run ezc repo add inside a repo.")
 		return err
 	}
-	b := backendFor(sys)
+
+	// Who each repo would be opened to is known before any repo is written, so a refusal writes nothing.
+	gains := make([][]string, len(targets))
+	gainErrs := make([]error, len(targets))
+	var gaining, opened []string
+	for i, t := range targets {
+		if !t.Here || sameDir(t.Ezc, p.StoreEzc()) {
+			continue
+		}
+		gains[i], gainErrs[i] = repoGains(b, t.Ezc, reg)
+		if len(gains[i]) > 0 {
+			gaining = append(gaining, gains[i]...)
+			opened = append(opened, t.ID)
+		}
+	}
+	if len(opened) > 0 && !yes && !sys.StdinIsTerminal() {
+		slices.Sort(gaining)
+		return usagef("%s: this would let %s read the secrets of %s. Check ezc user list: pass --yes when that is right, or take the name out with ezc user remove first. Try `%s`.", cmd.CommandPath(), someNames(slices.Compact(gaining)), someNames(opened), helpFor(cmd))
+	}
+
+	// One reader on stdin for every question: a second would lose what the first read ahead.
+	var ask *asker
 	failed := false
-	for _, t := range targets {
+	for i, t := range targets {
 		switch {
 		case !t.Here:
 			fmt.Fprintf(sys.Stdout, "- %s: no checkout on this machine. Run ezc repo add inside it, then run this again.\n", t.ID)
@@ -483,6 +513,24 @@ func repoRewrapAll(sys System, args []string, all bool) error {
 			failed = true
 			fmt.Fprintf(sys.Stdout, "✗ %s's checkout is the store's own folder. Nothing was changed there.\n", t.ID)
 			continue
+		case gainErrs[i] != nil:
+			failed = true
+			fmt.Fprintf(sys.Stdout, "✗ %s could not be re-wrapped (%s). Nothing was changed there.\n", t.ID, firstLineOf(gainErrs[i]))
+			continue
+		}
+		if names := gains[i]; len(names) > 0 {
+			// The names passed recipients.Load's rule.
+			fmt.Fprintf(sys.Stderr, "! %s gain access to %s's secrets.\n", someNames(names), t.ID)
+			if !yes {
+				if ask == nil {
+					ask = &asker{sys: sys, in: bufio.NewReader(sys.Stdin)}
+				}
+				if answer := strings.ToLower(ask.ask("Let " + someNames(names) + " read " + t.ID + "'s secrets? [y/N] ")); answer != "y" && answer != "yes" {
+					failed = true
+					fmt.Fprintln(sys.Stdout, "Not re-wrapped.")
+					continue
+				}
+			}
 		}
 		r, err := rewrapRepo(sys, b, t.Ezc, reg)
 		var left *repoLeftError

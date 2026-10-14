@@ -20,7 +20,7 @@ type Backend interface {
 
 // Apply is the one sequence every access change runs: save next, then Rewrap for its keys. Any failure puts back
 // recipients.yaml with the rest of what Rewrap puts back, and returns the first error.
-func Apply(dir string, next Registry, b Backend, encFiles []string) (err error) {
+func Apply(dir string, next Registry, b Backend, encFiles []string) error {
 	return guarded(dir, append([]string{File}, encFiles...), func() error {
 		if err := next.Save(dir); err != nil {
 			return err

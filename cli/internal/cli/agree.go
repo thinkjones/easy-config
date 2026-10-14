@@ -65,6 +65,21 @@ func storeDiffers(sys System, dir string) ([]string, error) {
 	return slices.Sorted(maps.Keys(diffs)), nil
 }
 
+// policyIsFor reports whether the encryption policy in dir names exactly keys, as a new file there would be
+// encrypted for them. No policy is false; a policy that cannot be read is false and its error.
+func policyIsFor(b backend.Backend, dir string, keys []string) (bool, error) {
+	got, err := b.PolicyRecipients(filepath.Join(dir, "common.enc.yaml"))
+	if errors.Is(err, backend.ErrNoPolicy) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	want := slices.Clone(keys)
+	slices.Sort(want)
+	return slices.Equal(got, slices.Compact(want)), nil
+}
+
 // guardRecipients refuses a write to an encrypted file of the store (base names) that is not encrypted for the
 // registry's keys. A file that is not there yet is for guardNewFile.
 func (s scope) guardRecipients(sys System, files ...string) error {

@@ -153,8 +153,11 @@ func repoOptions(sys System, storeEzc, repo string, o *doctor.Options) {
 	if repo == "" || sameDir(repo, storeEzc) {
 		return
 	}
-	// A registry that cannot be loaded is the store's access item.
+	// A registry that cannot be loaded is the store's access item, unless the store's items are not collected.
 	reg, found, err := recipients.Load(storeEzc)
+	if err != nil && o.Only == "repo" {
+		o.RepoRecipients, o.RepoDifferErr = true, firstLineOf(err)
+	}
 	if err != nil || !found {
 		return
 	}

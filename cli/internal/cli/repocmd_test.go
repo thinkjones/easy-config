@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/config"
 	"github.com/thinkjones/easy-config/cli/internal/gitstore"
 	"github.com/thinkjones/easy-config/cli/internal/gitstore/gittest"
@@ -608,6 +609,15 @@ func folderBytes(t *testing.T, dir string) map[string]string {
 	return m
 }
 
+// rewrapWant fails unless the command succeeded, printing exactly stdout and stderr.
+func rewrapWant(t *testing.T, f *fake, stdout, stderr string, args ...string) {
+	t.Helper()
+	out, errOut, err := accessRun(f, args...)
+	if err != nil || out != stdout || errOut != stderr {
+		t.Fatalf("%v: %v\nstdout %q\nwant   %q\nstderr %q\nwant   %q", args, err, out, stdout, errOut, stderr)
+	}
+}
+
 // noGitIn fails when a git command ran in one of the folders, or below it.
 func noGitIn(t *testing.T, f *fake, dirs ...string) {
 	t.Helper()
@@ -626,7 +636,7 @@ func TestRepoRewrap(t *testing.T) {
 	top := rewrapCheckout(t, f, []string{accessGene}, "common.enc.yaml")
 	ezc := filepath.Join(top, ezcDir)
 
-	accessWant(t, f, "✓ o/app: re-wrapped common.enc.yaml in "+ezc+". Commit it there.\n", "repo", "rewrap", "o/app")
+	rewrapWant(t, f, "✓ o/app: re-wrapped common.enc.yaml in "+ezc+". Commit it there.\n", "! sam gain access to o/app's secrets.\n", "repo", "rewrap", "o/app", "--yes")
 	noGitIn(t, f, top)
 	got, err := f.backend.Recipients(filepath.Join(ezc, "common.enc.yaml"))
 	if err != nil || !slices.Equal(got, []string{accessGene, accessSam}) {
@@ -709,7 +719,7 @@ func TestRepoRewrapAFileThisKeyCannotOpen(t *testing.T) {
 	top := rewrapCheckout(t, f, []string{accessSam}, "common.enc.yaml")
 	before := folderBytes(t, filepath.Join(top, ezcDir))
 	f.backend.Locked = true
-	out, _, err := accessRun(f, "repo", "rewrap", "o/app")
+	out, _, err := accessRun(f, "repo", "rewrap", "o/app", "--yes")
 	wantExit(t, err, 1)
 	if !strings.HasPrefix(out, "✗ o/app could not be re-wrapped (") || !strings.HasSuffix(out, "cannot decrypt). Nothing was changed there.\n") || strings.Count(out, "\n") != 1 {
 		t.Fatalf("got %q", out)
@@ -726,7 +736,7 @@ func TestRepoRewrapAll(t *testing.T) {
 	top := rewrapCheckout(t, f, []string{accessGene}, "common.enc.yaml")
 	want := "✓ o/app: re-wrapped common.enc.yaml in " + filepath.Join(top, ezcDir) + ". Commit it there.\n" +
 		"- o/gone: no checkout on this machine. Run ezc repo add inside it, then run this again.\n"
-	accessWant(t, f, want, "repo", "rewrap", "--all")
+	rewrapWant(t, f, want, "! sam gain access to o/app's secrets.\n", "repo", "rewrap", "--all", "--yes")
 	noGitIn(t, f, top)
 
 	wantUsage(t, f.run("repo", "rewrap", "--all", "o/app"), "--all")
@@ -734,5 +744,113 @@ func TestRepoRewrapAll(t *testing.T) {
 	wantUsage(t, err, "repo ID")
 	if strings.Contains(err.Error(), "\x1b") {
 		t.Fatalf("echoed: %q", err)
+	}
+}
+
+func TestRepoRewrapRefusedWhileTheStorePolicyDiffers(t *testing.T) {
+	// No encrypted file in the store: only its policy says who recipients.yaml was let in for.
+	reg := map[string]recipients.Recipient{"gene": accessEntry(accessGene), "sam": accessEntry(accessSam)}
+	f, x := rewrapStore(t, reg, accessGene)
+	storeEzc := filepath.Join(x.store, ezcDir)
+	for _, file := range accessEncFiles {
+		if err := os.Remove(filepath.Join(storeEzc, file)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if done, err := x.g.Commit(x.store, "no secrets", gitstore.Author{}, ezcDir); err != nil || !done {
+		t.Fatalf("commit: %v, %v", done, err)
+	}
+	x.push(x.store)
+	top := rewrapCheckout(t, f, []string{accessGene}, "common.enc.yaml")
+	before := folderBytes(t, filepath.Join(top, ezcDir))
+	_, _, err := accessRun(f, "repo", "rewrap", "o/app", "--yes")
+	if err == nil || !strings.HasSuffix(err.Error(), "Run ezc store rewrap first.") {
+		t.Fatalf("got %v", err)
+	}
+	if after := folderBytes(t, filepath.Join(top, ezcDir)); !maps.Equal(before, after) {
+		t.Errorf("wrote to the checkout")
+	}
+	// A store with no policy at all is refused too.
+	if err := os.Remove(filepath.Join(storeEzc, backend.FakePolicy)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := accessRun(f, "repo", "rewrap", "o/app", "--yes"); err == nil || !strings.HasSuffix(err.Error(), "Run ezc store rewrap first.") {
+		t.Fatalf("no policy: got %v", err)
+	}
+	if err := f.backend.WritePolicy(storeEzc, []string{accessGene, accessSam}); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := x.g.Commit(x.store, "policy", gitstore.Author{}, ezcDir); err != nil || !done {
+		t.Fatalf("commit: %v, %v", done, err)
+	}
+	x.push(x.store)
+	rewrapWant(t, f, "✓ o/app: re-wrapped common.enc.yaml in "+filepath.Join(top, ezcDir)+". Commit it there.\n", "! sam gain access to o/app's secrets.\n", "repo", "rewrap", "o/app", "--yes")
+}
+
+// gainFix is a store whose registry names gene and sam, and o/app's checkout encrypted for gene only: sam gains.
+func gainFix(t *testing.T) (*fake, string) {
+	t.Helper()
+	reg := map[string]recipients.Recipient{"gene": accessEntry(accessGene), "sam": accessEntry(accessSam)}
+	f, _ := rewrapStore(t, reg, accessGene, accessSam)
+	top := rewrapCheckout(t, f, []string{accessGene}, "common.enc.yaml")
+	return f, filepath.Join(top, ezcDir)
+}
+
+func TestRepoRewrapAsksBeforeLettingANameIn(t *testing.T) {
+	f, ezc := gainFix(t)
+	f.tty = true
+	f.stdin = "y\n"
+	out, errOut, err := accessRun(f, "repo", "rewrap", "o/app")
+	if err != nil || out != "✓ o/app: re-wrapped common.enc.yaml in "+ezc+". Commit it there.\n" {
+		t.Fatalf("%v\n%q", err, out)
+	}
+	if errOut != "! sam gain access to o/app's secrets.\nLet sam read o/app's secrets? [y/N] " {
+		t.Fatalf("stderr %q", errOut)
+	}
+	if got, _ := f.backend.Recipients(filepath.Join(ezc, "common.enc.yaml")); !slices.Equal(got, []string{accessGene, accessSam}) {
+		t.Fatalf("recipients = %v", got)
+	}
+}
+
+func TestRepoRewrapNotLetIn(t *testing.T) {
+	f, ezc := gainFix(t)
+	before := folderBytes(t, ezc)
+	f.tty = true
+	f.stdin = "n\n"
+	out, _, err := accessRun(f, "repo", "rewrap", "o/app")
+	wantExit(t, err, 1)
+	if out != "Not re-wrapped.\n" {
+		t.Fatalf("got %q", out)
+	}
+	if after := folderBytes(t, ezc); !maps.Equal(before, after) {
+		t.Errorf("wrote to the checkout")
+	}
+}
+
+func TestRepoRewrapWithoutATerminal(t *testing.T) {
+	f, ezc := gainFix(t)
+	before := folderBytes(t, ezc)
+	_, _, err := accessRun(f, "repo", "rewrap", "o/app")
+	wantUsage(t, err, "ezc user list")
+	if !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("got %v", err)
+	}
+	if after := folderBytes(t, ezc); !maps.Equal(before, after) {
+		t.Errorf("wrote to the checkout")
+	}
+	// --yes lets them in without a question.
+	out, errOut, err := accessRun(f, "repo", "rewrap", "o/app", "--yes")
+	if err != nil || out != "✓ o/app: re-wrapped common.enc.yaml in "+ezc+". Commit it there.\n" || errOut != "! sam gain access to o/app's secrets.\n" {
+		t.Fatalf("%v\n%q\n%q", err, out, errOut)
+	}
+}
+
+func TestRepoRewrapAsksNothingWhenNobodyGains(t *testing.T) {
+	// Only a key leaves: nobody is let in, so there is no question, terminal or not.
+	f, _ := rewrapStore(t, map[string]recipients.Recipient{"gene": accessEntry(accessGene)}, accessGene)
+	rewrapCheckout(t, f, []string{accessGene, accessStray}, "common.enc.yaml")
+	out, errOut, err := accessRun(f, "repo", "rewrap", "o/app")
+	if err != nil || !strings.HasPrefix(out, "✓ o/app: re-wrapped common.enc.yaml") || errOut != "" {
+		t.Fatalf("%v\n%q\n%q", err, out, errOut)
 	}
 }

@@ -184,10 +184,8 @@ func rewrapRepo(sys System, b backend.Backend, ezc string, reg recipients.Regist
 	if err != nil {
 		return repoRewrap{}, err
 	}
-	want := slices.Clone(reg.Keys())
-	slices.Sort(want)
 	// A policy this cannot read is not known to be the registry's.
-	if policy, err := b.PolicyRecipients(filepath.Join(ezc, "common.enc.yaml")); len(diffs) == 0 && err == nil && slices.Equal(policy, slices.Compact(want)) {
+	if agrees, _ := policyIsFor(b, ezc, reg.Keys()); len(diffs) == 0 && agrees {
 		return repoRewrap{}, nil
 	}
 	var r repoRewrap
@@ -219,6 +217,46 @@ func rewrapRepo(sys System, b backend.Backend, ezc string, reg recipients.Regist
 		}
 	}
 	return r, nil
+}
+
+// repoGains are the names of the registry, sorted, that the checkout's secrets would be opened to by a re-wrap: those
+// whose key none of its encrypted files and not its policy holds. A checkout with neither has none: rewrapRepo
+// skips it. It needs no key.
+func repoGains(b backend.Backend, ezc string, reg recipients.Registry) ([]string, error) {
+	enc, err := encryptedFiles(ezc)
+	if err != nil {
+		return nil, err
+	}
+	if err := unshowable(ezc, enc); err != nil {
+		return nil, err
+	}
+	hasPolicy, err := b.HasPolicy(ezc)
+	if err != nil {
+		return nil, err
+	}
+	if len(enc) == 0 && !hasPolicy {
+		return nil, nil
+	}
+	var held []string
+	for _, file := range enc {
+		keys, err := b.Recipients(filepath.Join(ezc, file))
+		if err != nil {
+			return nil, err
+		}
+		held = append(held, keys...)
+	}
+	// A policy that cannot be read lets nobody in: everyone it would have named counts as gaining.
+	if keys, err := b.PolicyRecipients(filepath.Join(ezc, "common.enc.yaml")); err == nil {
+		held = append(held, keys...)
+	}
+	var gains []string
+	for name, e := range reg.Recipients {
+		if !slices.Contains(held, e.Key) {
+			gains = append(gains, name)
+		}
+	}
+	slices.Sort(gains)
+	return gains, nil
 }
 
 // sayRewrap prints what rewrapRepo did to the checkout of id, whose .ezc is ezc. A failure is the caller's to say.
