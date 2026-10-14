@@ -2,7 +2,7 @@
 
 Router for agents working in this repo: the source code of `ezc` ("easy config"), a Go CLI that composes a repo's environment from a global store of secrets and variables and the repo's own `.ezc/`, validates it against a manifest, and exports it or runs a command with it. Read the linked file for detail; this page is only where things are.
 
-The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-10-ezc-design.md); parts 1 (core), 2 (secrets) and 3 (`ezc setup`, the store as a git repo, and its sync) are built. Part 4 (access) is built too: `ezc join`, `ezc user list`, `add`, `remove`, `requests`, `approve`, `deny` and `rotate`, `ezc bot add`, `remove` and `rotate`, the rotation-due list, `ezc store rewrap` and `ezc setup --ci`.
+The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-10-ezc-design.md); parts 1 (core), 2 (secrets) and 3 (`ezc setup`, the store as a git repo, and its sync) are built. Part 4 (access) is built too: `ezc join`, `ezc user list`, `add`, `remove`, `requests`, `approve`, `deny` and `rotate`, `ezc bot add`, `remove` and `rotate`, the rotation-due list, `ezc store rewrap` and `ezc setup --ci`. Part 5 (the registry of repos) is built: `repos.yaml`, `ezc repo add`, `remove`, `list`, `check`, `uses` and `rewrap`, the `ezc unset -g` guard, and the re-wrap of the repos checked out here after every access change.
 
 ## Where things are
 
@@ -32,7 +32,7 @@ The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-
 | `cli/internal/doctor` | Reports the health of the machine, the store and the repo (`ezc doctor`): checks, warnings and problems with their fixes, and the files in a `.ezc/` that ezc does not read. Never a value. |
 | `cli/cmd/ezc` | `main.go` wires the process into `cli.Run` and holds the version. Its tests drive the built binary: `store_test.go` (setup, two machines, sync, `setup --ci`) and `access_test.go` (join and approve, remove, bots, rotate, and what an access change that crossed a write or was not pushed leaves) with real git and real sops, and a fake `gh` that only records. |
 | `bin/ezc` | Shim that builds `cli/bin/ezc` when a Go source changes and runs it; `direnv allow` puts `bin/` on PATH. |
-| `README.md`, `docs/*.md` | User docs. The README is the homepage (what ezc is, quick start, a short command table); `docs/` holds the detail: `setup.md`, `store.md`, `access.md`, `ci.md`, `reference.md` (every command and flag, files, encryption, resolution) and `troubleshooting.md`. A command, flag or message that changes is changed there in the same commit. |
+| `README.md`, `docs/*.md` | User docs. The README is the homepage (what ezc is, quick start, a short command table); `docs/` holds the detail: `setup.md`, `store.md`, `access.md`, `repos.md`, `ci.md`, `reference.md` (every command and flag, files, encryption, resolution) and `troubleshooting.md`. A command, flag or message that changes is changed there in the same commit. |
 | `assets/readme/` | The README's SVGs (hero, layering diagram), written by hand: light background `#f8fafc`, text `#0f172a`, accent `#e85d26`, corners 4px at most, system fonts only. Render with `rsvg-convert -w 900` to check one. |
 | `docs/superpowers/` | Design specs and implementation plans. Historical: never rewrite them to match the code. |
 | `LICENSE` | MIT. |

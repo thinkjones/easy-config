@@ -140,7 +140,21 @@ func dataKeys(t *testing.T, file []byte, keyFile string) (keys []string) {
 // nothing from any commit was never a recipient of the file, and proves nothing: that fails too.
 func wantShutOut(t *testing.T, e *e2e, file, reader, gone string) {
 	t.Helper()
-	path := filepath.Join(e.store(), ".ezc", file)
+	wantShutOutIn(t, e, e.store(), file, reader, gone)
+}
+
+// wantShutOutIn is wantShutOut for the .ezc of the git repo top, a repo's checkout or the store.
+func wantShutOutIn(t *testing.T, e *e2e, top, file, reader, gone string) {
+	t.Helper()
+	git := func(args ...string) string {
+		t.Helper()
+		out, errOut, code := e.exec(top, "", "git", args...)
+		if code != 0 {
+			t.Fatalf("git %v: exit %d\n%s%s", args, code, out, errOut)
+		}
+		return strings.TrimSpace(out)
+	}
+	path := filepath.Join(top, ".ezc", file)
 	now, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -150,8 +164,8 @@ func wantShutOut(t *testing.T, e *e2e, file, reader, gone string) {
 		t.Fatalf("the machine's key unwraps %d keys from %s", len(current), file)
 	}
 	unwrapped := 0
-	for _, commit := range strings.Fields(e.git("log", "--all", "--diff-filter=AM", "--format=%H", "--", ".ezc/"+file)) {
-		for _, old := range dataKeys(t, []byte(e.git("show", commit+":.ezc/"+file)), gone) {
+	for _, commit := range strings.Fields(git("log", "--all", "--diff-filter=AM", "--format=%H", "--", ".ezc/"+file)) {
+		for _, old := range dataKeys(t, []byte(git("show", commit+":.ezc/"+file)), gone) {
 			unwrapped++
 			if old == current[0] {
 				t.Fatalf("the removed key unwraps, from commit %s, the key that encrypts %s now", commit[:7], file)

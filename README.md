@@ -75,10 +75,11 @@ A second person, or a second machine with a key of its own, asks for access and 
 ezc join owner/repo                # on the new machine: clone the store and file a request with your public key
 ezc user approve sam               # on a machine with access: shows the whole key, asks, then lets sam in
 ezc user remove sam                # sam can no longer read it; lists the secrets that now need new values
+ezc repo add                       # inside owner/app: register it, so its own secrets follow the store's recipients
 ezc bot add ci --repo owner/app    # a key for CI, saved as an Actions secret of owner/app
 ```
 
-Who can read the store is written in one file, `recipients.yaml`, and every encrypted file is encrypted for exactly the keys it names. Removing a key re-encrypts each file from scratch and records every secret that key could read as due for a new value, because only a new value protects a secret that was once readable. That file is on the store's default branch, so protect the branch on GitHub: let only the people who can read the store push to it. See [Access](docs/access.md) and [Bots and CI](docs/ci.md).
+Who can read the store is written in one file, `recipients.yaml`, and every encrypted file is encrypted for exactly the keys it names. Removing a key re-encrypts each file from scratch and records every secret that key could read as due for a new value, because only a new value protects a secret that was once readable. That file is on the store's default branch, so protect the branch on GitHub: let only the people who can read the store push to it. A registered repo checked out on the machine that makes the change is re-wrapped too. See [Access](docs/access.md), [Repos](docs/repos.md) and [Bots and CI](docs/ci.md).
 
 ## Commands
 
@@ -87,6 +88,7 @@ Who can read the store is written in one file, `recipients.yaml`, and every encr
 | `ezc setup` | Take a machine from nothing to a working store: check the tools, create your key, create or clone the store, write the config. `--ci` sets a CI job up to read a store. |
 | `ezc join` | Ask for access to an existing store from this machine. |
 | `ezc repo init` | Create `.ezc/` in the working directory with a manifest, `env.local.yaml` and the `env.sh` shim. |
+| `ezc repo add`, `remove`, `list`, `check`, `uses`, `rewrap` | Register the repos that use the store; check them all, find who uses a name, and keep their own secrets encrypted for the store's recipients. |
 | `ezc env` | Check an environment against the manifest. `ezc env export` prints it, for `eval` or as JSON. |
 | `ezc run` | Run a command with the environment added to its own. |
 | `ezc list`, `ezc get` | List the names an environment holds and where each comes from; print one value (a secret needs `--reveal`). |
@@ -108,16 +110,16 @@ Every flag and every exit status is in the [command reference](docs/reference.md
 | [Set up](docs/setup.md) | What `ezc setup` makes, what it never overwrites, and how it adopts a store made by hand. |
 | [The store](docs/store.md) | Writes as commits, the refusals that protect them, and `ezc store status`, `pull` and `push`. |
 | [Access](docs/access.md) | `recipients.yaml`, joining, approving a request, removing someone, rotating a key. |
+| [Repos](docs/repos.md) | `repos.yaml`, where each repo is checked out, checking every repo, and how a repo's own secrets follow the store's recipients. |
 | [Bots and CI](docs/ci.md) | A key for a bot, the two secrets a job needs, and a GitHub Actions workflow. |
 | [Reference](docs/reference.md) | Every command, the files, encryption and the resolution rules. |
 | [When something is wrong](docs/troubleshooting.md) | What `ezc doctor` reports and what to do about it. |
 
 ## Status and known limits
 
-This is `ezc` 0.4. The registry of repos and the TUI come later.
+This is `ezc` 0.5. The TUI comes later.
 
-- **A repo's own secrets are not re-wrapped after an access change.** `ezc user add`, `remove`, `rotate` and the bot commands re-wrap the store's files only. A repo that keeps secrets of its own needs the store's encryption policy copied into its `.ezc/` (see [Encryption](docs/reference.md#encryption)), and copied again after each access change, with `sops updatekeys` run on each of its encrypted files by hand (and `sops rotate -i` on each before that when somebody was removed, as the store's files get). The registry of repos, which does this, comes in part 5.
-- **`--repo` is not checked against anything.** `ezc bot add --repo owner/repo` saves the key in whatever repo you name, when `gh` can write to it; the check against the registry of repos comes in part 5.
+- **A repo is re-wrapped only where it is checked out.** A change to who can read the store re-wraps the registered repos checked out on the machine that makes it; run `ezc repo rewrap --all` on a machine that has the others (see [Repos](docs/repos.md#after-a-change-to-who-can-read-the-store)). A repo's secrets that a key leaving it could read are listed, not recorded in `rotation-due.yaml`.
 - **`ezc setup --ci` works with github.com only.** The token is offered to `https://github.com` and no other host, so a store on a GitHub Enterprise host or anywhere else cannot be cloned by `--ci`.
 - **A repo gets one bot.** Every bot's key is saved as the `EZC_AGE_KEY` Actions secret, so a repo holds one. `ezc bot add` refuses a `--repo` that another bot's entry in `recipients.yaml` already names. It cannot see a key that was put in a repo some other way (`--print-private`, or `gh secret set` by hand), and would replace it.
 - **Two machines that declare a new name at the same time** must resolve the conflict with git (see [Syncing the store](docs/store.md#syncing-the-store)).

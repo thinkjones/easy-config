@@ -143,7 +143,7 @@ func wantNoValue(t *testing.T, e *e2e, value string) {
 
 func TestSetupEndToEnd(t *testing.T) {
 	e := newMachine(t, t.TempDir(), "a")
-	if out := e.mustRun(e.repo, "", "version"); out != "ezc 0.4.0\n" {
+	if out := e.mustRun(e.repo, "", "version"); out != "ezc 0.5.0\n" {
 		t.Fatalf("version: %q", out)
 	}
 	out := e.mustRun(e.repo, "", "setup", "--new-local", "--name", "gene", "--yes")
