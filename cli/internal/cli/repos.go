@@ -102,3 +102,36 @@ func loadRepos(sys System) (registry.Registry, bool, string, error) {
 	r, found, err := registry.Load(p.StoreEzc())
 	return r, found, p.StoreEzc(), err
 }
+
+// repoUsers sorts the registered repos by how their manifest, in the checkout on this machine, declares name:
+// required (also through requiredWhen), optional, and the repos that could not be looked at, which have no
+// checkout here (unchecked) or a manifest that cannot be read (unread). A store with no repos.yaml has none.
+func repoUsers(sys System, name string) (required, optional, unchecked, unread []string, err error) {
+	reg, _, _, err := loadRepos(sys)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	cfg, err := loadConfig(sys)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	for _, id := range reg.IDs() {
+		ezc, ok := checkoutOf(sys, cfg, id)
+		if !ok {
+			unchecked = append(unchecked, id)
+			continue
+		}
+		m, err := loadManifest(filepath.Join(ezc, manifestName), false)
+		if err != nil {
+			unread = append(unread, id)
+			continue
+		}
+		switch registry.Uses(m, name) {
+		case registry.Required:
+			required = append(required, id)
+		case registry.Optional:
+			optional = append(optional, id)
+		}
+	}
+	return required, optional, unchecked, unread, nil
+}

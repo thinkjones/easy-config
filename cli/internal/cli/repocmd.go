@@ -434,32 +434,9 @@ func newRepoUsesCmd(sys System) *cobra.Command {
 
 func repoUses(sys System, name string) error {
 	touchStore(sys)
-	reg, _, _, err := loadRepos(sys)
+	required, optional, unchecked, unread, err := repoUsers(sys, name)
 	if err != nil {
 		return err
-	}
-	cfg, err := loadConfig(sys)
-	if err != nil {
-		return err
-	}
-	var required, optional, unchecked, unread []string
-	for _, id := range reg.IDs() {
-		ezc, ok := checkoutOf(sys, cfg, id)
-		if !ok {
-			unchecked = append(unchecked, id)
-			continue
-		}
-		m, err := loadManifest(filepath.Join(ezc, manifestName), false)
-		if err != nil {
-			unread = append(unread, id)
-			continue
-		}
-		switch registry.Uses(m, name) {
-		case registry.Required:
-			required = append(required, id)
-		case registry.Optional:
-			optional = append(optional, id)
-		}
 	}
 	if len(required) == 0 && len(optional) == 0 {
 		fmt.Fprintf(sys.Stdout, "No registered repo with a checkout here uses %s.\n", name)

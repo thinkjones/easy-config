@@ -4,10 +4,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
+	"github.com/thinkjones/easy-config/cli/internal/config"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
 )
 
@@ -874,4 +876,83 @@ func TestSetExpandRefusedForASecret(t *testing.T) {
 		t.Fatalf("prompted: %v", f.prompts)
 	}
 	sameSnapshot(t, before, snapshot(t, f))
+}
+
+// unsetGuardFix is a store with NAME set in it and repos registered with checkouts holding the given manifests;
+// a manifest "" is a repo with no checkout here.
+func unsetGuardFix(t *testing.T, manifests map[string]string) repoFix {
+	t.Helper()
+	x := repoStore(t, "")
+	dirs := map[string]string{}
+	ids := make([]string, 0, len(manifests))
+	for id := range manifests {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		x.out("repo", "add", id)
+		if m := manifests[id]; m != "" {
+			top := t.TempDir()
+			write(t, filepath.Join(top, ezcDir, "manifest.yaml"), m)
+			dirs[id] = top
+		}
+	}
+	x.setConfig(config.Config{User: "gene", Checkouts: dirs})
+	x.push(x.store)
+	return x
+}
+
+const (
+	guardReq  = "schemaVersion: v1\nrequired:\n  NAME: {type: str, desc: u}\n"
+	guardOpt  = "schemaVersion: v1\nrequired: {}\noptional:\n  NAME: {type: str, desc: u}\n"
+	guardWhen = "schemaVersion: v1\nrequired:\n  MODE: {type: str, desc: m}\noptional:\n  NAME: {type: str, desc: u, requiredWhen: {var: MODE, equals: x}}\n"
+)
+
+func TestUnsetGlobalRefusedWhileARepoRequiresIt(t *testing.T) {
+	for _, m := range []string{guardReq, guardWhen} {
+		x := unsetGuardFix(t, map[string]string{"o/app": m, "o/b": guardOpt})
+		head, before := x.git("rev-parse", "HEAD"), readFile(t, x.file("common.yaml"))
+		x.f.out.Reset()
+		err := x.f.run("unset", "-g", "NAME")
+		if err == nil || err.Error() != "NAME is required by o/app. Pass --force to unset it anyway, or take it out of their manifests first." {
+			t.Fatalf("got %v", err)
+		}
+		storeWriteExitsOne(t, err)
+		if x.git("rev-parse", "HEAD") != head || readFile(t, x.file("common.yaml")) != before {
+			t.Fatal("the refusal changed the store")
+		}
+		x.wantClean()
+	}
+}
+
+func TestUnsetGlobalForceKeepsTheLines(t *testing.T) {
+	x := unsetGuardFix(t, map[string]string{"o/app": guardReq, "o/opt": guardOpt, "o/other": ""})
+	out := x.out("unset", "-g", "NAME", "--force")
+	for _, want := range []string{"! NAME is required by o/app.\n", "! NAME is optional in o/opt.\n", "! not checked, no checkout here: o/other\n", "unset NAME from"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in %q", want, out)
+		}
+	}
+	x.wantCommit("unset NAME (common.yaml)", "common.yaml")
+}
+
+func TestUnsetGlobalOptionalAndUnchecked(t *testing.T) {
+	x := unsetGuardFix(t, map[string]string{"o/app": guardOpt, "o/other": "", "o/bad": "schemaVersion: v1\nrequired: [\n"})
+	out := x.out("unset", "-g", "NAME")
+	for _, want := range []string{"! NAME is optional in o/app.\n", "! not checked, no checkout here: o/other\n", "! not checked, manifest cannot be read: o/bad\n"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in %q", want, out)
+		}
+	}
+	x.wantCommit("unset NAME (common.yaml)", "common.yaml")
+}
+
+func TestUnsetInARepoRunsNoGuard(t *testing.T) {
+	x := unsetGuardFix(t, map[string]string{"o/app": guardReq})
+	write(t, filepath.Join(x.f.wd, ezcDir, "common.yaml"), "NAME: n\n")
+	write(t, filepath.Join(x.f.wd, ezcDir, backend.FakePolicy), "")
+	write(t, filepath.Join(x.f.wd, ezcDir, "manifest.yaml"), mToken)
+	if out := x.out("unset", "NAME"); strings.Contains(out, "!") {
+		t.Fatalf("got %q", out)
+	}
 }
