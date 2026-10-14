@@ -20,6 +20,7 @@ import (
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/check"
+	"github.com/thinkjones/easy-config/cli/internal/gitstore"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
 	"github.com/thinkjones/easy-config/cli/internal/resolve"
 	"github.com/thinkjones/easy-config/cli/internal/storeaudit"
@@ -118,9 +119,12 @@ type Options struct {
 	ConfigErr   string // "" unless the file could not be read
 	User        string
 	GitFound    bool
-	Sync        string // the store's state as one phrase, "" when the store is not a git repo
-	SyncState   State  // OK, Warn or Broken for that phrase
-	SyncFix     string // what to do about Sync, "" when nothing
+	GitVersion  string // "" when it could not be told
+	// GitVersionUnread is set when git was asked its version and the answer could not be read.
+	GitVersionUnread bool
+	Sync             string // the store's state as one phrase, "" when the store is not a git repo
+	SyncState        State  // OK, Warn or Broken for that phrase
+	SyncFix          string // what to do about Sync, "" when nothing
 	// Access: AccessKnown is false when this machine's public key could not be read, which leaves out the access item
 	// unless the registry itself is the problem. Recipient is the registry's name for the key, "" when it is not a recipient.
 	AccessKnown bool
@@ -128,6 +132,19 @@ type Options struct {
 	HasRegistry bool   // the store has a recipients.yaml
 	RegistryErr string // "" unless it could not be loaded
 	Requests    []string
+	// Remote is the store's origin as it may be shown, "" for a store with none.
+	Remote string
+	// Request is the state of this machine's request for access, when its key is not a recipient: "pending" when a
+	// request holds this machine's key (RequestName is its name), "not found" when none does, "" when not asked.
+	Request, RequestName string
+	// Recipients is how many the registry names; Differ the encrypted files whose recipients differ from it, and
+	// DifferErr why that could not be told.
+	Recipients int
+	Differ     []string
+	DifferErr  string
+	// Due is how many entries rotation-due.yaml holds, DueErr why it could not be read.
+	Due    int
+	DueErr string
 }
 
 // Collect gathers the picture Options asks for. It never fails: whatever it cannot read is a Broken item.
@@ -189,6 +206,12 @@ func gitItem(o Options) Item {
 	if !o.GitFound {
 		return Item{Broken, "git", "git is not installed.", ""}
 	}
+	if o.GitVersion != "" && gitstore.TooOld(o.GitVersion) {
+		return Item{Broken, "git", fmt.Sprintf("git %s is too old; ezc needs %s or later.", o.GitVersion, gitstore.MinVersion), ""}
+	}
+	if o.GitVersionUnread {
+		return Item{Warn, "git", "installed, but its version could not be read", fmt.Sprintf("ezc needs git %s or later.", gitstore.MinVersion)}
+	}
 	return Item{OK, "git", "installed", ""}
 }
 
@@ -208,13 +231,19 @@ func accessItem(o Options) []Item {
 		return []Item{{Broken, "access", o.RegistryErr, ""}}
 	case !o.HasRegistry:
 		if ok, _ := o.Backend.HasPolicy(o.StoreDir); ok {
-			return []Item{{Warn, "access", "the store has an encryption policy but no recipients.yaml, so ezc cannot say who has access.", ""}}
+			return []Item{{Warn, "access", "the store has an encryption policy but no recipients.yaml, so ezc cannot say who has access.",
+				`Write recipients.yaml (README, "Access"), then run ezc store rewrap.`}}
 		}
 		return nil
 	case !o.AccessKnown:
 		return nil
+	case o.Recipient == "" && o.Request == "pending":
+		return []Item{{Broken, "access", "this machine's key cannot read the store yet; request " + o.RequestName + " is waiting for approval",
+			"Ask someone who can read the store to run ezc user approve " + o.RequestName + "."}}
+	case o.Recipient == "" && o.Remote == "":
+		return []Item{{Broken, "access", "your key is not one of this store's recipients.", "Run ezc join --print."}}
 	case o.Recipient == "":
-		return []Item{{Broken, "access", "your key is not one of this store's recipients. Give your public key to someone who has access.", ""}}
+		return []Item{{Broken, "access", "your key is not one of this store's recipients.", "Run ezc join " + o.Remote + "."}}
 	}
 	return []Item{{OK, "access", "your key is the recipient " + o.Recipient, ""}}
 }
@@ -227,7 +256,59 @@ func requestsItem(o Options) []Item {
 	if len(o.Requests) == 1 {
 		unit = "request"
 	}
-	return []Item{{Warn, "requests", fmt.Sprintf("%d access %s pending: %s", len(o.Requests), unit, strings.Join(o.Requests, ", ")), ""}}
+	return []Item{{Warn, "requests", fmt.Sprintf("%d access %s pending: %s", len(o.Requests), unit, someNames(o.Requests)), "Run ezc user requests."}}
+}
+
+// someNames is the first names of a list and how many more there are: whoever can push to the store can file any
+// number of requests.
+func someNames(names []string) string {
+	const shown = 5
+	if len(names) <= shown {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(names[:shown], ", "), len(names)-shown)
+}
+
+// recipientsFix is what to do about files that are not encrypted for the registry. The registry may be the side
+// that is wrong: a re-wrap lets in every name it holds.
+const recipientsFix = "Run ezc user list and check who it names, then ezc store rewrap."
+
+// recipientsItem says whether the encrypted files are encrypted for the registry's recipients. It is left out
+// when the store has no usable registry.
+func recipientsItem(o Options) []Item {
+	switch {
+	case !o.HasRegistry || o.RegistryErr != "":
+		return nil
+	case o.DifferErr != "":
+		return []Item{{Broken, "recipients", o.DifferErr, "Run ezc store rewrap, or ezc store audit for the detail."}}
+	case len(o.Differ) == 1:
+		return []Item{{Broken, "recipients", "1 file is not encrypted for the registry: " + displayName(o.Differ[0]), recipientsFix}}
+	case len(o.Differ) > 1:
+		names := make([]string, len(o.Differ))
+		for i, f := range o.Differ {
+			names[i] = displayName(f)
+		}
+		return []Item{{Broken, "recipients", fmt.Sprintf("%d files are not encrypted for the registry: %s", len(o.Differ), someNames(names)), recipientsFix}}
+	case o.Recipients == 1:
+		return []Item{{OK, "recipients", "every file is encrypted for the 1 recipient", ""}}
+	}
+	return []Item{{OK, "recipients", fmt.Sprintf("every file is encrypted for the %d recipients", o.Recipients), ""}}
+}
+
+// rotationItem is the secrets that were readable by a key that has been removed; none when there are none.
+func rotationItem(o Options) []Item {
+	switch {
+	case o.DueErr != "":
+		return []Item{{Broken, "rotation", o.DueErr, ""}}
+	case o.Due == 0:
+		return nil
+	}
+	unit := "secrets were"
+	if o.Due == 1 {
+		unit = "secret was"
+	}
+	return []Item{{Warn, "rotation", fmt.Sprintf("%d %s readable by a removed key", o.Due, unit),
+		"ezc store status --due lists them; give each a new value with ezc set -g NAME, and --env for an environment's file."}}
 }
 
 func store(o Options) []Item {
@@ -238,7 +319,9 @@ func store(o Options) []Item {
 	}
 	items = append(items, syncItem(o)...)
 	items = append(items, accessItem(o)...)
+	items = append(items, recipientsItem(o)...)
 	items = append(items, requestsItem(o)...)
+	items = append(items, rotationItem(o)...)
 	_, item, valid := manifestItem(o.StoreDir, func(m manifest.Manifest) string {
 		return fmt.Sprintf("%d declared", len(m.Required)+len(m.Optional))
 	}, Warn)

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +40,9 @@ type fake struct {
 	now       time.Time                                  // System.Now; the zero value means 2026-10-11T12:00:00Z
 	errTTY    bool                                       // StderrIsTerminal
 	noGit     bool                                       // git cannot be found
+	gitFail   string                                     // a git command with one of these arguments, space separated, fails
+	hostname  string                                     // System.Hostname; "" means test-host
+	execHook  func(proc.Command)                         // called before each git command, when set
 
 	t    *testing.T
 	gits []proc.Command // every git command Exec ran; they are not in execs
@@ -60,8 +64,18 @@ func newFake(t *testing.T) *fake {
 // runGit runs the real git, cut off from the user's config. Without git it answers as a machine that has none.
 func (f *fake) runGit(c proc.Command) ([]byte, []byte, error) {
 	f.gits = append(f.gits, c)
+	if f.execHook != nil {
+		f.execHook(c)
+	}
 	if f.noGit {
 		return nil, nil, exec.ErrNotFound
+	}
+	if f.gitFail != "" {
+		for _, arg := range c.Args {
+			if slices.Contains(strings.Fields(f.gitFail), arg) {
+				return nil, []byte("fatal: made to fail\n"), errors.New("exit status 128")
+			}
+		}
 	}
 	if f.git == nil {
 		if _, err := exec.LookPath("git"); err != nil && os.Getenv("EZC_REQUIRE_GIT") != "1" {
@@ -93,7 +107,7 @@ func (f *fake) sys() System {
 			f.children = append(f.children, append(call, env...))
 			return f.childExit, nil
 		},
-		Version: "0.3.0",
+		Version: "0.4.0",
 		Exec: func(c proc.Command) ([]byte, []byte, error) {
 			if c.Name == "git" {
 				return f.runGit(c)
@@ -123,6 +137,12 @@ func (f *fake) sys() System {
 			return f.now
 		},
 		Backend: f.backend,
+		Hostname: func() (string, error) {
+			if f.hostname == "" {
+				return "test-host", nil
+			}
+			return f.hostname, nil
+		},
 	}
 }
 
@@ -164,7 +184,7 @@ func TestVersion(t *testing.T) {
 	if err := f.run("version"); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.out.String(); got != "ezc 0.3.0\n" {
+	if got := f.out.String(); got != "ezc 0.4.0\n" {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -1262,7 +1282,7 @@ func TestStoreAuditBackendFailureIsAnError(t *testing.T) {
 
 func TestStoreNeedsAVerb(t *testing.T) {
 	f := newFake(t)
-	wantUsage(t, f.run("store"), "say status, pull, push or audit")
+	wantUsage(t, f.run("store"), "say status, pull, push, rewrap or audit")
 }
 
 func TestDoctor(t *testing.T) {

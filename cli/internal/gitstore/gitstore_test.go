@@ -629,7 +629,7 @@ func TestErrorsHoldNoFileContent(t *testing.T) {
 	}
 	commit(t, g, b, "two.yaml", "A: "+marker+"\n")
 	_, err = g.Push(b)
-	if err == nil || strings.Contains(err.Error(), marker) || !strings.Contains(err.Error(), "failed to push") {
+	if !errors.Is(err, ErrRemoteMoved) || strings.Contains(err.Error(), marker) {
 		t.Fatalf("Push: %v", err)
 	}
 }
@@ -670,6 +670,53 @@ func TestShowURL(t *testing.T) {
 	} {
 		if got := ShowURL(c.remote); got != c.want {
 			t.Errorf("ShowURL(%q) = %q, want %q", c.remote, got, c.want)
+		}
+	}
+}
+
+func TestParseVersion(t *testing.T) {
+	for out, want := range map[string]string{
+		"git version 2.43.0\n":                 "2.43.0",
+		"git version 2.39.5 (Apple Git-154)\n": "2.39.5",
+		"git version 2.23\n":                   "2.23",
+		"git version 2.43.0.windows.1\n":       "2.43.0",
+		"git version 2.39.3 (Apple Git-146)\n": "2.39.3",
+	} {
+		if got, ok := ParseVersion(out); !ok || got != want {
+			t.Errorf("%q: %q, %v", out, got, ok)
+		}
+	}
+	for _, out := range []string{"", "hello\n", "git version\n", "git version x.y\n"} {
+		if got, ok := ParseVersion(out); ok {
+			t.Errorf("%q parsed as %q", out, got)
+		}
+	}
+}
+
+func TestTooOld(t *testing.T) {
+	for v, want := range map[string]bool{"2.22.9": true, "1.9.1": true, "2.23.0": false, "2.23": false, "2.43.0": false, "3.0.1": false} {
+		if TooOld(v) != want {
+			t.Errorf("TooOld(%q) = %v", v, !want)
+		}
+	}
+}
+
+func TestVersion(t *testing.T) {
+	v, err := newGit(t).Version()
+	if err != nil || TooOld(v) {
+		t.Errorf("%q, %v", v, err)
+	}
+}
+
+// A line of git's stderr can be one the remote wrote: no control character of it reaches a message.
+func TestReasonHoldsNoControlCharacter(t *testing.T) {
+	for stderr, want := range map[string]string{
+		"remote: \x1b]0;owned\x07 denied\x1b[31m\n": "remote: ?]0;owned? denied?[31m",
+		"fatal: bad\x7f thing\r\nmore":              "bad? thing",
+		"error: a\tb":                               "a?b",
+	} {
+		if got := reason([]byte(stderr)); got != want {
+			t.Errorf("%q:\n got %q\nwant %q", stderr, got, want)
 		}
 	}
 }

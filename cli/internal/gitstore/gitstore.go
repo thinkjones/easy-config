@@ -21,6 +21,10 @@ import (
 type Git struct {
 	Run     proc.Runner
 	Environ []string // the process environment; GIT_TERMINAL_PROMPT=0 is added
+	// TokenVar names an environment variable that holds a token for a remote on GitHub. Git reads it
+	// through a credential helper whose text names the variable only; the value is never an argument,
+	// and no other host is offered it.
+	TokenVar string
 }
 
 // Author names the author of a commit; used only when git has no identity of its own.
@@ -68,7 +72,27 @@ var (
 	// ErrNoBranch is a store whose HEAD is on no branch, as while a rebase is open.
 	ErrNoBranch    = errors.New("the store is not on a branch")
 	ErrUnreachable = errors.New("the remote could not be reached")
+	// ErrBranchTaken is a branch the remote already has, holding other bytes than the ones to push.
+	ErrBranchTaken = errors.New("the remote already has that branch with other content")
+	// ErrBranchMoved is a branch of the remote that is no longer at the commit it was read at.
+	ErrBranchMoved = errors.New("the remote's branch has changed since it was read")
+	// ErrRemoteMoved is a push the remote refused because its branch holds commits the store does not.
+	ErrRemoteMoved = errors.New("the remote has commits the store does not have")
 )
+
+// allBranches is the refspec that maps every branch of origin to its remote-tracking branch.
+const allBranches = "+refs/heads/*:refs/remotes/origin/*"
+
+// A ref is always named in full. Git looks a short name up among the tags first, so a tag called origin/main
+// or ezc/join-sam, which anybody who can push can make, would stand in for the branch of that name. That makes
+// every read safe from a tag. A push is not: a tag on the remote whose own name is refs/heads/<branch> makes the
+// branch's full name match two refs there, and git refuses the push (a *TagError says so).
+
+// tracking is the full name of the remote-tracking branch for a branch of origin.
+func tracking(branch string) string { return "refs/remotes/origin/" + branch }
+
+// head is the full name of a branch, here or on origin.
+func head(branch string) string { return "refs/heads/" + branch }
 
 // fixed is what every git call has in its environment: no password prompt,
 // messages in one language, and a path that is never a pattern.
@@ -112,21 +136,30 @@ func (g Git) run(dir string, timeout time.Duration, args ...string) ([]byte, err
 }
 
 // reason is the line of git's stderr that says what went wrong: its first
-// "fatal:" or "error:" line, else its first line, with each URL as ShowURL gives it.
+// "fatal:" or "error:" line, else its first line, with each URL as ShowURL gives it
+// and each control character as ?: the line can be one the remote wrote.
 func reason(stderr []byte) string {
+	shown := func(line string) string {
+		return strings.Map(func(c rune) rune {
+			if c < 0x20 || c == 0x7f {
+				return '?'
+			}
+			return c
+		}, urlPattern.ReplaceAllStringFunc(line, ShowURL))
+	}
 	first := ""
 	for _, line := range strings.Split(string(stderr), "\n") {
 		line = strings.TrimSpace(line)
 		for _, prefix := range []string{"fatal: ", "error: "} {
 			if rest, ok := strings.CutPrefix(line, prefix); ok {
-				return urlPattern.ReplaceAllStringFunc(rest, ShowURL)
+				return shown(rest)
 			}
 		}
 		if first == "" {
 			first = line
 		}
 	}
-	return urlPattern.ReplaceAllStringFunc(first, ShowURL)
+	return shown(first)
 }
 
 // urlPattern is a URL as git quotes one in a message, up to the space or quote that ends it.
@@ -168,15 +201,80 @@ func (g Git) IsRepo(dir string) (bool, error) {
 	return err == nil && string(out) == "true\n\n", nil
 }
 
+// MinVersion is the oldest git ezc works with.
+const MinVersion = "2.23"
+
+// Version is the version git reports, such as "2.43.0": the number in `git version 2.43.0 (Apple Git-146)`.
+func (g Git) Version() (string, error) {
+	out, err := g.run("", 0, "version")
+	if err != nil {
+		return "", err
+	}
+	v, ok := ParseVersion(string(out))
+	if !ok {
+		return "", errors.New("git: its version could not be read")
+	}
+	return v, nil
+}
+
+// ParseVersion is the version number in the output of `git version`: the numeric part of 2.43.0.windows.1 is 2.43.0.
+func ParseVersion(out string) (string, bool) {
+	fields := strings.Fields(out)
+	if len(fields) < 3 || fields[0] != "git" || fields[1] != "version" {
+		return "", false
+	}
+	v := versionPattern.FindString(fields[2])
+	return v, v != ""
+}
+
+var versionPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*`)
+
+// TooOld reports whether version, as Version returns it, is older than MinVersion.
+func TooOld(version string) bool {
+	parse := func(v string) (major, minor int) {
+		parts := strings.Split(v, ".")
+		major, _ = strconv.Atoi(parts[0])
+		if len(parts) > 1 {
+			minor, _ = strconv.Atoi(parts[1])
+		}
+		return major, minor
+	}
+	wantMajor, wantMinor := parse(MinVersion)
+	major, minor := parse(version)
+	return major < wantMajor || (major == wantMajor && minor < wantMinor)
+}
+
 // Init makes dir, and the folders above it, a repo on branch main.
 func (g Git) Init(dir string) error {
 	_, err := g.run("", 0, "init", "--initial-branch=main", "--", dir)
 	return err
 }
 
-// Clone clones source into dir.
+// tokenHost is the one host the token is for. Both helper settings are scoped to it, so git asks the
+// helper for no other host, and a remote that is a path or uses ssh never asks at all.
+const tokenHost = "https://github.com"
+
+// remote is args for a git command that can reach a remote: with TokenVar set, the first helper setting
+// drops every inherited credential helper for tokenHost and the second reads the token from the variable.
+// For any other host the inherited helpers stay as they are.
+func (g Git) remote(args ...string) []string {
+	if g.TokenVar == "" {
+		return args
+	}
+	setting := "credential." + tokenHost + ".helper="
+	helper := `!f() { echo username=x-access-token; echo "password=$` + g.TokenVar + `"; }; f`
+	return append([]string{"-c", setting, "-c", setting + helper}, args...)
+}
+
+// Clone clones source into dir, without its tags: ezc uses none.
 func (g Git) Clone(source, dir string) error {
-	_, err := g.run("", 0, "clone", "--", source, dir)
+	_, err := g.run("", 0, g.remote("clone", "--no-tags", "--", source, dir)...)
+	return err
+}
+
+// CloneShallow clones source into dir with only its latest commit.
+func (g Git) CloneShallow(source, dir string) error {
+	_, err := g.run("", 0, g.remote("clone", "--no-tags", "--depth", "1", "--", source, dir)...)
 	return err
 }
 
@@ -260,13 +358,14 @@ func (g Git) hasIdentity(dir string) bool {
 }
 
 // Fetch updates what is known of origin; a store with no origin has nothing
-// to fetch. A timeout or a network failure wraps ErrUnreachable.
+// to fetch. It fetches every branch (a shallow clone tracks only one) and drops
+// remote-tracking branches the remote no longer has. It fetches no tag. A timeout or a network failure wraps ErrUnreachable.
 func (g Git) Fetch(dir string, timeout time.Duration) error {
 	remote, err := g.Remote(dir)
 	if err != nil || remote == "" {
 		return err
 	}
-	_, err = g.run(dir, timeout, "fetch", "--quiet", "origin")
+	_, err = g.run(dir, timeout, g.remote("fetch", "--quiet", "--prune", "--no-tags", "origin", allBranches)...)
 	if err != nil && !errors.Is(err, ErrNotInstalled) {
 		return fmt.Errorf("%w: %v", ErrUnreachable, err)
 	}
@@ -298,7 +397,7 @@ func (g Git) Status(dir string) (Status, error) {
 		return st, err
 	}
 
-	ref := "refs/remotes/origin/" + st.Branch
+	ref := tracking(st.Branch)
 	out, err = g.run(dir, 0, "for-each-ref", "--format=%(refname)", ref)
 	if err != nil {
 		return Status{}, err
@@ -348,7 +447,8 @@ func (g Git) count(dir string, n int, args ...string) ([]int, error) {
 }
 
 // Push publishes the branch, creating it on the remote and setting the
-// upstream when needed. pushed is the number of commits sent.
+// upstream when needed. pushed is the number of commits sent. A push the remote
+// refuses because its branch has moved on wraps ErrRemoteMoved.
 func (g Git) Push(dir string) (int, error) {
 	st, err := g.Status(dir)
 	if err != nil {
@@ -360,8 +460,42 @@ func (g Git) Push(dir string) (int, error) {
 	if st.Ahead == 0 {
 		return 0, nil
 	}
-	if _, err := g.run(dir, 0, "push", "--quiet", "--set-upstream", "origin", st.Branch); err != nil {
+	if err := g.push(dir, st.Branch, 0, "--set-upstream", "origin", head(st.Branch)+":"+head(st.Branch)); err != nil {
+		var tag *TagError
+		if !errors.As(err, &tag) && g.moved(dir, st.Branch) {
+			return 0, fmt.Errorf("git: %w", ErrRemoteMoved)
+		}
 		return 0, err
 	}
 	return st.Ahead, nil
+}
+
+// moved reports whether origin's branch is at a commit the store's last commit does not come after, asked of
+// origin now. A remote that cannot be asked has not been seen to move.
+func (g Git) moved(dir, branch string) bool {
+	now, err := g.onRemote(dir, branch, 0)
+	if err != nil || now == "" {
+		return false
+	}
+	// A commit the store has never fetched is not an ancestor of anything here.
+	_, err = g.run(dir, 0, "merge-base", "--is-ancestor", now, "HEAD")
+	return err != nil
+}
+
+// Head is the commit the store is at.
+func (g Git) Head(dir string) (string, error) {
+	return g.revParse(dir, "HEAD")
+}
+
+// Uncommit takes back the commit made on top of parent while the store's branch is still at it: the branch
+// returns to parent, and the index and the work tree are left as they are. The files the commit changed are
+// then for Restore to put back, and no other file is touched. A branch that is elsewhere by now is left alone.
+func (g Git) Uncommit(dir, parent, made string) error {
+	out, err := g.run(dir, 0, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		return fmt.Errorf("git: %w", ErrNoBranch)
+	}
+	// The branch by its full name, and the commit it must be at for git to move it.
+	_, err = g.run(dir, 0, "update-ref", "-m", "ezc: take back a commit that was not pushed", strings.TrimSpace(string(out)), parent, made)
+	return err
 }

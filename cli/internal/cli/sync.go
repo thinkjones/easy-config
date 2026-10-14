@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -22,8 +23,6 @@ const (
 	syncMaxAge = 10 * time.Minute
 	// syncTimeout is how long a command waits for that fetch.
 	syncTimeout = 3 * time.Second
-
-	requestsDir = "requests"
 )
 
 // storeSync is what a command learns about the store before it uses it.
@@ -34,12 +33,27 @@ type storeSync struct {
 	Err      error     // why Status could not be read; the store's state is then not known
 	Fetched  time.Time // the last fetch that worked; zero when never
 	Offline  bool      // a fetch was tried just now and failed
-	Requests []string  // names in the store's requests folder, sorted
+	Requests []string  // names of the pending access requests: on a branch of origin or in the store's requests folder, sorted
+	Due      int       // how many entries rotation-due.yaml holds
 }
 
-// storeGit is git as this machine runs it.
+// storeGit is git as this machine runs it, reading the remote with the token the environment holds, when it holds one.
 func storeGit(sys System) gitstore.Git {
-	return gitstore.Git{Run: sys.Exec, Environ: sys.Environ()}
+	return gitstore.Git{Run: sys.Exec, Environ: sys.Environ(), TokenVar: tokenVar(sys)}
+}
+
+// tokenVar names the variable that holds a token for the store's remote, "" when there is none: the store's own,
+// else, in a CI run only (the key is in the environment as text), GitHub's. A developer who has GH_TOKEN set
+// for other tools keeps git's own credentials. It is the one place that decides. Only the name goes to git,
+// which reads the value from its environment.
+func tokenVar(sys System) string {
+	if sys.Getenv(storeTokenSecret) != "" {
+		return storeTokenSecret
+	}
+	if sys.Getenv(botSecret) != "" && sys.Getenv("GH_TOKEN") != "" {
+		return "GH_TOKEN"
+	}
+	return ""
 }
 
 // loadConfig is the machine's config; the zero Config when there is none.
@@ -70,7 +84,8 @@ func syncStore(sys System, maxAge, timeout time.Duration) storeSync {
 	}
 	state := readState(p.State())
 	s.Fetched = stateTime(state, "fetched")
-	if remote, err := g.Remote(dir); err == nil && remote != "" {
+	remote, err := g.Remote(dir)
+	if err == nil && remote != "" {
 		now := sys.Now()
 		// An attempt dated after now is a clock that moved; it says nothing.
 		if age := now.Sub(stateTime(state, "attempted")); age < 0 || age >= maxAge {
@@ -85,25 +100,139 @@ func syncStore(sys System, maxAge, timeout time.Duration) storeSync {
 		}
 	}
 	s.Status, s.Err = g.Status(dir)
-	s.Requests = requests(p.StoreEzc())
+	s.Requests = requests(sys, dir, err == nil && remote != "")
+	s.Due = len(dueEntries(p.StoreEzc()))
 	return s
 }
 
-// requests are the names of the access requests in a store's .ezc folder: its requests/*.yaml, sorted.
-// Whoever can push to the store names those files, so a name that could not be a recipient's is left out.
-func requests(storeEzc string) []string {
-	entries, err := os.ReadDir(filepath.Join(storeEzc, requestsDir))
+// dueEntries is rotation-due.yaml in a store's .ezc folder; an unreadable file holds none, which is for the commands that read it to say.
+func dueEntries(storeEzc string) recipients.Due {
+	due, err := recipients.LoadDue(storeEzc)
 	if err != nil {
 		return nil
 	}
-	var names []string
-	for _, e := range entries {
-		if name, ok := strings.CutSuffix(e.Name(), ".yaml"); ok && recipients.ValidName(name) && !e.IsDir() {
-			names = append(names, name)
+	return due
+}
+
+// requestNames are the names somebody asks for access to the store in storeDir under: those of the request branches
+// of origin as of the last fetch (asked of git only when remote is true: it is the one git call), and those of the
+// files in the store's requests folder. Whoever can push to the store names both, and the names go to the terminal,
+// so a name that could not be a recipient's is left out and only counted, in hidden. A failure is no names.
+func requestNames(sys System, storeDir string, remote bool) (branches, files []string, hidden int) {
+	if remote {
+		refs, _ := storeGit(sys).RemoteBranches(storeDir, requestBranch)
+		for _, ref := range refs {
+			if name := strings.TrimPrefix(ref, requestBranch); recipients.ValidName(name) {
+				branches = append(branches, name)
+			} else {
+				hidden++
+			}
 		}
 	}
+	entries, _ := os.ReadDir(filepath.Join(storeDir, ezcDir, recipients.RequestsDir))
+	for _, e := range entries {
+		name, ok := strings.CutSuffix(e.Name(), ".yaml")
+		switch {
+		case !ok || e.IsDir():
+		case recipients.ValidName(name):
+			files = append(files, name)
+		default:
+			hidden++
+		}
+	}
+	return branches, files, hidden
+}
+
+// requests are the names of the pending access requests of the store in storeDir, sorted: pendingRequests' names,
+// without reading a request.
+func requests(sys System, storeDir string, remote bool) []string {
+	branches, files, _ := requestNames(sys, storeDir, remote)
+	return sortedUnion(branches, files)
+}
+
+// sortedUnion is every name of a and b once, sorted.
+func sortedUnion(a, b []string) []string {
+	names := slices.Concat(a, b)
 	slices.Sort(names)
-	return names
+	return slices.Compact(names)
+}
+
+// pending is one request for access to the store, as whoever filed it wrote it: nothing in it is trusted.
+type pending struct {
+	Name   string
+	Req    recipients.Request
+	Author string // the Git author of the commit that filed it; "" when git knows none
+	Branch bool   // on a request branch of origin
+	Commit string // the commit that branch was at when the request was read; "" when it could not be told
+	File   bool   // in the store's working tree
+	Err    error  // why it is not a valid request
+}
+
+// pendingRequests are the requests for access to the store in storeDir: the union, by name and sorted, of the request
+// branches of origin as of the last fetch and of the files in the working tree's requests folder. Of a branch only
+// its request file is read, at the commit the branch is at when this is called (pending.Commit), and origin is asked
+// only when remote is true: a store that is no git repo, or has no remote, has no branch. A name that fails ValidName is left out entirely; a request that cannot be read or fails
+// ParseRequest, or that its branch and the working tree hold differently, is kept with Err. hidden is how many
+// were left out for their names.
+func pendingRequests(sys System, storeDir string, remote bool) (all []pending, hidden int) {
+	g, valid := storeGit(sys), backendFor(sys).ValidRecipient
+	branches, files, hidden := requestNames(sys, storeDir, remote)
+	// The author of a request that is only in the working tree is asked of origin's copy of the store's branch.
+	branch := ""
+	for _, name := range sortedUnion(branches, files) {
+		q := pending{Name: name, Branch: slices.Contains(branches, name), File: slices.Contains(files, name)}
+		rel := ezcDir + "/" + recipients.RequestPath(name)
+		if q.Branch {
+			// Everything is read at one commit, which is also the one a later delete of the branch is held to.
+			var err error
+			var data []byte
+			if q.Commit, err = g.RemoteCommit(storeDir, requestBranch+name); err == nil {
+				data, err = g.ShowAt(storeDir, q.Commit, rel)
+			}
+			switch {
+			case errors.Is(err, fs.ErrNotExist):
+				q.Err = errors.New("its branch holds no request")
+			case err != nil:
+				q.Err = errors.New("it cannot be read from its branch")
+			default:
+				q.Req, q.Err = recipients.ParseRequest(name, data, valid)
+				q.Author, _ = g.LastAuthorAt(storeDir, q.Commit, rel)
+			}
+		}
+		if q.File {
+			path := filepath.Join(storeDir, filepath.FromSlash(rel))
+			var req recipients.Request
+			var err error
+			// Only a plain file is read: the store's history can hold a link to anything.
+			if info, lerr := os.Lstat(path); lerr != nil || !info.Mode().IsRegular() {
+				err = errors.New("it is not a plain file")
+			} else if data, rerr := os.ReadFile(path); rerr != nil {
+				err = errors.New("it cannot be read")
+			} else {
+				req, err = recipients.ParseRequest(name, data, valid)
+			}
+			switch {
+			case !q.Branch:
+				q.Req, q.Err = req, err
+				if branch == "" && remote {
+					st, _ := g.Status(storeDir)
+					branch = st.Branch
+				}
+				if branch != "" {
+					q.Author, _ = g.LastAuthor(storeDir, branch, rel)
+				}
+			case q.Err == nil && err != nil:
+				q.Err = err
+			case q.Err == nil && req != q.Req:
+				q.Err = errors.New("its branch and the store hold different requests")
+			}
+		}
+		if q.Err != nil {
+			q.Req = recipients.Request{}
+		}
+		all = append(all, q)
+	}
+	return all, hidden
 }
 
 // readState is state.json as its keys; a missing or unreadable file is no keys.
@@ -200,7 +329,7 @@ func indicate(sys System, s storeSync) {
 		line = "uncommitted changes in " + s.Dir + alsoStands(st)
 	}
 	if n := len(s.Requests); n > 0 {
-		pending := count(n, "access request") + " pending: " + strings.Join(s.Requests, ", ")
+		pending := count(n, "access request") + " pending: " + someNames(s.Requests)
 		if line == "" {
 			line, colour = pending, amber
 		} else {
@@ -217,6 +346,16 @@ func indicate(sys System, s storeSync) {
 		}
 		say(amber, "store: origin could not be reached; "+checked)
 	}
+}
+
+// someNames is the first names of a list and how many more there are: whoever can push to the store can file any
+// number of requests, and the line is printed by every command.
+func someNames(names []string) string {
+	const shown = 5
+	if len(names) <= shown {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(names[:shown], ", "), len(names)-shown)
 }
 
 // alsoStands is what follows "uncommitted changes" when the store is also ahead, behind or diverged; "" when it is level.
@@ -266,15 +405,21 @@ func guardStoreWrite(sys System) (storeSync, error) {
 	if s.Git && s.Err != nil {
 		return s, cannotTell(s.Dir, s.Err)
 	}
-	const pull = "Run `ezc store pull` first: a change made now could not be merged."
-	// The counts, not the state: uncommitted changes do not make a store less behind.
-	switch st := s.Status; {
+	return s, behind(s.Status)
+}
+
+// behind is the refusal of whatever cannot be done while the remote has commits the store lacks: nil when it has
+// none. It is the one sentence for it, judged from the counts and not the state, because uncommitted changes do
+// not make a store less behind.
+func behind(st gitstore.Status) error {
+	const pull = "Run `ezc store pull`, then run this again."
+	switch {
 	case st.Behind > 0 && st.Ahead > 0:
-		return s, fmt.Errorf("the store has diverged from origin. %s", pull)
+		return fmt.Errorf("the store has diverged from origin (%d ahead, %d behind). %s", st.Ahead, st.Behind, pull)
 	case st.Behind > 0:
-		return s, fmt.Errorf("the store is %s behind origin. %s", count(st.Behind, "commit"), pull)
+		return fmt.Errorf("the store is %s behind origin. %s", count(st.Behind, "commit"), pull)
 	}
-	return s, nil
+	return nil
 }
 
 // guardStoreFiles is an error when one of the named files of the store's .ezc (base names) has uncommitted changes.

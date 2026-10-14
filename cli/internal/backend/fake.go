@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -17,17 +18,22 @@ const FakePolicy = ".fakepolicy"
 const (
 	fakePrefix = "FAKE["
 	fakeSuffix = "]"
+
+	// fakeRecipients opens a fake file: the public keys it is encrypted for, sorted and comma separated.
+	fakeRecipients = "# recipients: "
 )
 
 // Fake is a Backend that needs no tool. It keeps each file on disk in a form that is not plaintext: one
 // `NAME: FAKE[<base64 of the value>]` line per name, in insertion order. A line `NAME: plain` is a name
 // whose value is not encrypted: Inspect reports it, and everything that reads the file refuses the whole
-// file, as a tool that authenticates the file does once a line has been added by hand.
+// file, as a tool that authenticates the file does once a line has been added by hand. A first line
+// `# recipients: k1,k2` says whom the file is encrypted for; a file without it has no recipients.
 type Fake struct {
 	Locked     bool                      // Decrypt, Set, Unset (of any name but a file's last) and Edit fail with ErrNoKey
 	Missing    bool                      // Check fails with ErrNoTool
 	EditFunc   func(pairs []Pair) []Pair // what Edit does; nil leaves the file unchanged
 	LastEditor string                    // the editor the last Edit was given
+	RewrapFail string                    // Rewrap of a file with this base name fails
 }
 
 // fakeLine is one parsed line of a fake file; enc is false for a value stored without FAKE[ ].
@@ -94,8 +100,15 @@ func (f *Fake) Set(path, name, value string) error {
 		return fmt.Errorf("%s: %w", path, ErrNoKey)
 	}
 	var pairs []Pair
+	recipients, err := f.policyRecipients(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
 	if _, statErr := os.Stat(path); statErr == nil {
 		if pairs, err = f.Decrypt(path); err != nil {
+			return err
+		}
+		if recipients, err = fakeFileRecipients(path); err != nil {
 			return err
 		}
 	}
@@ -108,7 +121,7 @@ func (f *Fake) Set(path, name, value string) error {
 	if !replaced {
 		pairs = append(pairs, Pair{Name: name, Value: value})
 	}
-	return writeFake(path, pairs)
+	return writeFake(path, recipients, pairs)
 }
 
 func (f *Fake) Unset(path, name string) error {
@@ -118,7 +131,7 @@ func (f *Fake) Unset(path, name string) error {
 	}
 	// The last name goes with its file, which needs no key.
 	if len(lines) == 1 && lines[0].name == name {
-		return writeFake(path, nil)
+		return writeFake(path, nil, nil)
 	}
 	if f.Locked {
 		return fmt.Errorf("%s: %w", path, ErrNoKey)
@@ -136,7 +149,11 @@ func (f *Fake) Unset(path, name string) error {
 	if len(kept) == len(pairs) {
 		return fmt.Errorf("%s: %s: %w", path, name, ErrNotSet)
 	}
-	return writeFake(path, kept)
+	recipients, err := fakeFileRecipients(path)
+	if err != nil {
+		return err
+	}
+	return writeFake(path, recipients, kept)
 }
 
 func (f *Fake) Edit(path, editor string) error {
@@ -152,15 +169,22 @@ func (f *Fake) Edit(path, editor string) error {
 		return fmt.Errorf("%s: %w", path, ErrNoKey)
 	}
 	var pairs []Pair
+	recipients, err := f.policyRecipients(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
 	if _, statErr := os.Stat(path); statErr == nil {
 		if pairs, err = f.Decrypt(path); err != nil {
+			return err
+		}
+		if recipients, err = fakeFileRecipients(path); err != nil {
 			return err
 		}
 	}
 	if f.EditFunc == nil {
 		return nil
 	}
-	return writeFake(path, f.EditFunc(pairs))
+	return writeFake(path, recipients, f.EditFunc(pairs))
 }
 
 // readFake parses the file; a file that does not exist is ErrNotSet.
@@ -174,7 +198,7 @@ func readFake(path string) ([]fakeLine, error) {
 	}
 	var lines []fakeLine
 	for _, line := range strings.Split(string(data), "\n") {
-		if line == "" {
+		if line == "" || strings.HasPrefix(line, fakeRecipients) {
 			continue
 		}
 		name, raw, ok := strings.Cut(line, ": ")
@@ -203,7 +227,7 @@ func decodeFake(path string, lines []fakeLine) ([]Pair, error) {
 }
 
 // writeFake replaces the file through a temporary file in the same folder and a rename; no pairs deletes it.
-func writeFake(path string, pairs []Pair) error {
+func writeFake(path string, recipients []string, pairs []Pair) error {
 	if len(pairs) == 0 {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("%s: %w", path, err)
@@ -211,6 +235,7 @@ func writeFake(path string, pairs []Pair) error {
 		return nil
 	}
 	var sb strings.Builder
+	sb.WriteString(fakeRecipients + strings.Join(recipients, ",") + "\n")
 	for _, p := range pairs {
 		sb.WriteString(p.Name + ": " + fakePrefix + base64.StdEncoding.EncodeToString([]byte(p.Value)) + fakeSuffix + "\n")
 	}
@@ -251,12 +276,120 @@ func (f *Fake) PublicKey(keyFile string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s: no key file: %w", keyFile, ErrNoKey)
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if h, ok := strings.CutPrefix(strings.TrimSpace(line), fakePrivatePrefix); ok {
-			return fakePublicPrefix + h, nil
-		}
+	if public, ok := fakePublicOf(data); ok {
+		return public, nil
 	}
 	return "", fmt.Errorf("%s: holds no key: %w", keyFile, ErrNoKey)
+}
+
+// fakePublicOf derives the public key from the first private key in text.
+func fakePublicOf(text []byte) (string, bool) {
+	for _, line := range strings.Split(string(text), "\n") {
+		if h, ok := strings.CutPrefix(strings.TrimSpace(line), fakePrivatePrefix); ok {
+			return fakePublicPrefix + h, true
+		}
+	}
+	return "", false
+}
+
+// policyRecipients is the sorted, de-duplicated keys of the policy in dir; none when the policy is empty.
+func (f *Fake) policyRecipients(dir string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, FakePolicy))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", dir, err)
+	}
+	var keys []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			keys = append(keys, line)
+		}
+	}
+	slices.Sort(keys)
+	return slices.Compact(keys), nil
+}
+
+// fakeFileRecipients reads the recipients line of a file that exists.
+func fakeFileRecipients(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("%s: %w", path, ErrNotSet)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	first, _, _ := strings.Cut(string(data), "\n")
+	list, ok := strings.CutPrefix(first, fakeRecipients)
+	if !ok || list == "" {
+		return []string{}, nil
+	}
+	keys := strings.Split(list, ",")
+	slices.Sort(keys)
+	return keys, nil
+}
+
+func (f *Fake) Recipients(path string) ([]string, error) { return fakeFileRecipients(path) }
+
+func (f *Fake) PolicyRecipients(path string) ([]string, error) {
+	if ok, err := f.HasPolicy(filepath.Dir(path)); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, fmt.Errorf("%s: %w", path, ErrNoPolicy)
+	}
+	return f.policyRecipients(filepath.Dir(path))
+}
+
+func (f *Fake) Rewrap(path string) error {
+	if _, err := fakeFileRecipients(path); err != nil {
+		return err
+	}
+	ok, err := f.HasPolicy(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("%s: %w", path, ErrNoPolicy)
+	}
+	if f.Locked {
+		return fmt.Errorf("%s: %w", path, ErrNoKey)
+	}
+	if f.RewrapFail != "" && f.RewrapFail == filepath.Base(path) {
+		return fmt.Errorf("%s: could not re-wrap this file", path)
+	}
+	pairs, err := f.Decrypt(path)
+	if err != nil {
+		return err
+	}
+	recipients, err := f.policyRecipients(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	return writeFake(path, recipients, pairs)
+}
+
+func (f *Fake) CanDecrypt(path string, private []byte) error {
+	recipients, err := fakeFileRecipients(path)
+	if err != nil {
+		return err
+	}
+	if public, ok := fakePublicOf(private); ok && slices.Contains(recipients, public) {
+		return nil
+	}
+	return fmt.Errorf("%s: that key is not one of its recipients: %w", path, ErrNoKey)
+}
+
+func (f *Fake) ValidKey(private []byte) error {
+	if public, ok := fakePublicOf(private); !ok || f.ValidRecipient(public) != nil {
+		return errors.New("not a private key")
+	}
+	return nil
+}
+
+func (f *Fake) ValidRecipient(key string) error {
+	h, ok := strings.CutPrefix(key, fakePublicPrefix)
+	if _, err := hex.DecodeString(h); !ok || h == "" || err != nil {
+		return errors.New("not a valid public key")
+	}
+	return nil
 }
 
 func (f *Fake) WritePolicy(dir string, recipients []string) error {

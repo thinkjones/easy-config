@@ -525,10 +525,26 @@ func TestAccessItem(t *testing.T) {
 		t.Errorf("recipient: %+v", it)
 	}
 	o.Recipient = ""
-	want := Item{Broken, "access", "your key is not one of this store's recipients. Give your public key to someone who has access.", ""}
+	want := Item{Broken, "access", "your key is not one of this store's recipients.", "Run ezc join --print."}
+	if it := item(t, Collect(o), "store", "access"); it != want {
+		t.Errorf("not a recipient, no remote: %+v", it)
+	}
+	o.Remote = "github.com/acme/store"
+	want.Fix = "Run ezc join github.com/acme/store."
 	if it := item(t, Collect(o), "store", "access"); it != want {
 		t.Errorf("not a recipient: %+v", it)
 	}
+	o.Request, o.RequestName = "not found", ""
+	if it := item(t, Collect(o), "store", "access"); it != want {
+		t.Errorf("no request: %+v", it)
+	}
+	o.Request, o.RequestName = "pending", "gene-laptop"
+	want = Item{Broken, "access", "this machine's key cannot read the store yet; request gene-laptop is waiting for approval",
+		"Ask someone who can read the store to run ezc user approve gene-laptop."}
+	if it := item(t, Collect(o), "store", "access"); it != want {
+		t.Errorf("pending: %+v", it)
+	}
+	o.Request, o.RequestName = "", ""
 	if !Collect(o).Broken() {
 		t.Error("not a recipient must be broken")
 	}
@@ -546,7 +562,8 @@ func TestAccessItem(t *testing.T) {
 		t.Error("access shown with no registry and no policy")
 	}
 	put(t, filepath.Join(o.StoreDir, backend.FakePolicy), "age1x\n")
-	want = Item{Warn, "access", "the store has an encryption policy but no recipients.yaml, so ezc cannot say who has access.", ""}
+	want = Item{Warn, "access", "the store has an encryption policy but no recipients.yaml, so ezc cannot say who has access.",
+		`Write recipients.yaml (README, "Access"), then run ezc store rewrap.`}
 	if it := item(t, Collect(o), "store", "access"); it != want {
 		t.Errorf("policy only: %+v", it)
 	}
@@ -558,7 +575,7 @@ func TestRequestsItem(t *testing.T) {
 		t.Error("requests shown with none")
 	}
 	o.Requests = []string{"ana"}
-	want := Item{Warn, "requests", "1 access request pending: ana", ""}
+	want := Item{Warn, "requests", "1 access request pending: ana", "Run ezc user requests."}
 	if it := item(t, Collect(o), "store", "requests"); it != want {
 		t.Errorf("%+v", it)
 	}
@@ -568,5 +585,82 @@ func TestRequestsItem(t *testing.T) {
 	}
 	if Collect(o).Broken() {
 		t.Error("requests alone must not fail")
+	}
+}
+
+func TestRequestsItemCapsNames(t *testing.T) {
+	o := healthy(t)
+	o.Requests = []string{"a", "b", "c", "d", "e", "f", "g"}
+	want := "7 access requests pending: a, b, c, d, e and 2 more"
+	if it := item(t, Collect(o), "store", "requests"); it.Detail != want {
+		t.Errorf("%q", it.Detail)
+	}
+}
+
+func TestRecipientsItem(t *testing.T) {
+	o := healthy(t)
+	if slices.Contains(labels(Collect(o), "store"), "recipients") {
+		t.Error("recipients shown with no registry")
+	}
+	o.HasRegistry, o.Recipients = true, 3
+	if it := item(t, Collect(o), "store", "recipients"); it != (Item{OK, "recipients", "every file is encrypted for the 3 recipients", ""}) {
+		t.Errorf("agree: %+v", it)
+	}
+	o.Differ = []string{"common.enc.yaml", "prod.enc.yaml"}
+	want := Item{Broken, "recipients", "2 files are not encrypted for the registry: common.enc.yaml, prod.enc.yaml", "Run ezc user list and check who it names, then ezc store rewrap."}
+	if it := item(t, Collect(o), "store", "recipients"); it != want {
+		t.Errorf("differ: %+v", it)
+	}
+	if !Collect(o).Broken() {
+		t.Error("a differing file must be broken")
+	}
+	o.Differ = []string{"bad\x1b[31mname.enc.yaml"}
+	if it := item(t, Collect(o), "store", "recipients"); strings.Contains(it.Detail, "\x1b") {
+		t.Errorf("name not made safe: %q", it.Detail)
+	}
+	o.Differ, o.DifferErr = nil, "common.enc.yaml: cannot read this file"
+	if it := item(t, Collect(o), "store", "recipients"); it.State != Broken || it.Detail != o.DifferErr || it.Fix == "" {
+		t.Errorf("error: %+v", it)
+	}
+}
+
+func TestRotationItem(t *testing.T) {
+	o := healthy(t)
+	if slices.Contains(labels(Collect(o), "store"), "rotation") {
+		t.Error("rotation shown with nothing due")
+	}
+	o.Due = 2
+	want := Item{Warn, "rotation", "2 secrets were readable by a removed key", "ezc store status --due lists them; give each a new value with ezc set -g NAME, and --env for an environment's file."}
+	if it := item(t, Collect(o), "store", "rotation"); it != want {
+		t.Errorf("%+v", it)
+	}
+	if Collect(o).Broken() {
+		t.Error("a due list alone must not fail")
+	}
+	o.Due, o.DueErr = 0, "cannot read rotation-due.yaml"
+	if it := item(t, Collect(o), "store", "rotation"); it != (Item{Broken, "rotation", o.DueErr, ""}) {
+		t.Errorf("unreadable: %+v", it)
+	}
+}
+
+func TestGitItemVersionUnread(t *testing.T) {
+	o := healthy(t)
+	o.GitVersionUnread = true
+	it := item(t, Collect(o), "machine", "git")
+	if it.State != Warn || it.Detail != "installed, but its version could not be read" || Collect(o).Broken() {
+		t.Errorf("%+v", it)
+	}
+}
+
+func TestGitItemVersion(t *testing.T) {
+	o := healthy(t)
+	o.GitVersion = "2.22.1"
+	want := Item{Broken, "git", "git 2.22.1 is too old; ezc needs 2.23 or later.", ""}
+	if it := item(t, Collect(o), "machine", "git"); it != want {
+		t.Errorf("%+v", it)
+	}
+	o.GitVersion = "2.23.0"
+	if it := item(t, Collect(o), "machine", "git"); it.State != OK {
+		t.Errorf("%+v", it)
 	}
 }

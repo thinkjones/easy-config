@@ -1,0 +1,106 @@
+[← README](../README.md)
+
+# Reference
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `ezc version` | Print ezc's version. |
+| `ezc help [command]` | Help for ezc, or for one command. |
+| `ezc setup [--new-local \| --new-github owner/repo \| --store REPO] [--name NAME] [--yes]` | Set the machine up: check the tools, create your key, create or clone the store, write the config. Changes only what is missing; see [Set up](setup.md#set-up). |
+| `ezc setup --ci --store owner/repo` | Set a CI job up to read a store on github.com: clone its latest commit with the token in `EZC_STORE_TOKEN` (or `GH_TOKEN`), check that the key in `EZC_AGE_KEY` reads it and write the config. No key file is made and nothing is asked. See [Bots and CI](ci.md#bots-and-ci). |
+| `ezc join <owner/repo \| URL \| path> [--name NAME] [--kind user\|machine] [--owner USER]` | Ask for access to an existing store from this machine: clone it, create your key when there is none, write the config, and push a request holding your public key on the branch `ezc/join-NAME`, with a pull request when `gh` is installed and the store is on GitHub. Changes nothing on the store's main branch. See [Joining a store](access.md#joining-a-store). |
+| `ezc join --print [--name NAME] [--kind user\|machine] [--owner USER]` | Print the `ezc user add` line for this machine's key, creating the key when there is none. Takes no repo, needs no store and pushes nothing. |
+| `ezc env [ENV] [-m FILE] [--verbose]` | Check an environment against the manifest. Reports on stderr, prints no values, exits 1 on problems. With `-m FILE` the values come from that manifest's folder, not this repo. |
+| `ezc env export [ENV] [--format shell\|json]` | Print the environment's variables on stdout. `shell` is for `eval`; `json` is one object of names to values, for any other tool. Outside a repo it exports the store alone. |
+| `ezc run [ENV] -- <command> [args…]` | Run a command with the environment added to its own. On Unix `ezc` replaces itself with the command, so signals sent to it reach the command and the exit status is the command's. Exits 127 when the command is not found, 126 when it cannot be run. |
+| `ezc list [ENV] [-g]` | List the names an environment holds, with each one's type (from the repo's manifest, else the store's) and the file that supplies it, and the manifest's names that have no value. `EZC_ENV` and `APP_ENV` are listed last with the source `shell`: they name the environment and come from the command line or the shell, not from a file. Never prints a value. `-g` lists the store alone. |
+| `ezc get NAME [ENV] [--reveal]` | Print one value on stdout. A `secret` needs `--reveal`; a name is treated as a secret when the repo's or the store's manifest declares it one, and so is any value read from an encrypted file or built by referencing a secret (`URL: https://u:$TOKEN@host`). |
+| `ezc set NAME [VALUE] [--env E] [-g] [--expand] [--type T] [--desc D] [--optional] [--values a,b] [--min N] [--max N]` | Set a value in `common.yaml` (or `env.E.yaml`), in the repo or with `-g` in the store. A name the manifest does not declare is declared in the same step, as required unless `--optional`: give `--type` and `--desc`. The declaration is written first, then the value; if the value cannot be written the manifest is put back as it was. The value is checked against the declared type and bounds, and stored literally: what you give is what loads, so a `$` is written to the file as `$$` (a literal value cannot start with `~` or `~/`, which is always expanded). With `--expand` the value is written as given, so `$NAME`, `${NAME}`, `$$` and a leading `~` keep their meaning at load; the type check is then skipped for a value holding a `$`, the environment is resolved once, and a reference to a name that is not defined yet puts the file back as it was (when the environment cannot be resolved for another reason, such as a missing key, the value is kept and the reference is not checked). `--expand` does not apply to a secret, which is always stored exactly as given. A secret goes to the encrypted file and is typed at a hidden prompt or piped on stdin, never given as an argument; leave VALUE out of any variable to do the same. A name already in the other file of the pair (plaintext against encrypted) is refused. Prints names and files, never the value. In the store, a secret is written only to a file that is encrypted for exactly the people `recipients.yaml` names; see [Writing to the store](store.md#writing-to-the-store). |
+| `ezc unset NAME [--env E] [-g] [--undeclare]` | Remove a name's value from the plaintext and the encrypted file of the base (`common` or `env.E`), whichever hold it. The declaration stays; `--undeclare` removes it too, and is refused while any other values file in the scope still holds the name. |
+| `ezc edit [--env E] [--secrets] [-g]` | Open `common.yaml` (or `env.E.yaml`), or with `--secrets` the encrypted file of the same name, in `$VISUAL` or `$EDITOR`, in the repo or with `-g` in the store. The editor must wait until you finish editing, so a graphical one needs a flag, for example `export EDITOR="code --wait"`; ezc refuses one that returns at once. The command is split on spaces, including in a path (so an editor under a folder with a space in its name needs a wrapper script on a path without one), and quoting inside `EDITOR` is not supported. A plaintext file that is not valid afterwards is reported, and a file this command created and you left empty is removed. With `--secrets` the file must already exist (create it with `ezc set`), and the result is decrypted again to check it; closing the editor without a change is fine. Needs a terminal. |
+| `ezc store status [--due]` | Fetch from the store's remote, then print where the store is, its remote, how it stands against the remote (in sync, ahead, behind, diverged, uncommitted changes), when the remote was last reached, the pending access requests and, when there are any, how many secrets need a new value (`rotation due: 1 secret`). Exits 0 in every state it can read. `--due` prints those secrets instead, one per line, and nothing else. |
+| `ezc store pull` | Bring the remote's commits into the store, replaying the commits made here on top of them. An encrypted file changed on both sides keeps the remote's version: the names to set again are listed and the command exits 1. It says when those commits changed the names or keys of `recipients.yaml` (`! recipients.yaml changed on the remote: + sam`). It then names every encrypted file that is not encrypted for the people `recipients.yaml` names, and exits 1 when there is one: run `ezc store rewrap` before anything is set in it. Prints names and files, never a value. |
+| `ezc store push` | Send the commits made here to the store's remote. Refused while the store is behind the remote or has diverged from it, holds uncommitted changes, or has no remote, and while an encrypted file is not encrypted for the people `recipients.yaml` names (`ezc store rewrap` fixes that). |
+| `ezc store rewrap [--yes]` | Write the store's encryption policy from `recipients.yaml` and re-wrap every encrypted file for exactly the keys it names, in one commit, then push. The fix when `ezc user list` names a file, once you have checked who the registry names. It prints each name that gains access to a file and each key that loses it, asks `Let <names> read the store? [y/N]` when a name would gain access (`--yes` skips the question, and is needed without a terminal), and records the secrets a key that `recipients.yaml` does not name could read in `rotation-due.yaml`. See [Who can change the registry](access.md#who-can-change-the-registry). |
+| `ezc user list` | List who can read the store, from `recipients.yaml`: name, kind, owner, when added and by whom, with this machine's row marked. Then name every encrypted file whose recipients are not the registry's, and exit 1 when there is one. Needs no key. |
+| `ezc user requests` | Fetch, then list the requests for access that `ezc join` filed: name, kind, owner, the whole public key, the host, the date and the Git author. One that breaks the rules is listed as not valid, and ones whose names cannot be shown are counted on stderr. See [Approving a request](access.md#approving-a-request). |
+| `ezc user approve <name> [--yes]` | Fetch, print the request filed under `name` with its whole public key, ask `Approve <name>? [y/N]` (`--yes` skips the question, and is needed without a terminal), then add that key to `recipients.yaml` and re-wrap every encrypted file, in one commit named `approve <name>`, push, and delete the request's branch. The branch is never merged. |
+| `ezc user deny <name>` | Fetch, then remove a request file that is in the store itself in a commit named `deny <name>`, and delete the request's branch from the remote. Nobody's access changes. |
+| `ezc user remove <name> [--yes]` | Remove a person or one machine from `recipients.yaml` and re-wrap every encrypted file without their key, in one commit named `remove <name>`, then push; then list the secrets they could read, which need new values, as the `ezc set -g` command for each. See [Access](access.md#access). |
+| `ezc user rotate [--compromised] [--yes]` | Give this machine a new key in a new file beside the old one (`keys-20261011.txt`, then `-2`, `-3`… when taken), replace its key in `recipients.yaml` and re-wrap every encrypted file and point `key_file` in `config.toml` at the new file, in one commit named `rotate <name>`, then push. A push that fails takes the whole rotation back: the commit, the new file and `key_file`. The old file is never touched; delete it when you are sure. Takes no name, and refuses when the environment names the key file. `--compromised` also records every secret the old key could read in `rotation-due.yaml` and lists them. |
+| `ezc user add <name> <key> [--kind user\|machine] [--owner USER] [--yes]` | Add a public key to `recipients.yaml`, write the policy from it and re-wrap every encrypted file of the store, in one commit, then push. `--kind machine --owner USER` adds a second key of a user who is already a recipient. Like every change to who can read the store, it is refused when the remote cannot be reached, and taken back when the remote moved before the push. Also like every one of them, when it would let in a name it was not asked about (one that `recipients.yaml` holds and no file is encrypted for yet) it names them and asks `Let them in too? [y/N]`; `--yes` answers in advance and is needed for that without a terminal. `ezc user approve --yes` answers this question too. See [Access](access.md#access). |
+| `ezc bot add <name> --repo owner/repo… [--print-private] [--yes]` | Create a key for a bot, add its public half to `recipients.yaml` and re-wrap every encrypted file, in one commit named `add bot <name>`, then push. Before the commit the private half is saved as the `EZC_AGE_KEY` Actions secret of each `--repo`, through `gh`; `--print-private` prints it on stdout instead, or as well. Refused for a `--repo` that another bot's entry already names: a repo holds one `EZC_AGE_KEY`. See [Bots and CI](ci.md#bots-and-ci). |
+| `ezc bot remove <name> [--yes]` | Remove a bot from `recipients.yaml` and re-wrap every encrypted file without its key, in one commit named `remove bot <name>`, then push; delete `EZC_AGE_KEY` from its repos; then list the secrets it could read, which need new values. |
+| `ezc bot rotate <name> [--print-private] [--compromised] [--yes]` | Replace a bot's key in one commit named `rotate bot <name>` and deliver the new one to its repos, as `ezc bot add` does. `--compromised` also records every secret the old key could read as due for a new value. |
+| `ezc store audit` | Check the store's values files against its manifest: every value declared, every `required` name set in at least one file, secrets in encrypted files and nothing else there, no value still a placeholder or the wrong shape, and no value in an encrypted file left unencrypted. Prints names, files and the fix for each, never a value; exits 1 when there is anything to fix. |
+| `ezc doctor [ENV] [--only machine\|store\|repo]` | Report the health of the machine (ezc, the encryption tool, the key), the store (location, how it stands against its remote, whether your key is a recipient, whether every encrypted file is encrypted for the registry, pending access requests, secrets that need a new value, manifest, audit, policy, unrecognised files) and the repo (manifest, `env.sh` shim version, environments, whether the environment resolves and passes the manifest). Each line is a check (`✓`), a warning (`!`) or a problem (`✗`), with what to do about it. Prints names, counts and paths, never a value; exits 1 when anything is broken, and warnings alone exit 0. Works without a key and outside a repo. |
+| `ezc repo init` | Create `.ezc/` in the working directory with `manifest.yaml`, `env.local.yaml` and the `env.sh` shim. Existing files are kept; an `env.sh` from an older shim is updated, and one written by a newer `ezc` is kept as it is. Prints how to load the environment. |
+| `ezc manifest validate [-m FILE]` | Check that the manifest is well formed; prints the path and counts of required and optional variables. |
+| `ezc manifest schema [-o FILE]` | Print the manifest's JSON Schema, or write it to FILE. |
+| `ezc codegen python [-m FILE] [-o FILE]` | Validate the manifest, then generate a pydantic config module. An invalid manifest generates nothing, and neither does one with a variable named after a Python keyword such as `class` or one whose name starts with `_`. |
+
+## Files
+
+A repo's `.ezc/` folder and the global store use the same layout. Every values file is optional; `ezc env` needs `manifest.yaml`.
+
+| File | What it holds |
+| --- | --- |
+| `manifest.yaml` | Every value declared: type, description, required or optional. |
+| `common.yaml` | Plaintext values for all environments. |
+| `env.<name>.yaml` | Plaintext values for one environment. |
+| `common.enc.yaml` | Encrypted values for all environments. |
+| `env.<name>.enc.yaml` | Encrypted values for one environment. |
+| `.sops.yaml` | The encryption policy: which files are encrypted, and for which keys. Needed before a secret can be stored in the folder. `ezc setup` writes the store's; see [Encryption](#encryption). |
+| `recipients.yaml` | In the store only: who can decrypt it, by name and public key. `ezc setup` writes the first entry, and `ezc user add`, `ezc user approve` and `ezc bot add` the next ones; see [Access](access.md#access). |
+| `rotation-due.yaml` | In the store only: the secrets a removed or compromised key could read, each with who was removed and the date. `ezc user remove`, `ezc bot remove` and `rotate --compromised` write it, and so does a re-wrap that takes a key `recipients.yaml` does not name off a file; `ezc set -g` or `ezc unset -g` of a name clears its entry (`ezc unset -g` also when the name is no longer in its file; `ezc edit -g --secrets` never does), and the file goes with the last one. Names and dates only. |
+| `requests/<name>.yaml` | In the store only, and only when a join request's pull request was merged: the request (name, public key, kind, host, date). A request normally stays on its branch `ezc/join-<name>`; `ezc user approve` or `deny` removes the file. |
+| `env.sh` | The shim mise or direnv sources. Written by `ezc repo init`; do not edit. |
+
+On a machine, ezc's home holds the store (`store/`, a git repo whose values are in its `.ezc/`), `config.toml` (your name in the store, the key file, and the store's remote) and `state.json` (when the store's remote was last reached). `ezc setup` writes the first two.
+
+A values file is one flat YAML mapping of `NAME: value` lines. Values are read as raw text, so no type is inferred: `08540` stays `08540`.
+
+These are rejected with an error naming the file and the key, because each would change or drop a value without saying so:
+
+- a nested block or a list
+- an anchor (`&x`) or an alias (`*x`)
+- a tag (`!x`; quote a value that starts with `!`, `&` or `*`)
+- a key defined twice
+- more than one YAML document
+- a value that contains a NUL byte
+
+A file that is not valid YAML is reported by path and line only, never with the parser's own text.
+
+A variable name, in the manifest and in a values file, is letters, digits and underscores and does not start with a digit (`^[A-Za-z_][A-Za-z0-9_]*$`). `ezc manifest validate` and the JSON Schema apply the same rule.
+
+## Encryption
+
+Secrets need [`sops`](https://github.com/getsops/sops) installed: `brew install sops`, or its release page; `ezc setup` offers to install it. `ezc doctor` says when `sops` is missing or too old, and every command that needs it names it. Storing a secret in a new file works on macOS and Linux only.
+
+A variable the manifest declares `secret` is stored encrypted, in `common.enc.yaml` or `env.<name>.enc.yaml`, and `ezc set` writes it there. A folder needs its encryption policy, `.ezc/.sops.yaml`, before a secret can be stored in it. `ezc setup` writes the store's from `recipients.yaml`, so `ezc set -g` works as soon as setup has run; do not edit that file. A repo that keeps secrets of its own needs the same file in its `.ezc/`: copy the store's. A policy whose `path_regex` matches no file name stores nothing, and `ezc set` says so.
+
+The key file is the `key_file` of `$EZC_HOME/config.toml` when that file names one, else `~/.config/sops/age/keys.txt`; `ezc setup` creates it when it is not there. It is passed to `sops` as `SOPS_AGE_KEY_FILE`; when `SOPS_AGE_KEY` or `SOPS_AGE_KEY_FILE` is already set in the environment, that wins. `EZC_AGE_KEY`, the key's own text as a CI job has it, wins over all of them (see [Bots and CI](ci.md#bots-and-ci)). `ezc setup` follows the same rule: with `SOPS_AGE_KEY_FILE` set it uses that file as your key file (creating it when it is not there) and records it as `key_file`; the path must be absolute. With `SOPS_AGE_KEY` or `EZC_AGE_KEY` set it stops and asks you to unset it, because that key would be used instead of the one setup registers; `ezc setup --ci` is the setup that takes the key from `EZC_AGE_KEY`.
+
+A secret is typed at a hidden prompt or piped on stdin, never passed as an argument, and reaches `sops` on its stdin only. A value cannot move across the secret boundary: `ezc set` refuses a name that is already in the other file of the pair, so remove it with `ezc unset`, which clears both files of the pair, first.
+
+A store's commits should pass `ezc store audit`. Without a key it still checks names and the boundary between plaintext and encrypted files, and says which files' values it could not check. A line added by hand to an encrypted file makes the whole file undecryptable: the audit names the unencrypted value and skips that file's value checks (`! damaged`), and the fix is to restore the file from git and set the value again with `ezc set`, treating the old value as leaked.
+
+## Resolution
+
+Later wins:
+
+```
+store  common.yaml → common.enc.yaml → env.<name>.yaml → env.<name>.enc.yaml
+repo   common.yaml → common.enc.yaml → env.<name>.yaml → env.<name>.enc.yaml
+```
+
+`<name>` matches `^[A-Za-z0-9][A-Za-z0-9_-]*$`, and `enc` is reserved (`env.enc.yaml` is not an environment file). It is the command's argument, else `$EZC_ENV`, else `$APP_ENV`, else `local`. With no name given and no `env.local.yaml`, only the `common` files load, and `ezc` says so on stderr. A missing store is not an error: the repo's files compose alone. A store that is there but is not a folder, or cannot be read, is an error, and so is an `EZC_STORE` that names a folder which does not exist.
+
+- Within a file, order is semantic.
+- A value may reference `$NAME` or `${NAME}` for a name already resolved, earlier in the same file or in an earlier file. `$$` is a literal `$`. `ezc set` writes a value literally, doubling each `$` for you; `ezc set --expand`, or `ezc edit`, writes a reference.
+- Values from an encrypted file are literal: no `~`, `$HOME` or `$NAME` is expanded in them. A later plaintext file can still reference them by name. A command that needs an encrypted file's key stops with an error, and prints nothing, when it has none.
+- A leading `~`, `$HOME` or `${HOME}` is expanded at load.
+- There are no defaults: a missing value fails the check. The check says what is wrong with a value (`not an integer`, `above the maximum of 9`, `not a URL (must start with http:// or https://)`) and never prints the value.
+- Shell export single-quotes every value and never emits `EZC_ENV` or `APP_ENV`.

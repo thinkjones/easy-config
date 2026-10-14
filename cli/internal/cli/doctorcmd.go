@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -84,6 +85,12 @@ func machineOptions(sys System, o *doctor.Options) {
 	}
 	_, err := sys.LookPath("git")
 	o.GitFound = err == nil
+	if o.GitFound && (o.Only == "" || o.Only == "machine") {
+		var err error
+		if o.GitVersion, err = storeGit(sys).Version(); err != nil {
+			o.GitVersionUnread = true
+		}
+	}
 }
 
 // storeOptions fills in what doctor says about the store beyond its files: the sync state, whether this
@@ -92,6 +99,17 @@ func storeOptions(sys System, storeEzc string, o *doctor.Options) {
 	s := syncStore(sys, syncMaxAge, syncTimeout)
 	o.Sync, o.SyncState, o.SyncFix = syncPhrase(sys, s)
 	o.Requests = s.Requests
+	if _, err := recipients.LoadDue(storeEzc); err != nil {
+		o.DueErr = "cannot read " + recipients.DueFile
+	} else {
+		o.Due = s.Due
+	}
+	g := storeGit(sys)
+	remote := ""
+	if s.Git {
+		remote, _ = g.Remote(s.Dir)
+	}
+	o.Remote = gitstore.ShowURL(remote)
 
 	reg, found, err := recipients.Load(storeEzc)
 	o.HasRegistry = found
@@ -102,6 +120,14 @@ func storeOptions(sys System, storeEzc string, o *doctor.Options) {
 	if !found {
 		return
 	}
+	// Who the files are encrypted for is read from the files, so this needs no key.
+	o.Recipients = len(reg.Recipients)
+	// storeDiffers refuses a file whose name cannot be printed before the backend, whose errors name it, sees it.
+	if differ, err := storeDiffers(sys, storeEzc); err != nil {
+		o.DifferErr = firstLineOf(err)
+	} else {
+		o.Differ = differ
+	}
 	file, ok := keyFileInUse(sys)
 	if !ok {
 		return
@@ -111,6 +137,21 @@ func storeOptions(sys System, storeEzc string, o *doctor.Options) {
 		return
 	}
 	o.AccessKnown, o.Recipient = true, reg.NameOf(public)
+	if o.Recipient == "" {
+		o.Request, o.RequestName = ownRequest(sys, filepath.Dir(storeEzc), remote != "", public)
+	}
+}
+
+// ownRequest is the state of this machine's request for access, and its name: pending when a valid request holds
+// this machine's key, not found when none does.
+func ownRequest(sys System, storeDir string, remote bool, public string) (state, name string) {
+	all, _ := pendingRequests(sys, storeDir, remote)
+	for _, q := range all {
+		if q.Err == nil && q.Req.Key == public {
+			return "pending", q.Name
+		}
+	}
+	return "not found", ""
 }
 
 // syncPhrase is the store's state against its remote as one phrase, its state and what to do about it. The phrase is

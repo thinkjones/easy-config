@@ -20,6 +20,8 @@ type Env struct {
 	Dir         string // a folder with the backend's policy in place
 	Lock        func() // after this, the backend has no usable key
 	NoPolicyDir string // a folder with no policy
+	Public      string // the public half of the key the backend decrypts with, and Dir's policy encrypts for
+	Private     []byte // its private text, as NewKey makes it
 }
 
 func decrypted(t *testing.T, b backend.Backend, path string) []backend.Pair {
@@ -371,6 +373,197 @@ func Run(t *testing.T, newEnv func(t *testing.T) Env) {
 		second := policy()
 		if bytes.Equal(first, second) || bytes.Contains(second, []byte(a)) || !bytes.Contains(second, []byte(b)) {
 			t.Error("the second list did not replace the first")
+		}
+	})
+
+	newKey := func(t *testing.T, e Env) (string, []byte) {
+		t.Helper()
+		pub, priv, err := e.Backend.NewKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pub, priv
+	}
+	writePolicy := func(t *testing.T, e Env, keys ...string) {
+		t.Helper()
+		if err := e.Backend.WritePolicy(e.Dir, keys); err != nil {
+			t.Fatalf("WritePolicy: %v", err)
+		}
+	}
+	wantRecipients := func(t *testing.T, e Env, file string, keys ...string) {
+		t.Helper()
+		got, err := e.Backend.Recipients(file)
+		if err != nil {
+			t.Fatalf("Recipients: %v", err)
+		}
+		want := slices.Clone(keys)
+		slices.Sort(want)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("Recipients = %v, want %v", got, want)
+		}
+	}
+
+	run("RecipientsAreSorted", func(t *testing.T, e Env, file string) {
+		second, _ := newKey(t, e)
+		writePolicy(t, e, e.Public, second)
+		set(t, e.Backend, file, "A", "a1")
+		wantRecipients(t, e, file, e.Public, second)
+		e.Lock()
+		wantRecipients(t, e, file, e.Public, second) // needs no key
+	})
+
+	run("PolicyRecipients", func(t *testing.T, e Env, file string) {
+		second, _ := newKey(t, e)
+		writePolicy(t, e, second, e.Public, second)
+		want := []string{e.Public, second}
+		slices.Sort(want)
+		e.Lock() // needs no key
+		got, err := e.Backend.PolicyRecipients(file)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("PolicyRecipients = %v, %v, want %v", got, err, want)
+		}
+	})
+
+	run("PolicyRecipientsAreANewFilesRecipients", func(t *testing.T, e Env, file string) {
+		second, _ := newKey(t, e)
+		writePolicy(t, e, e.Public, second)
+		keys, err := e.Backend.PolicyRecipients(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		set(t, e.Backend, file, "A", "a1")
+		wantRecipients(t, e, file, keys...)
+	})
+
+	run("PolicyRecipientsWithoutAPolicy", func(t *testing.T, e Env, _ string) {
+		if _, err := e.Backend.PolicyRecipients(filepath.Join(e.NoPolicyDir, "common.enc.yaml")); !errors.Is(err, backend.ErrNoPolicy) {
+			t.Fatalf("PolicyRecipients error = %v, want ErrNoPolicy", err)
+		}
+	})
+
+	run("RewrapAddsARecipient", func(t *testing.T, e Env, file string) {
+		second, _ := newKey(t, e)
+		third, _ := newKey(t, e)
+		writePolicy(t, e, e.Public, second)
+		set(t, e.Backend, file, "A", "a1")
+		set(t, e.Backend, file, "B", "b1")
+		writePolicy(t, e, e.Public, second, third)
+		if err := e.Backend.Rewrap(file); err != nil {
+			t.Fatalf("Rewrap: %v", err)
+		}
+		wantRecipients(t, e, file, e.Public, second, third)
+		want := []backend.Pair{{Name: "A", Value: "a1"}, {Name: "B", Value: "b1"}}
+		if got := decrypted(t, e.Backend, file); !reflect.DeepEqual(got, want) {
+			t.Errorf("Decrypt = %v, want %v", got, want)
+		}
+	})
+
+	run("RewrapRemovesARecipient", func(t *testing.T, e Env, file string) {
+		second, secondPrivate := newKey(t, e)
+		writePolicy(t, e, e.Public, second)
+		set(t, e.Backend, file, "A", "a1")
+		if err := e.Backend.CanDecrypt(file, secondPrivate); err != nil {
+			t.Fatalf("CanDecrypt before: %v", err)
+		}
+		writePolicy(t, e, e.Public)
+		if err := e.Backend.Rewrap(file); err != nil {
+			t.Fatalf("Rewrap: %v", err)
+		}
+		if err := e.Backend.CanDecrypt(file, secondPrivate); err == nil {
+			t.Error("the removed key still opens the file")
+		}
+		if err := e.Backend.CanDecrypt(file, e.Private); err != nil {
+			t.Errorf("the kept key does not open the file: %v", err)
+		}
+		wantRecipients(t, e, file, e.Public)
+	})
+
+	run("RewrapNeedsAKey", func(t *testing.T, e Env, file string) {
+		set(t, e.Backend, file, "A", "s3cr3t-value")
+		second, _ := newKey(t, e)
+		writePolicy(t, e, e.Public, second) // a policy that already matches is a no-op that needs no key
+		e.Lock()
+		err := e.Backend.Rewrap(file)
+		if !errors.Is(err, backend.ErrNoKey) {
+			t.Fatalf("Rewrap error = %v, want ErrNoKey", err)
+		}
+		if strings.Contains(err.Error(), "s3cr3t-value") {
+			t.Error("the error holds a value")
+		}
+	})
+
+	run("RewrapNeedsAPolicy", func(t *testing.T, e Env, _ string) {
+		bare := filepath.Join(e.NoPolicyDir, "common.enc.yaml")
+		if err := os.WriteFile(bare, []byte("A: x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Backend.Rewrap(bare); !errors.Is(err, backend.ErrNoPolicy) {
+			t.Fatalf("Rewrap error = %v, want ErrNoPolicy", err)
+		}
+	})
+
+	run("CanDecryptRefusesAStranger", func(t *testing.T, e Env, file string) {
+		set(t, e.Backend, file, "A", "a1")
+		stranger, strangerPrivate := newKey(t, e)
+		err := e.Backend.CanDecrypt(file, strangerPrivate)
+		if err == nil {
+			t.Fatal("a key that was never a recipient opens the file")
+		}
+		if !strings.Contains(err.Error(), file) {
+			t.Errorf("error %q does not name the file", err)
+		}
+		for _, secret := range []string{strings.TrimSpace(string(strangerPrivate)), stranger, strings.TrimSpace(string(e.Private))} {
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("error %q holds a key", err)
+			}
+		}
+		if err := e.Backend.CanDecrypt(file, []byte("not a key\n")); err == nil {
+			t.Error("text that is not a key opens the file")
+		}
+	})
+
+	run("ValidKey", func(t *testing.T, e Env, file string) {
+		_, private := newKey(t, e)
+		for name, text := range map[string][]byte{"a key file": private, "the secret line": backend.SecretLine(private), "this machine's": e.Private} {
+			if err := e.Backend.ValidKey(text); err != nil {
+				t.Errorf("%s: %v", name, err)
+			}
+		}
+		cut := bytes.TrimSpace(backend.SecretLine(private))
+		for name, text := range map[string][]byte{"nothing": nil, "a comment": []byte("# a key\n"), "other text": []byte("not a key\n"), "a public key": []byte(e.Public + "\n"), "half a key": cut[:len(cut)/2]} {
+			err := e.Backend.ValidKey(text)
+			if err == nil {
+				t.Errorf("%s is taken for a key", name)
+			} else if len(text) > 0 && strings.Contains(err.Error(), strings.TrimSpace(string(text))) {
+				t.Errorf("%s: the error holds the text", name)
+			}
+		}
+	})
+
+	run("CanDecryptNeedsNoTool", func(t *testing.T, e Env, file string) {
+		writePolicy(t, e, e.Public)
+		set(t, e.Backend, file, "A", "a1")
+		e.Lock() // the backend's own key is gone; the key given is the only one used
+		if err := e.Backend.CanDecrypt(file, e.Private); err != nil {
+			t.Fatalf("CanDecrypt: %v", err)
+		}
+	})
+
+	run("ValidRecipient", func(t *testing.T, e Env, _ string) {
+		for _, bad := range []string{"", "not a key"} {
+			if err := e.Backend.ValidRecipient(bad); err == nil {
+				t.Errorf("ValidRecipient(%q) succeeded", bad)
+			}
+		}
+		if err := e.Backend.ValidRecipient(e.Public); err != nil {
+			t.Errorf("ValidRecipient of a public key: %v", err)
+		}
+	})
+
+	run("RecipientsOfAMissingFile", func(t *testing.T, e Env, file string) {
+		_, err := e.Backend.Recipients(file)
+		if err == nil || !strings.Contains(err.Error(), file) {
+			t.Errorf("Recipients of a missing file: error = %v, want one naming %s", err, file)
 		}
 	})
 }

@@ -23,7 +23,7 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/proc"
 )
 
-const version = "0.3.0"
+const version = "0.4.0"
 
 func main() {
 	os.Exit(run())
@@ -47,6 +47,7 @@ func run() int {
 		StdinIsTerminal:  func() bool { return term.IsTerminal(int(os.Stdin.Fd())) },
 		StderrIsTerminal: func() bool { return term.IsTerminal(int(os.Stderr.Fd())) },
 		Now:              time.Now,
+		Hostname:         os.Hostname,
 	})
 	var exit *cli.ExitError
 	var usage *cli.UsageError

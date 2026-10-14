@@ -1,7 +1,10 @@
 // Package backend is the encryption backend ezc stores secrets with: the Backend interface, the errors it reports, and a Fake that needs no tool.
 package backend
 
-import "errors"
+import (
+	"bytes"
+	"errors"
+)
 
 // Pair is one name and its value, in the order its file declares it.
 type Pair struct{ Name, Value string }
@@ -32,6 +35,23 @@ type Backend interface {
 	// WritePolicy writes the backend's policy file in dir for these recipients, replacing one that is there.
 	// No recipients is an error.
 	WritePolicy(dir string, recipients []string) error
+	// PolicyRecipients returns the public keys a new file at path would be encrypted for, sorted: what the policy
+	// in its folder says. It needs no key and no tool, and wraps ErrNoPolicy when the policy says nothing for the file.
+	PolicyRecipients(path string) ([]string, error)
+	// Recipients returns the public keys the file is encrypted for, sorted. It needs no key and no tool.
+	Recipients(path string) ([]string, error)
+	// Rewrap re-encrypts the file's data key for the policy in its folder, and gives the file a new data key when
+	// a recipient left it, so that the key that left opens nothing written afterwards. It needs the key and the
+	// tool, and fails with ErrNoKey, ErrNoTool or ErrNoPolicy as Set does.
+	Rewrap(path string) error
+	// CanDecrypt is nil when that private key alone opens the file. It needs no tool; its error names the
+	// file, never the key.
+	CanDecrypt(path string, private []byte) error
+	// ValidKey is nil when private holds a private key, as a key file's text or its one secret line. It needs
+	// no tool; its error never carries the text.
+	ValidKey(private []byte) error
+	// ValidRecipient is nil for a well-formed public key.
+	ValidRecipient(key string) error
 	// ToolHint is one line saying how to install the backend's tool; "" when it needs none.
 	ToolHint(goos string) string
 	// BrewFormula is the Homebrew formula that installs the tool; "" when there is none.
@@ -45,3 +65,15 @@ var (
 	ErrNoKey    = errors.New("cannot decrypt")
 	ErrNotSet   = errors.New("not set")
 )
+
+// SecretLine is the one line of a private key's text that is the key: the first that is not blank and does not start
+// with #, ending in a newline. NewKey returns the text of a key file, which may open with comment lines; a secret
+// store is given this line alone. It is nil when the text holds no such line.
+func SecretLine(private []byte) []byte {
+	for _, line := range bytes.Split(private, []byte("\n")) {
+		if line = bytes.TrimSpace(line); len(line) > 0 && line[0] != '#' {
+			return append(bytes.Clone(line), '\n')
+		}
+	}
+	return nil
+}

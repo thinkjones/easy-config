@@ -16,6 +16,7 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/check"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
+	"github.com/thinkjones/easy-config/cli/internal/recipients"
 	"github.com/thinkjones/easy-config/cli/internal/resolve"
 	"github.com/thinkjones/easy-config/cli/internal/valuefile"
 )
@@ -53,8 +54,8 @@ func scopeFor(sys System, global bool) (scope, error) {
 	return scope{"store", p.StoreEzc(), true}, nil
 }
 
-// guard is guardStoreWrite and guardStoreFiles when the scope is the store; any other scope has nothing to wait for.
-// files are the ones the write may change.
+// guard is guardStoreWrite, guardStoreFiles and guardRecipients when the scope is the store; any other scope has
+// nothing to wait for. files are the ones the write may change.
 func (s scope) guard(sys System, files ...string) (storeSync, error) {
 	if !s.store {
 		return storeSync{}, nil
@@ -63,7 +64,10 @@ func (s scope) guard(sys System, files ...string) (storeSync, error) {
 	if err != nil {
 		return st, err
 	}
-	return st, guardStoreFiles(sys, st, files...)
+	if err := guardStoreFiles(sys, st, files...); err != nil {
+		return st, err
+	}
+	return st, s.guardRecipients(sys, files...)
 }
 
 // commit commits, as "<what> (<files>)", those of names whose file in the scope is not as before says.
@@ -77,6 +81,45 @@ func (s scope) commit(sys System, st storeSync, what string, names []string, bef
 		return nil
 	}
 	return commitStore(sys, st, what+" ("+strings.Join(files, ", ")+")", files...)
+}
+
+// pendingRotation is rotation-due.yaml, and whether it holds an entry for name in file. Only the store has one.
+func (s scope) pendingRotation(file, name string) (recipients.Due, bool, error) {
+	if !s.store {
+		return nil, false, nil
+	}
+	due, err := recipients.LoadDue(s.dir)
+	if err != nil {
+		return nil, false, err
+	}
+	_, found := due[file+"/"+name]
+	return due, found, nil
+}
+
+// clearRotation drops the entry for name in file from due and saves the file (it is removed with its last entry).
+func (s scope) clearRotation(due recipients.Due, file, name string) error {
+	due.Clear(file, name)
+	return due.Save(s.dir)
+}
+
+// putBack restores the files of dir (base names) that differ from before to their bytes then.
+func putBack(dir string, names []string, before []fileState) error {
+	left := changedFiles(dir, names, before)
+	for i, name := range names {
+		if !slices.Contains(left, name) {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		if !before[i].found {
+			os.Remove(path)
+		} else {
+			os.WriteFile(path, before[i].data, 0o644)
+		}
+	}
+	if left = changedFiles(dir, names, before); len(left) > 0 {
+		return errors.New("not put back")
+	}
+	return nil
 }
 
 // valuesBase is "common", or "env.<env>" when an environment is named.
@@ -232,9 +275,25 @@ A name the scope's manifest does not declare is declared by this command, as req
 			if !declared {
 				watched = []string{manifestName, file}
 			}
+			// A secret that is due for a new value stops being due when it gets one, in the same commit.
+			var due recipients.Due
+			cleared := false
+			if v.IsSecret() {
+				if due, cleared, err = sc.pendingRotation(file, name); err != nil {
+					return err
+				}
+				if cleared {
+					watched = append(watched, recipients.DueFile)
+				}
+			}
 			st, err := sc.guard(sys, watched...)
 			if err != nil {
 				return err
+			}
+			if v.IsSecret() {
+				if err := sc.guardNewFile(sys, file); err != nil {
+					return err
+				}
 			}
 			value, err := valueToSet(sys, name, v.IsSecret(), args[1:])
 			if err != nil {
@@ -307,6 +366,15 @@ A name the scope's manifest does not declare is declared by this command, as req
 						return fmt.Errorf("%w\n       %s could not be put back as it was; fix %s there with `ezc edit`", err, path, name)
 					}
 					return undeclare(fmt.Errorf("%w\n       Nothing was changed", err))
+				}
+			}
+			if cleared {
+				if err := sc.clearRotation(due, file, name); err != nil {
+					// The value was written and cannot be committed without its entry cleared: put every file back.
+					if rerr := putBack(sc.dir, watched, before); rerr != nil {
+						return fmt.Errorf("%w\n       %s could not be put back as it was; look at %s", err, sc.dir, strings.Join(changedFiles(sc.dir, watched, before), ", "))
+					}
+					return undeclare(err)
 				}
 			}
 			fmt.Fprintf(sys.Stdout, "set %s in %s\n", name, sc.show(file))
@@ -443,8 +511,10 @@ func newUnsetCmd(sys System) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "unset NAME",
 		Short: "remove a variable's value from the plaintext and encrypted file",
-		Long:  `Remove NAME from the repo's common.yaml and common.enc.yaml, or env.ENV.yaml and env.ENV.enc.yaml with --env, whichever hold it. With -g the store's files are used instead. The declaration in the scope's manifest stays unless --undeclare is given; that is refused while any other values file in the scope still holds NAME.`,
-		Args:  exactArgs(1, "a variable name"),
+		Long: `Remove NAME from the repo's common.yaml and common.enc.yaml, or env.ENV.yaml and env.ENV.enc.yaml with --env, whichever hold it. With -g the store's files are used instead. The declaration in the scope's manifest stays unless --undeclare is given; that is refused while any other values file in the scope still holds NAME.
+
+In the store, removing a secret that is recorded as needing a new value (rotation-due.yaml) clears its entry, also when the secret is no longer in its file.`,
+		Args: exactArgs(1, "a variable name"),
 		RunE: func(_ *cobra.Command, args []string) error {
 			name := args[0]
 			if !manifest.ValidName(name) {
@@ -477,6 +547,14 @@ func newUnsetCmd(sys System) *cobra.Command {
 			if undeclare {
 				watched = append([]string{manifestName}, files...)
 			}
+			encrypted := files[1]
+			due, cleared, err := sc.pendingRotation(encrypted, name)
+			if err != nil {
+				return err
+			}
+			if cleared {
+				watched = append(watched, recipients.DueFile)
+			}
 			st, err := sc.guard(sys, watched...)
 			if err != nil {
 				return err
@@ -503,8 +581,19 @@ func newUnsetCmd(sys System) *cobra.Command {
 					}
 					removed++
 					fmt.Fprintf(sys.Stdout, "unset %s from %s\n", name, sc.show(file))
+					if cleared && file == encrypted {
+						if err := sc.clearRotation(due, file, name); err != nil {
+							return err
+						}
+					}
 				}
-				if removed == 0 && !(undeclare && declared) {
+				if removed == 0 && cleared {
+					// The secret left its file some other way (an editor, or the file went): the entry is all there is to remove.
+					if err := sc.clearRotation(due, encrypted, name); err != nil {
+						return err
+					}
+					fmt.Fprintf(sys.Stdout, "%s is not set in %s or %s; it no longer needs a new value there\n", name, sc.show(files[0]), sc.show(files[1]))
+				} else if removed == 0 && !(undeclare && declared) {
 					return fmt.Errorf("%s is not set in %s or %s.", name, sc.show(files[0]), sc.show(files[1]))
 				}
 				if undeclare && declared {

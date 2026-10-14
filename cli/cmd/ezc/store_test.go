@@ -74,11 +74,10 @@ func (e *e2e) stale() {
 	}
 }
 
-// twoMachines are A, whose new store is published to a bare repo, and B, which has a copy of A's key file and a clone.
-func twoMachines(t *testing.T) (a, b *e2e, bare string) {
+// publishedStore is machine A under root, whose new store holds one secret and is published to a bare repo.
+func publishedStore(t *testing.T, root string) (a *e2e, bare string) {
 	t.Helper()
-	root := t.TempDir()
-	a, b = newMachine(t, root, "a"), newMachine(t, root, "b")
+	a = newMachine(t, root, "a")
 	a.mustRun(a.repo, "", "setup", "--new-local", "--name", "gene", "--yes")
 	a.mustRun(a.repo, e2eSecret, "set", "-g", "API_TOKEN", "--type", "secret", "--desc", "d")
 
@@ -91,6 +90,15 @@ func twoMachines(t *testing.T) (a, b *e2e, bare string) {
 	if out := a.mustRun(a.repo, "", "store", "push"); out != "pushed 2 commits to origin\n" {
 		t.Fatalf("push: %q", out)
 	}
+	return a, bare
+}
+
+// twoMachines are A, whose new store is published to a bare repo, and B, which has a copy of A's key file and a clone.
+func twoMachines(t *testing.T) (a, b *e2e, bare string) {
+	t.Helper()
+	root := t.TempDir()
+	a, bare = publishedStore(t, root)
+	b = newMachine(t, root, "b")
 
 	key, err := os.ReadFile(a.key)
 	if err != nil {
@@ -135,7 +143,7 @@ func wantNoValue(t *testing.T, e *e2e, value string) {
 
 func TestSetupEndToEnd(t *testing.T) {
 	e := newMachine(t, t.TempDir(), "a")
-	if out := e.mustRun(e.repo, "", "version"); out != "ezc 0.3.0\n" {
+	if out := e.mustRun(e.repo, "", "version"); out != "ezc 0.4.0\n" {
 		t.Fatalf("version: %q", out)
 	}
 	out := e.mustRun(e.repo, "", "setup", "--new-local", "--name", "gene", "--yes")
@@ -168,7 +176,7 @@ func TestSetupEndToEnd(t *testing.T) {
 	if out := e.mustRun(e.repo, "", "get", "API_TOKEN", "--reveal"); out != e2eSecret+"\n" {
 		t.Fatalf("get --reveal: %q", out)
 	}
-	if stdout, stderr, code := e.run(e.repo, "", "doctor"); code != 0 || !strings.Contains(stdout, "✓ access    your key is the recipient gene") || strings.Contains(stdout+stderr, e2eSecret) {
+	if stdout, stderr, code := e.run(e.repo, "", "doctor"); code != 0 || !strings.Contains(stdout, "✓ access      your key is the recipient gene") || strings.Contains(stdout+stderr, e2eSecret) {
 		t.Fatalf("doctor: exit %d\n%s%s", code, stdout, stderr)
 	}
 	if got, want := e.git("log", "--format=%s"), "set API_TOKEN (manifest.yaml, common.enc.yaml)\nsetup: create the store"; got != want {
@@ -289,7 +297,7 @@ func TestSetupKeyFileFromEnvironmentEndToEnd(t *testing.T) {
 	if out := e.mustRun(e.repo, "", "get", "API_TOKEN", "--reveal"); out != e2eSecret+"\n" {
 		t.Fatalf("get --reveal: %q", out)
 	}
-	if stdout, stderr, code := e.run(e.repo, "", "doctor", "--only", "store"); code != 0 || !strings.Contains(stdout, "✓ access    your key is the recipient gene") {
+	if stdout, stderr, code := e.run(e.repo, "", "doctor", "--only", "store"); code != 0 || !strings.Contains(stdout, "✓ access      your key is the recipient gene") {
 		t.Fatalf("doctor: exit %d\n%s%s", code, stdout, stderr)
 	}
 }
@@ -312,7 +320,7 @@ func TestTwoMachinesEndToEnd(t *testing.T) {
 	}
 	head := b.git("rev-parse", "HEAD")
 	stdout, stderr, code := b.run(b.repo, "", "set", "-g", "X", "y", "--type", "str", "--desc", "d")
-	if want := behind + "ezc: the store is 1 commit behind origin. Run `ezc store pull` first: a change made now could not be merged.\n"; code != 1 || stdout != "" || stderr != want {
+	if want := behind + "ezc: the store is 1 commit behind origin. Run `ezc store pull`, then run this again.\n"; code != 1 || stdout != "" || stderr != want {
 		t.Fatalf("set while behind: exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
 	}
 	if b.git("rev-parse", "HEAD") != head || b.git("status", "--porcelain") != "" {
@@ -444,5 +452,75 @@ func TestExportStaysQuietEndToEnd(t *testing.T) {
 	}
 	if _, stderr, _ := b.run(b.repo, "", "list", "-g"); stderr != "store: 1 commit behind origin — run ezc store pull\n" {
 		t.Fatalf("list -g after the export: %q", stderr)
+	}
+}
+
+// A CI job has the key as text and a token, both in its environment: it reads the store and keeps nothing.
+func TestSetupCIEndToEnd(t *testing.T) {
+	const token = "tok-5ecr3t-0f-the-job"
+	a, _, bare := twoMachines(t)
+	keyFile, err := os.ReadFile(a.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The secret line alone, as ezc bot add saves it.
+	secretLine := ""
+	for _, line := range strings.Split(string(keyFile), "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			secretLine = line
+			break
+		}
+	}
+	if !strings.HasPrefix(secretLine, "AGE-SECRET-KEY-") {
+		t.Fatal("the key file holds no secret line")
+	}
+
+	ci := newMachine(t, t.TempDir(), "ci")
+	ci.env = append(ci.env, "EZC_AGE_KEY="+secretLine, "EZC_STORE_TOKEN="+token)
+	stdout, stderr, code := ci.run(ci.repo, "", "setup", "--ci", "--store", bare)
+	want := "✓ git\n✓ sops\n+ cloned the store: " + ci.store() + "\n✓ the key: EZC_AGE_KEY\n+ wrote " + filepath.Join(ci.ezcHome, "config.toml") + "\n"
+	if code != 0 || stdout != want || stderr != "" {
+		t.Fatalf("setup --ci: exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+	if stdout, stderr, code := ci.run(ci.repo, "", "get", "API_TOKEN", "--reveal"); code != 0 || stdout != e2eSecret+"\n" || stderr != "" {
+		t.Fatalf("get --reveal: exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+
+	// Nothing the job was given is on its disk, and it has no key file.
+	for _, root := range []string{ci.home, ci.ezcHome} {
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			data, err := os.ReadFile(path)
+			if bytes.Contains(data, []byte(token)) || bytes.Contains(data, []byte(secretLine)) {
+				t.Errorf("%s holds the token or the key", path)
+			}
+			if root == ci.home {
+				t.Errorf("%s was made in the home folder", path)
+			}
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if config := ci.git("config", "--local", "--list"); strings.Contains(config, "credential") {
+		t.Fatalf("the clone's config keeps a credential helper:\n%s", config)
+	}
+
+	// The job cannot change who reads the store: that needs a key file.
+	head := ci.git("rev-parse", "HEAD")
+	stdout, stderr, code = ci.run(ci.repo, "", "user", "add", "sam", "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p")
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "An access change needs a key file, and this machine uses none.") {
+		t.Fatalf("user add: exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+	if ci.git("rev-parse", "HEAD") != head || ci.git("status", "--porcelain") != "" {
+		t.Fatal("the refused user add changed the store")
+	}
+
+	// A second run finds everything there.
+	if out := ci.mustRun(ci.repo, "", "setup", "--ci", "--store", bare); strings.Contains(out, "+ ") {
+		t.Fatalf("setup --ci again: %q", out)
 	}
 }

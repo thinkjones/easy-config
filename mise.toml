@@ -34,3 +34,16 @@ trap 'rm -f "$tmp"' EXIT
 ./cli/bin/ezc manifest schema -o "$tmp" >/dev/null || exit 1
 diff -u cli/schema/v1/manifest.schema.json "$tmp" || { echo "cli/schema/v1/manifest.schema.json is stale — run: mise run schema:build" >&2; exit 1; }
 '''
+
+# GitHub has no config file for a repo's description and topics, so they are kept here: edit, then run this.
+[tasks."github:about"]
+description = "Set the GitHub repo's description and topics from the values in this task"
+run = '''
+gh repo edit thinkjones/easy-config --description "ezc (easy config): one git-backed store for secrets and variables, layered by environment into every repo. Encrypts secrets with SOPS + age, validates each repo's environment against a manifest, and loads it through mise, direnv or ezc run. A Go CLI built with Cobra."
+gh api -X PUT repos/thinkjones/easy-config/topics --silent \
+  -f 'names[]=secrets-management' -f 'names[]=configuration-management' -f 'names[]=environment-variables' \
+  -f 'names[]=dotenv' -f 'names[]=sops' -f 'names[]=age-encryption' -f 'names[]=encryption' \
+  -f 'names[]=gitops' -f 'names[]=developer-tools' -f 'names[]=devops' -f 'names[]=cli' \
+  -f 'names[]=go' -f 'names[]=golang' -f 'names[]=cobra' -f 'names[]=mise' -f 'names[]=direnv' \
+  -f 'names[]=github-actions' -f 'names[]=json-schema' -f 'names[]=pydantic'
+'''

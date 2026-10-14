@@ -19,7 +19,11 @@ func TestFakeContract(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, backend.FakePolicy), nil, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		return backendtest.Env{Backend: f, Dir: dir, NoPolicyDir: bare, Lock: func() { f.Locked = true }}
+		public, private, err := f.NewKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return backendtest.Env{Backend: f, Dir: dir, NoPolicyDir: bare, Lock: func() { f.Locked = true }, Public: public, Private: private}
 	})
 }
 
@@ -140,5 +144,26 @@ func TestFakeRefusesAFileWithAnUnencryptedLine(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(file); string(got) != string(content) {
 		t.Errorf("the file changed: %q", got)
+	}
+}
+
+func TestFakeRewrapFail(t *testing.T) {
+	f := &backend.Fake{}
+	dir := t.TempDir()
+	public, _, _ := f.NewKey()
+	if err := f.WritePolicy(dir, []string{public}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.enc.yaml", "b.enc.yaml"} {
+		if err := f.Set(filepath.Join(dir, name), "X", "v"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.RewrapFail = "b.enc.yaml"
+	if err := f.Rewrap(filepath.Join(dir, "a.enc.yaml")); err != nil {
+		t.Errorf("Rewrap of another file: %v", err)
+	}
+	if err := f.Rewrap(filepath.Join(dir, "b.enc.yaml")); err == nil {
+		t.Error("Rewrap of the failing file succeeded")
 	}
 }

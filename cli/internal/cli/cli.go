@@ -42,6 +42,8 @@ type System struct {
 	StderrIsTerminal func() bool
 	// Now is the clock.
 	Now func() time.Time
+	// Hostname is this machine's name, which a join request carries.
+	Hostname func() (string, error)
 	// Backend overrides the encryption backend; nil means the default backend for this machine. Tests set it.
 	Backend backend.Backend
 }
@@ -128,8 +130,11 @@ Config
 		newUnsetCmd(sys),
 		newEditCmd(sys),
 		newStoreCmd(sys),
+		newUserCmd(sys),
+		newBotCmd(sys),
 		newDoctorCmd(sys),
 		newSetupCmd(sys),
+		newJoinCmd(sys),
 		newRepoCmd(sys),
 	)
 	return root

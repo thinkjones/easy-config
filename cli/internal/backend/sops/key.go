@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
 	"filippo.io/age"
+	"gopkg.in/yaml.v3"
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 )
@@ -57,6 +60,50 @@ func (b *sopsBackend) WritePolicy(dir string, recipients []string) error {
 	}
 	policy := policyHeader + "creation_rules:\n  - path_regex: \\.enc\\.yaml$\n    age: " + strings.Join(recipients, ",") + "\n"
 	return writeFileAtomic(dir+string(os.PathSeparator)+PolicyFile, []byte(policy))
+}
+
+// PolicyRecipients reads the policy as sops does for a new file: the age keys of the first rule whose path_regex
+// matches the file's name. A rule that names any other kind of key is not one this can answer for.
+func (b *sopsBackend) PolicyRecipients(path string) ([]string, error) {
+	if err := b.requirePolicy(path); err != nil {
+		return nil, err
+	}
+	policy := filepath.Join(filepath.Dir(path), PolicyFile)
+	data, err := os.ReadFile(policy)
+	if err != nil {
+		return nil, fmt.Errorf("%s: could not read this file", policy)
+	}
+	var doc struct {
+		Rules []map[string]any `yaml:"creation_rules"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("%s: not valid YAML", policy)
+	}
+	base := filepath.Base(path)
+	for _, rule := range doc.Rules {
+		pattern, _ := rule["path_regex"].(string)
+		if re, err := regexp.Compile(pattern); err != nil || !re.MatchString(base) {
+			continue
+		}
+		list, isText := rule["age"].(string)
+		for field := range rule {
+			if field != "path_regex" && field != "age" {
+				isText = false
+			}
+		}
+		if !isText {
+			return nil, fmt.Errorf("%s: its rule for %s names keys ezc cannot list", policy, base)
+		}
+		keys := []string{}
+		for _, key := range strings.Split(list, ",") {
+			if key = strings.TrimSpace(key); key != "" {
+				keys = append(keys, key)
+			}
+		}
+		slices.Sort(keys)
+		return slices.Compact(keys), nil
+	}
+	return nil, &kindError{fmt.Sprintf("%s has no rule that matches %s.", policy, base), backend.ErrNoPolicy}
 }
 
 func (b *sopsBackend) ToolHint(goos string) string {

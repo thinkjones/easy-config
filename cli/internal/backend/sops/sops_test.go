@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"filippo.io/age"
+	"filippo.io/age/armor"
+	"gopkg.in/yaml.v3"
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/backend/backendtest"
@@ -94,11 +98,22 @@ func realEnv(t *testing.T) backendtest.Env {
 	if err := os.Mkdir(noPolicy, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	b := New(r.opts)
+	public, err := b.PublicKey(r.keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := os.ReadFile(r.keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return backendtest.Env{
-		Backend:     New(r.opts),
+		Backend:     b,
 		Dir:         r.dir,
 		NoPolicyDir: noPolicy,
 		Lock:        func() { writeKey(t, r.keyFile) },
+		Public:      public,
+		Private:     private,
 	}
 }
 
@@ -697,6 +712,7 @@ func TestEveryOperationThatRunsSopsNamesAMissingTool(t *testing.T) {
 		"create":  func() error { return b.Set(fresh, "A", "v") },
 		"Unset":   func() error { return b.Unset(file, "A") },
 		"Edit":    func() error { return b.Edit(file, "nano") },
+		"Rewrap":  func() error { return b.Rewrap(file) },
 	}
 	for name, op := range ops {
 		err := op()
@@ -808,6 +824,36 @@ func TestWritePolicyBytes(t *testing.T) {
 	}
 }
 
+// The policy is read as sops reads it for a new file: the first rule that matches the name, and its age keys only.
+func TestPolicyRecipientsOfAPolicyWrittenByHand(t *testing.T) {
+	for _, c := range []struct {
+		name, policy string
+		want         []string
+		noPolicy     bool
+	}{
+		{"the first matching rule", "creation_rules:\n  - path_regex: ^env\\.prod\\.\n    age: age1prod\n  - path_regex: \\.enc\\.yaml$\n    age: >-\n      age1bbb,\n      age1aaa,age1bbb\n", []string{"age1aaa", "age1bbb"}, false},
+		{"a rule with no path matches every file", "creation_rules:\n  - age: age1all\n", []string{"age1all"}, false},
+		{"no rule matches", "creation_rules:\n  - path_regex: \\.json$\n    age: age1aaa\n", nil, true},
+		{"a key of another kind", "creation_rules:\n  - path_regex: \\.enc\\.yaml$\n    age: age1aaa\n    pgp: FINGERPRINT\n", nil, false},
+		{"key groups", "creation_rules:\n  - path_regex: \\.enc\\.yaml$\n    key_groups:\n      - age: [age1aaa]\n", nil, false},
+		{"not YAML", "creation_rules: [\n", nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, PolicyFile), []byte(c.policy), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := New(Options{}).PolicyRecipients(filepath.Join(dir, "common.enc.yaml"))
+			switch {
+			case c.want != nil && (err != nil || !slices.Equal(got, c.want)):
+				t.Fatalf("got %v, %v, want %v", got, err, c.want)
+			case c.want == nil && (err == nil || errors.Is(err, backend.ErrNoPolicy) != c.noPolicy):
+				t.Fatalf("got %v, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestPublicKeyIsTheFirstIdentity(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "keys.txt")
@@ -915,5 +961,410 @@ func TestSetLeavesOtherStoredValuesAlone(t *testing.T) {
 	}
 	if want := []string{"B"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("ChangedNames = %v, want %v", got, want)
+	}
+}
+
+func TestRewrapRunsUpdatekeysInTheFilesFolder(t *testing.T) {
+	r := &recorder{}
+	b, dir := recorded(t, r, []string{"HOME=/h"})
+	file := filepath.Join(dir, "common.enc.yaml")
+	for _, name := range []string{PolicyFile, "common.enc.yaml"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("A: ENC[x]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Rewrap(file); err != nil {
+		t.Fatalf("Rewrap: %v", err)
+	}
+	if len(r.cmds) != 1 {
+		t.Fatalf("ran %d commands, want 1", len(r.cmds))
+	}
+	c := r.cmds[0]
+	if want := []string{"updatekeys", "--yes", "common.enc.yaml"}; !slices.Equal(c.Args, want) {
+		t.Errorf("Args = %v, want %v", c.Args, want)
+	}
+	if c.Dir != dir {
+		t.Errorf("Dir = %q, want %q", c.Dir, dir)
+	}
+	for _, s := range append(slices.Clone(c.Args), c.Env...) {
+		if strings.Contains(s, "AGE-SECRET-KEY") {
+			t.Errorf("key text in the command: %q", s)
+		}
+	}
+}
+
+func TestRewrapWithoutPolicyRunsNothing(t *testing.T) {
+	r := &recorder{}
+	b, dir := recorded(t, r, nil)
+	file := filepath.Join(dir, "common.enc.yaml")
+	if err := os.WriteFile(file, []byte("A: ENC[x]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Rewrap(file); !errors.Is(err, backend.ErrNoPolicy) {
+		t.Fatalf("Rewrap error = %v, want ErrNoPolicy", err)
+	}
+	if len(r.cmds) != 0 {
+		t.Errorf("ran %d commands", len(r.cmds))
+	}
+}
+
+func TestRewrapFailureNeverPassesStderr(t *testing.T) {
+	r := &recorder{stderr: "boom s3cr3t-value", err: errors.New("exit status 1")}
+	b, dir := recorded(t, r, nil)
+	file := filepath.Join(dir, "common.enc.yaml")
+	for _, name := range []string{PolicyFile, "common.enc.yaml"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("A: ENC[x]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := b.Rewrap(file)
+	if err == nil || strings.Contains(err.Error(), "s3cr3t-value") {
+		t.Fatalf("Rewrap error = %v", err)
+	}
+}
+
+func TestRewrapWithAKeyThatCannotOpenTheFileIsNoKey(t *testing.T) {
+	e := realEnv(t)
+	file := filepath.Join(e.Dir, "common.enc.yaml")
+	if err := e.Backend.Set(file, "A", "s3cr3t-value"); err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := e.Backend.NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A policy the file already matches is a no-op that needs no key.
+	if err := e.Backend.WritePolicy(e.Dir, []string{e.Public, second}); err != nil {
+		t.Fatal(err)
+	}
+	e.Lock()
+	err = e.Backend.Rewrap(file)
+	if !errors.Is(err, backend.ErrNoKey) {
+		t.Fatalf("Rewrap error = %v, want ErrNoKey", err)
+	}
+	if strings.Contains(err.Error(), "s3cr3t-value") {
+		t.Error("the error holds a value")
+	}
+}
+
+func TestKeyTextIsPassedInTheEnvironmentOnly(t *testing.T) {
+	const key = "AGE-SECRET-KEY-1FROMTHEENVIRONMENT"
+	r := &recorder{}
+	b := New(Options{
+		Run:      r.run,
+		LookPath: func(string) (string, error) { return "/bin/sops", nil },
+		Environ:  []string{"HOME=/h", "SOPS_AGE_KEY=AGE-SECRET-KEY-1OTHER", "SOPS_AGE_KEY_FILE=/other"},
+		KeyFile:  "/keys/keys.txt",
+		Key:      key,
+	})
+	file := filepath.Join(t.TempDir(), "common.enc.yaml")
+	os.WriteFile(file, []byte("x"), 0o644)
+	if err := b.Set(file, "A", "v"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Decrypt(file); err == nil {
+		t.Fatal("Decrypt read the recorder's empty output")
+	}
+	if err := b.Edit(file, "vi"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Check(); err == nil {
+		t.Fatal("Check accepted the recorder's empty output")
+	}
+	if len(r.cmds) != 4 {
+		t.Fatalf("ran %d commands, want 4", len(r.cmds))
+	}
+	for _, c := range r.cmds {
+		var got []string
+		for _, kv := range c.Env {
+			if strings.HasPrefix(kv, "SOPS_AGE_") {
+				got = append(got, kv)
+			}
+		}
+		if want := []string{"SOPS_AGE_KEY=" + key}; !reflect.DeepEqual(got, want) {
+			t.Errorf("%v: the key variables are %v, want %v", c.Args, got, want)
+		}
+		if !slicesContains(c.Env, "HOME=/h") {
+			t.Errorf("%v: Env = %v lost the environment", c.Args, c.Env)
+		}
+		if strings.Contains(strings.Join(c.Args, " "), key) || bytes.Contains(c.Stdin, []byte(key)) {
+			t.Errorf("%v: the key is in the arguments or on stdin", c.Args)
+		}
+	}
+}
+
+func TestNoKeyErrorNamesTheKeyVariable(t *testing.T) {
+	const key = "AGE-SECRET-KEY-1FROMTHEENVIRONMENT"
+	r := &recorder{err: errors.New("exit status 128"), stderr: "Failed to get the data key required to decrypt the SOPS file.\n  - | age: no identity matched any of the\n      | recipients."}
+	b := New(Options{Run: r.run, LookPath: func(string) (string, error) { return "/bin/sops", nil }, KeyFile: "/keys/keys.txt", Key: key})
+	file := filepath.Join(t.TempDir(), "common.enc.yaml")
+	os.WriteFile(file, []byte("x"), 0o644)
+	_, err := b.Decrypt(file)
+	if !errors.Is(err, backend.ErrNoKey) || !strings.HasSuffix(err.Error(), "is one of its recipients. The key comes from EZC_AGE_KEY.") {
+		t.Fatalf("error = %v", err)
+	}
+	if strings.Contains(err.Error(), key) {
+		t.Fatal("the error holds the key")
+	}
+}
+
+// The key's text is what a CI job has: the secret line alone, as ezc bot add delivers it, or a whole key file's text.
+func TestKeyTextDecryptsWithNoKeyFile(t *testing.T) {
+	r := newReal(t)
+	file := filepath.Join(r.dir, "common.enc.yaml")
+	if err := New(r.opts).Set(file, "TOKEN", "t0k"); err != nil {
+		t.Fatal(err)
+	}
+	private, err := os.ReadFile(r.keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(r.keyFile); err != nil {
+		t.Fatal(err)
+	}
+	line := string(backend.SecretLine(private))
+	for name, text := range map[string]string{
+		"the secret line": line,
+		"a key file":      "# created: 2026-10-11T12:00:00Z\n# public key: age1example\n" + line + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			o := r.opts
+			o.Environ = []string{"HOME=" + t.TempDir()}
+			o.KeyFile, o.Key = "", text
+			got, err := New(o).Decrypt(file)
+			if err != nil {
+				t.Fatalf("Decrypt: %v", err)
+			}
+			if want := []backend.Pair{{Name: "TOKEN", Value: "t0k"}}; !reflect.DeepEqual(got, want) {
+				t.Errorf("Decrypt = %v, want %v", got, want)
+			}
+		})
+	}
+	o := r.opts
+	o.KeyFile, o.Key = "", line
+	if err := New(o).Set(file, "OTHER", "v"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	// Without the text there is no key at all: the file was opened by it and by nothing else.
+	o.Key = ""
+	if _, err := New(o).Decrypt(file); !errors.Is(err, backend.ErrNoKey) {
+		t.Fatalf("with no key: %v", err)
+	}
+}
+
+// dataKey is the key that encrypts the file's values, as private unwraps it from the file's own entry.
+func dataKey(t *testing.T, file, private []byte) string {
+	t.Helper()
+	ids, err := age.ParseIdentities(bytes.NewReader(private))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Sops struct {
+			Age []ageEntry `yaml:"age"`
+		} `yaml:"sops"`
+	}
+	if err := yaml.Unmarshal(file, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range doc.Sops.Age {
+		if r, err := age.Decrypt(armor.NewReader(strings.NewReader(e.Enc)), ids...); err == nil {
+			key, err := io.ReadAll(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(key)
+		}
+	}
+	t.Fatal("the key unwraps nothing from the file")
+	return ""
+}
+
+// A key that leaves a file knew the key its values are encrypted with, and every older copy of the file still
+// hands it over: the values need a new one, or the key reads whatever is written afterwards.
+func TestRewrapGivesTheValuesANewKeyWhenARecipientLeaves(t *testing.T) {
+	e := realEnv(t)
+	file := filepath.Join(e.Dir, "common.enc.yaml")
+	second, secondPrivate, err := e.Backend.NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Backend.WritePolicy(e.Dir, []string{e.Public, second}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Backend.Set(file, "A", "a1"); err != nil {
+		t.Fatal(err)
+	}
+	old, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	known := dataKey(t, old, secondPrivate)
+
+	if err := e.Backend.WritePolicy(e.Dir, []string{e.Public}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Backend.Rewrap(file); err != nil {
+		t.Fatalf("Rewrap: %v", err)
+	}
+	if err := e.Backend.Set(file, "A", "a2"); err != nil {
+		t.Fatal(err)
+	}
+	now, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dataKey(t, now, e.Private) == known {
+		t.Fatal("the values are still encrypted with the key the removed recipient unwraps from the old file")
+	}
+	if got, err := e.Backend.Decrypt(file); err != nil || !reflect.DeepEqual(got, []backend.Pair{{Name: "A", Value: "a2"}}) {
+		t.Fatalf("Decrypt = %v, %v", got, err)
+	}
+}
+
+// Adding a recipient takes nothing from anybody: the values keep their key and their bytes.
+func TestRewrapKeepsTheValuesKeyWhenNobodyLeaves(t *testing.T) {
+	e := realEnv(t)
+	file := filepath.Join(e.Dir, "common.enc.yaml")
+	if err := e.Backend.Set(file, "A", "a1"); err != nil {
+		t.Fatal(err)
+	}
+	old, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := e.Backend.NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Backend.WritePolicy(e.Dir, []string{e.Public, second}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Backend.Rewrap(file); err != nil {
+		t.Fatalf("Rewrap: %v", err)
+	}
+	now, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dataKey(t, now, e.Private) != dataKey(t, old, e.Private) {
+		t.Fatal("adding a recipient changed the key of the values")
+	}
+	valueLine := func(data []byte) string {
+		line, _, _ := strings.Cut(string(data), "\n")
+		return line
+	}
+	if valueLine(now) != valueLine(old) || !strings.HasPrefix(valueLine(now), "A: ENC[") {
+		t.Fatalf("adding a recipient rewrote the value: %q", valueLine(now))
+	}
+}
+
+// leaving is a sops whose updatekeys drops the second of a file's two recipients, as a policy without it would.
+type leaving struct {
+	recorder
+	file      string
+	rotated   []byte // the file as rotate found it
+	rotateErr error
+	failWrap  int // the updatekeys run that fails, counted from 1; 0 for none
+	wraps     int
+}
+
+const twoRecipients = "A: ENC[x]\nsops:\n    age:\n        - recipient: age1first\n          enc: one\n        - recipient: age1second\n          enc: two\n"
+
+func (l *leaving) run(c proc.Command) ([]byte, []byte, error) {
+	l.cmds = append(l.cmds, c)
+	switch c.Args[0] {
+	case "updatekeys":
+		if l.wraps++; l.wraps == l.failWrap {
+			return nil, []byte(l.stderr), errors.New("exit status 1")
+		}
+		return nil, nil, os.WriteFile(l.file, []byte("A: ENC[x]\nsops:\n    age:\n        - recipient: age1first\n          enc: one\n"), 0o644)
+	case "rotate":
+		l.rotated, _ = os.ReadFile(l.file)
+		return nil, []byte(l.stderr), l.rotateErr
+	}
+	return nil, nil, errors.New("unexpected command")
+}
+
+func (l *leaving) backend(t *testing.T) backend.Backend {
+	t.Helper()
+	for name, text := range map[string]string{PolicyFile: "creation_rules: []\n", filepath.Base(l.file): twoRecipients} {
+		if err := os.WriteFile(filepath.Join(filepath.Dir(l.file), name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return New(Options{Run: l.run, LookPath: func(string) (string, error) { return "/bin/sops", nil }, Environ: []string{"HOME=/h"}, KeyFile: "/keys/keys.txt"})
+}
+
+// The rotation runs on the file as it was, which the key that leaves still opens: in a rotation of this machine's
+// own key that is the only key here.
+func TestRewrapRotatesTheFileAsItWasThenWrapsAgain(t *testing.T) {
+	dir := t.TempDir()
+	l := &leaving{file: filepath.Join(dir, "common.enc.yaml")}
+	if err := l.backend(t).Rewrap(l.file); err != nil {
+		t.Fatalf("Rewrap: %v", err)
+	}
+	var ran []string
+	for _, c := range l.cmds {
+		if c.Name != "sops" || c.Dir != dir {
+			t.Errorf("ran %s in %q, want sops in %q", c.Name, c.Dir, dir)
+		}
+		ran = append(ran, strings.Join(c.Args, " "))
+	}
+	if want := []string{"updatekeys --yes common.enc.yaml", "rotate --in-place common.enc.yaml", "updatekeys --yes common.enc.yaml"}; !slices.Equal(ran, want) {
+		t.Fatalf("ran %q, want %q", ran, want)
+	}
+	if string(l.rotated) != twoRecipients {
+		t.Errorf("rotate found the file without the recipient that leaves:\n%s", l.rotated)
+	}
+	// What Rewrap left is the file the last updatekeys wrote: the recipient that left is gone from it.
+	if got, err := New(Options{}).Recipients(l.file); err != nil || !slices.Equal(got, []string{"age1first"}) {
+		t.Fatalf("the file Rewrap left is for %v (%v)", got, err)
+	}
+}
+
+// Whether a recipient leaves is the security decision: a file whose recipients cannot be read before the re-wrap
+// is refused, not taken for one that nobody leaves.
+func TestRewrapRefusesAFileWhoseRecipientsCannotBeRead(t *testing.T) {
+	l := &leaving{file: filepath.Join(t.TempDir(), "common.enc.yaml")}
+	b := l.backend(t)
+	if err := os.WriteFile(l.file, []byte("A: [not yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Rewrap(l.file); err == nil {
+		t.Fatal("Rewrap of a file whose recipients cannot be read succeeded")
+	}
+	if len(l.cmds) != 0 {
+		t.Fatalf("ran %d commands", len(l.cmds))
+	}
+}
+
+// The second updatekeys fails: the file is rotated and still lists the recipient that leaves, which is for the
+// caller to put back, and the failure is the backend's own sentence.
+func TestRewrapSaysWhenTheLastWrapFails(t *testing.T) {
+	l := &leaving{file: filepath.Join(t.TempDir(), "common.enc.yaml"), failWrap: 2}
+	l.stderr = "boom s3cr3t-value"
+	err := l.backend(t).Rewrap(l.file)
+	if err == nil || strings.Contains(err.Error(), "s3cr3t-value") {
+		t.Fatalf("Rewrap error = %v", err)
+	}
+	if len(l.cmds) != 3 {
+		t.Errorf("ran %d commands, want 3", len(l.cmds))
+	}
+}
+
+// A rotation that fails is a failed re-wrap, in the backend's own words, and the file is as it was.
+func TestRewrapRotationFailureNeverPassesStderr(t *testing.T) {
+	l := &leaving{file: filepath.Join(t.TempDir(), "common.enc.yaml"), rotateErr: errors.New("exit status 1")}
+	l.stderr = "boom s3cr3t-value"
+	err := l.backend(t).Rewrap(l.file)
+	if err == nil || strings.Contains(err.Error(), "s3cr3t-value") {
+		t.Fatalf("Rewrap error = %v", err)
+	}
+	if len(l.cmds) != 2 {
+		t.Errorf("ran %d commands after the rotation failed, want 2", len(l.cmds))
+	}
+	if now, _ := os.ReadFile(l.file); string(now) != twoRecipients {
+		t.Errorf("the file is not as it was:\n%s", now)
 	}
 }

@@ -634,3 +634,47 @@ func TestBrokenConfigIsAnError(t *testing.T) {
 		t.Fatalf("keySource %q", note)
 	}
 }
+
+// A request that is still on its branch of the remote is named, at the cost of one more git call.
+func TestSyncRequestsOnABranch(t *testing.T) {
+	j := joinMachines(t)
+	j.join(j.b, "--name", "sam")
+	if got, want := stderrOf(t, j.a, "list", "-g"), "store: 1 access request pending: sam\n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	listings := func(f *fake) (n int) {
+		for _, c := range f.gits {
+			if slices.Contains(c.Args, "refs/remotes/origin/") {
+				n++
+			}
+		}
+		return n
+	}
+	if listings(j.a) != 1 {
+		t.Fatalf("git listed the branches %d times", listings(j.a))
+	}
+	out, _, err := accessRun(j.a, "store", "status")
+	if err != nil || !strings.Contains(out, "requests  sam\n") {
+		t.Fatalf("store status: %v\n%s", err, out)
+	}
+
+	// It never fails a command: a listing that fails is no requests.
+	j.a.gitFail = "refs/remotes/origin/"
+	if got := stderrOf(t, j.a, "list", "-g"); got != "" {
+		t.Fatalf("when git cannot list: %q", got)
+	}
+	j.a.gitFail = ""
+
+	// A request that is on a branch and in the store is one request.
+	j.merged()
+	if got, want := stderrOf(t, j.a, "list", "-g"), "store: 1 access request pending: sam\n"; got != want {
+		t.Fatalf("merged: got %q, want %q", got, want)
+	}
+
+	// A store with no remote is not asked.
+	f := newFake(t)
+	localStore(t, f)
+	if got := stderrOf(t, f, "list", "-g"); got != "" || listings(f) != 0 {
+		t.Fatalf("local only: %q, %d listings", got, listings(f))
+	}
+}

@@ -109,7 +109,10 @@ The editor must wait until you finish: for example nano, vim, or "code --wait". 
 				return err
 			}
 			if secrets {
-				err = editSecrets(sys, sc, env, path, editor)
+				// Whoever the file is encrypted for reads what is saved in it.
+				if err = sc.guardRecipients(sys, file); err == nil {
+					err = editSecrets(sys, sc, env, path, editor)
+				}
 			} else {
 				err = editPlain(sys, sc, file, path, editor)
 			}
