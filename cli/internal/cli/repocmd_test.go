@@ -1,0 +1,399 @@
+package cli
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/thinkjones/easy-config/cli/internal/config"
+	"github.com/thinkjones/easy-config/cli/internal/gitstore"
+	"github.com/thinkjones/easy-config/cli/internal/gitstore/gittest"
+	"github.com/thinkjones/easy-config/cli/internal/recipients"
+	"github.com/thinkjones/easy-config/cli/internal/registry"
+)
+
+func TestGithubSlug(t *testing.T) {
+	for remote, want := range map[string]string{
+		"https://github.com/o/r.git":     "o/r",
+		"https://github.com/o/r":         "o/r",
+		"git@github.com:o/r":             "o/r",
+		"git@github.com:o/r.git":         "o/r",
+		"https://user:pw@github.com/o/r": "o/r",
+		"ssh://git@github.com/o/r.git":   "o/r",
+	} {
+		if got, ok := githubSlug(remote); !ok || got != want {
+			t.Errorf("%s: got %q, %v", remote, got, ok)
+		}
+	}
+	for _, remote := range []string{"https://gitlab.com/o/r", "https://github.com/a/o/r", "/srv/git/o/r", "git@gitlab.com:o/r", "https://github.com/o", ""} {
+		if got, ok := githubSlug(remote); ok {
+			t.Errorf("%s: got %q", remote, got)
+		}
+	}
+}
+
+// repoFix is the store with a remote (storeWriteStore), and a working repo in the fake's working directory.
+type repoFix struct {
+	storeWriteFix
+	f *fake
+}
+
+// repoStore is the store, gene's config, and a working repo whose origin is origin ("" for none).
+func repoStore(t *testing.T, origin string) repoFix {
+	t.Helper()
+	f := newFake(t)
+	x := repoFix{storeWriteStore(t, f), f}
+	if err := config.Save(x.configPath(), config.Config{User: "gene"}); err != nil {
+		t.Fatal(err)
+	}
+	repo(t, f, map[string]string{"manifest.yaml": empty})
+	if origin != "" {
+		g := gitstore.Git{Run: gittest.WithIdentity(t)}
+		if err := g.Init(f.wd); err != nil {
+			t.Fatal(err)
+		}
+		if err := g.SetRemote(f.wd, origin); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return x
+}
+
+func (x repoFix) configPath() string { return filepath.Join(x.f.env["EZC_HOME"], "config.toml") }
+
+func (x repoFix) config() config.Config {
+	x.t.Helper()
+	c, _, err := config.Load(x.configPath())
+	if err != nil {
+		x.t.Fatal(err)
+	}
+	return c
+}
+
+func (x repoFix) setConfig(c config.Config) {
+	x.t.Helper()
+	if err := config.Save(x.configPath(), c); err != nil {
+		x.t.Fatal(err)
+	}
+}
+
+func (x repoFix) repos() registry.Registry {
+	x.t.Helper()
+	r, _, err := registry.Load(filepath.Join(x.store, ezcDir))
+	if err != nil {
+		x.t.Fatal(err)
+	}
+	return r
+}
+
+// out runs a command that must succeed and returns its stdout.
+func (x repoFix) out(args ...string) string {
+	x.t.Helper()
+	x.f.out.Reset()
+	x.f.errOut.Reset()
+	if err := x.f.run(args...); err != nil {
+		x.t.Fatalf("%v: %v", args, err)
+	}
+	return x.f.out.String()
+}
+
+// unchanged fails unless the store's HEAD is head, the store has nothing uncommitted and the config is cfg.
+func (x repoFix) unchanged(head, cfg string) {
+	x.t.Helper()
+	if got := x.git("rev-parse", "HEAD"); got != head {
+		x.t.Errorf("a commit was made: %s", x.git("log", "-1", "--format=%s"))
+	}
+	if got := x.git("status", "--porcelain", "--untracked-files=all"); got != "" {
+		x.t.Errorf("left in the store:\n%s", got)
+	}
+	if got := readFile(x.t, x.configPath()); got != cfg {
+		x.t.Errorf("config.toml changed:\n%s", got)
+	}
+}
+
+func TestRepoAddRegistersTheWorkingRepo(t *testing.T) {
+	x := repoStore(t, "https://github.com/o/app.git")
+	out := x.out("repo", "add")
+	want := "✓ added o/app to repos.yaml\n✓ checkout " + x.f.wd + "\n"
+	if out != want {
+		t.Fatalf("got %q, want %q", out, want)
+	}
+	if got := x.repos().Repos["o/app"]; got != (registry.Repo{Added: "2026-10-11", AddedBy: "gene"}) {
+		t.Fatalf("entry %+v", got)
+	}
+	if got := x.config().Checkouts["o/app"]; got != x.f.wd {
+		t.Fatalf("checkout %q", got)
+	}
+	x.wantCommit("repo add o/app", registry.File)
+
+	// A second run registers nothing more.
+	head := x.git("rev-parse", "HEAD")
+	if out := x.out("repo", "add"); !strings.HasPrefix(out, "✓ o/app is registered\n") {
+		t.Fatalf("second run %q", out)
+	}
+	if got := x.git("rev-parse", "HEAD"); got != head {
+		t.Fatal("the second run committed")
+	}
+	x.wantClean()
+}
+
+func TestRepoAddAuthorIsEzcWithoutAUser(t *testing.T) {
+	x := repoStore(t, "")
+	x.setConfig(config.Config{})
+	x.out("repo", "add")
+	if got := x.repos().Repos[filepath.Base(x.f.wd)].AddedBy; got != "ezc" {
+		t.Fatalf("addedBy %q", got)
+	}
+}
+
+func TestRepoAddNames(t *testing.T) {
+	// No origin: the folder's name.
+	x := repoStore(t, "")
+	id := filepath.Base(x.f.wd)
+	if out := x.out("repo", "add"); !strings.Contains(out, "✓ added "+id+" to repos.yaml\n") {
+		t.Fatalf("got %q", out)
+	}
+	x.wantCommit("repo add "+id, registry.File)
+
+	// --name wins over the folder's name.
+	x = repoStore(t, "")
+	x.out("repo", "add", "--name", "x")
+	if _, ok := x.repos().Repos["x"]; !ok || x.config().Checkouts["x"] != x.f.wd {
+		t.Fatalf("registry %v, config %v", x.repos(), x.config())
+	}
+
+	// A non-GitHub origin gets a plain name.
+	x = repoStore(t, "https://gitlab.com/o/app.git")
+	x.out("repo", "add", "--name", "app")
+	if _, ok := x.repos().Repos["app"]; !ok {
+		t.Fatalf("registry %v", x.repos())
+	}
+
+	// An invalid --name is never echoed.
+	x = repoStore(t, "")
+	head, cfg := x.git("rev-parse", "HEAD"), readFile(t, x.configPath())
+	err := x.f.run("repo", "add", "--name", "../x")
+	wantUsage(t, err, "--name")
+	if strings.Contains(err.Error(), "../x") {
+		t.Fatalf("echoed: %v", err)
+	}
+	x.unchanged(head, cfg)
+}
+
+func TestRepoAddAnotherID(t *testing.T) {
+	x := repoStore(t, "https://github.com/o/app.git")
+	if out := x.out("repo", "add", "o/other"); out != "✓ added o/other to repos.yaml\n" {
+		t.Fatalf("got %q", out)
+	}
+	if len(x.config().Checkouts) != 0 {
+		t.Fatalf("checkouts %v", x.config().Checkouts)
+	}
+	x.wantCommit("repo add o/other", registry.File)
+
+	// The working repo's own ID records its checkout.
+	x = repoStore(t, "https://github.com/o/app.git")
+	x.out("repo", "add", "o/app")
+	if got := x.config().Checkouts["o/app"]; got != x.f.wd {
+		t.Fatalf("checkout %q", got)
+	}
+
+	// An invalid ID is never echoed.
+	x = repoStore(t, "")
+	head, cfg := x.git("rev-parse", "HEAD"), readFile(t, x.configPath())
+	err := x.f.run("repo", "add", "a/b/\x1b[31m")
+	wantUsage(t, err, "repo ID")
+	if strings.Contains(err.Error(), "\x1b") {
+		t.Fatalf("echoed: %q", err)
+	}
+	x.unchanged(head, cfg)
+}
+
+func TestRepoAddKeepsALiveCheckout(t *testing.T) {
+	x := repoStore(t, "https://github.com/o/app.git")
+	elsewhere := t.TempDir()
+	write(t, filepath.Join(elsewhere, ezcDir, "manifest.yaml"), empty)
+	x.setConfig(config.Config{User: "gene", Checkouts: map[string]string{"o/app": elsewhere}})
+	out := x.out("repo", "add")
+	if !strings.Contains(out, "! ") || !strings.Contains(out, elsewhere) || strings.Contains(out, "✓ checkout") {
+		t.Fatalf("got %q", out)
+	}
+	if got := x.config().Checkouts["o/app"]; got != elsewhere {
+		t.Fatalf("checkout %q", got)
+	}
+
+	// One whose folder no longer holds .ezc is replaced.
+	x = repoStore(t, "https://github.com/o/app.git")
+	x.setConfig(config.Config{User: "gene", Checkouts: map[string]string{"o/app": filepath.Join(t.TempDir(), "gone")}})
+	if out := x.out("repo", "add"); !strings.Contains(out, "✓ checkout "+x.f.wd+"\n") {
+		t.Fatalf("got %q", out)
+	}
+	if got := x.config().Checkouts["o/app"]; got != x.f.wd {
+		t.Fatalf("checkout %q", got)
+	}
+}
+
+func TestRepoAddRefused(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(x repoFix)
+		want  string
+	}{
+		{"in the store's own folder", func(x repoFix) { x.f.wd = x.store }, "the store's own"},
+		{"behind", func(x repoFix) { x.theirs(2) }, storeWriteBehind},
+		{"repos.yaml changed by hand", func(x repoFix) {
+			x.commit(x.store, registry.File, "repos: {}\n")
+			x.push(x.store)
+			write(t, x.file(registry.File), "repos:\n  o/hand: {added: 2026-10-01, addedBy: gene}\n")
+		}, "repos.yaml has uncommitted changes"},
+		{"outside a repo", func(x repoFix) { x.f.wd = t.TempDir() }, "not in an ezc repo"},
+	}
+	for _, c := range cases {
+		x := repoStore(t, "https://github.com/o/app.git")
+		c.setup(x)
+		head, cfg := x.git("rev-parse", "HEAD"), readFile(t, x.configPath())
+		status := x.git("status", "--porcelain", "--untracked-files=all")
+		x.f.out.Reset()
+		err := x.f.run("repo", "add")
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v", c.name, err)
+			continue
+		}
+		if strings.Contains(x.f.out.String(), "✓") {
+			t.Errorf("%s: printed %q", c.name, x.f.out.String())
+		}
+		if got := x.git("rev-parse", "HEAD"); got != head {
+			t.Errorf("%s: a commit was made", c.name)
+		}
+		if got := x.git("status", "--porcelain", "--untracked-files=all"); got != status {
+			t.Errorf("%s: the store changed:\n%s", c.name, got)
+		}
+		if got := readFile(t, x.configPath()); got != cfg {
+			t.Errorf("%s: config.toml changed", c.name)
+		}
+	}
+}
+
+// registered is repoStore with o/app registered and checked out, and the registration pushed.
+func registered(t *testing.T) repoFix {
+	t.Helper()
+	x := repoStore(t, "https://github.com/o/app.git")
+	x.out("repo", "add")
+	x.storeWriteFix = x.published()
+	return x
+}
+
+func TestRepoRemove(t *testing.T) {
+	x := registered(t)
+	out := x.out("repo", "remove", "o/app")
+	if !strings.HasPrefix(out, "✓ removed o/app from repos.yaml\n") {
+		t.Fatalf("got %q", out)
+	}
+	if _, ok := x.repos().Repos["o/app"]; ok {
+		t.Fatal("still registered")
+	}
+	if _, ok := x.config().Checkouts["o/app"]; ok {
+		t.Fatal("the checkout is still recorded")
+	}
+	if got := x.config().User; got != "gene" {
+		t.Fatalf("user %q", got)
+	}
+	x.wantCommit("repo remove o/app", registry.File)
+}
+
+func TestRepoRemoveRefused(t *testing.T) {
+	x := registered(t)
+	head, cfg := x.git("rev-parse", "HEAD"), readFile(t, x.configPath())
+	err := x.f.run("repo", "remove", "o/nope")
+	if err == nil || err.Error() != "o/nope is not in repos.yaml." {
+		t.Fatalf("got %v", err)
+	}
+	storeWriteExitsOne(t, err)
+	x.unchanged(head, cfg)
+
+	err = x.f.run("repo", "remove", "../\x1b[31m")
+	wantUsage(t, err, "repo ID")
+	if strings.Contains(err.Error(), "\x1b") || strings.Contains(err.Error(), "../") {
+		t.Fatalf("echoed: %q", err)
+	}
+	x.unchanged(head, cfg)
+
+	// The last fetch was a moment ago; ten minutes on, the command fetches again and learns it is behind.
+	x.theirs(1)
+	x.f.now = time.Date(2026, 10, 11, 12, 30, 0, 0, time.UTC)
+	head = x.git("rev-parse", "HEAD")
+	err = x.f.run("repo", "remove", "o/app")
+	if want := strings.Replace(storeWriteBehind, "2 commits", "1 commit", 1); err == nil || err.Error() != want {
+		t.Fatalf("behind: got %v", err)
+	}
+	x.unchanged(head, cfg)
+}
+
+func TestRepoRemoveRefusedWhileABotNamesIt(t *testing.T) {
+	x := registered(t)
+	reg := recipients.Registry{Recipients: map[string]recipients.Recipient{
+		"gene": {Key: accessGene, Kind: recipients.KindUser, Added: "2026-10-01", AddedBy: "gene"},
+		"ci":   {Key: accessSam, Kind: recipients.KindBot, Added: "2026-10-01", AddedBy: "gene", Repos: []string{"o/app"}},
+	}}
+	if err := reg.Save(filepath.Join(x.store, ezcDir)); err != nil {
+		t.Fatal(err)
+	}
+	x.commit(x.store, recipients.File, readFile(t, x.file(recipients.File)))
+	x.push(x.store)
+	head, cfg := x.git("rev-parse", "HEAD"), readFile(t, x.configPath())
+	err := x.f.run("repo", "remove", "o/app")
+	if err == nil || !strings.Contains(err.Error(), "ci") || !strings.Contains(err.Error(), "ezc bot remove ci") {
+		t.Fatalf("got %v", err)
+	}
+	storeWriteExitsOne(t, err)
+	x.unchanged(head, cfg)
+}
+
+func TestRepoList(t *testing.T) {
+	x := repoStore(t, "https://github.com/o/app.git")
+	if out := x.out("repo", "list"); out != "No repos are registered. Run ezc repo add inside a repo.\n" {
+		t.Fatalf("empty: %q", out)
+	}
+	x.out("repo", "add")
+	x.out("repo", "add", "o/other")
+	reg := recipients.Registry{Recipients: map[string]recipients.Recipient{
+		"gene": {Key: accessGene, Kind: recipients.KindUser, Added: "2026-10-01", AddedBy: "gene"},
+		"ci":   {Key: accessSam, Kind: recipients.KindBot, Added: "2026-10-01", AddedBy: "gene", Repos: []string{"o/app", "o/third"}},
+	}}
+	if err := reg.Save(filepath.Join(x.store, ezcDir)); err != nil {
+		t.Fatal(err)
+	}
+	want := "o/app  added 2026-10-11 by gene  " + x.f.wd + "\n  bot ci\n" +
+		"o/other  added 2026-10-11 by gene  no checkout here\n"
+	if out := x.out("repo", "list"); out != want {
+		t.Fatalf("got %q, want %q", out, want)
+	}
+
+	// A checkout that lost its .ezc is no checkout, outside the repo.
+	x.f.wd = t.TempDir()
+	if err := os.RemoveAll(filepath.Join(x.config().Checkouts["o/app"], ezcDir)); err != nil {
+		t.Fatal(err)
+	}
+	if out := x.out("repo", "list"); !strings.HasPrefix(out, "o/app  added 2026-10-11 by gene  no checkout here\n") {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestRepoListNeverPrintsAnEscape(t *testing.T) {
+	x := repoStore(t, "")
+	write(t, x.file(registry.File), "repos:\n  \"a\\e[31m\": {added: 2026-10-01, addedBy: gene}\n")
+	err := x.f.run("repo", "list")
+	if err == nil {
+		t.Fatal("listed")
+	}
+	if strings.Contains(err.Error(), "\x1b") || strings.Contains(x.f.out.String(), "\x1b") {
+		t.Fatalf("echoed: %q", err)
+	}
+
+	// added and addedBy are printed through Printable.
+	write(t, x.file(registry.File), "repos:\n  o/app: {added: 2026-10-01, addedBy: \"g\\e[31m\"}\n")
+	if out := x.out("repo", "list"); strings.Contains(out, "\x1b") {
+		t.Fatalf("got %q", out)
+	}
+}
