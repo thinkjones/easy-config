@@ -475,6 +475,15 @@ func TestRepoCheckOneAndTheWorkingRepo(t *testing.T) {
 	if !strings.Contains(out, "environment prod") {
 		t.Fatalf("env not used: %q", out)
 	}
+	// . is the working repo too, so that an environment can follow it.
+	write(t, filepath.Join(x.f.wd, ezcDir, "env.prod.yaml"), "NAME: v4lue-good\nSIZE: 4\n")
+	x.f.out.Reset()
+	if err := x.f.run("repo", "check", ".", "prod"); err != nil {
+		t.Fatal(err)
+	}
+	if out := x.f.out.String(); !strings.HasPrefix(out, filepath.Base(x.f.wd)+" ("+x.f.wd+")\n  ") || !strings.Contains(out, "environment prod") {
+		t.Fatalf("got %q", out)
+	}
 	// No argument: the working repo, which is not registered.
 	x.f.out.Reset()
 	if err := x.f.run("repo", "check"); err != nil {
@@ -514,6 +523,14 @@ func TestRepoCheckRefusals(t *testing.T) {
 		t.Fatalf("echoed: %q", err)
 	}
 	wantUsage(t, x.f.run("repo", "check", "--all", "o/good", "prod"), "--all")
+	// An environment name is checked as ezc env checks it, and never echoed.
+	for _, args := range [][]string{{"--all", "pr\x1bod"}, {"o/good", "pr\x1bod"}, {".", "enc"}} {
+		err := x.f.run(append([]string{"repo", "check"}, args...)...)
+		wantUsage(t, err, "ezc repo check: ")
+		if strings.Contains(err.Error(), "\x1b") {
+			t.Fatalf("echoed: %q", err)
+		}
+	}
 	// A recorded checkout whose folder is gone is no checkout.
 	x.setConfig(config.Config{User: "gene", Checkouts: map[string]string{"o/good": filepath.Join(t.TempDir(), "gone")}})
 	x.f.out.Reset()

@@ -53,7 +53,7 @@ A repo's checkout here is that folder while it holds `.ezc/`, else the repo you 
 
 ## Checking every repo
 
-`ezc repo check` runs what `ezc env` checks, in a repo's checkout, and also checks that each encrypted file there is encrypted for exactly the people the store's `recipients.yaml` names. With no argument it checks the repo you are in, registered or not; with an ID, that repo; with `--all`, every registered repo, and the only argument is then the environment:
+`ezc repo check` runs what `ezc env` checks, in a repo's checkout, and also checks that each encrypted file there is encrypted for exactly the people the store's `recipients.yaml` names. With no argument it checks the repo you are in, registered or not, and `.` names it too, so that an environment can follow (`ezc repo check . prod`); with an ID, that repo; with `--all`, every registered repo, and the only argument is then the environment:
 
 ```
 owner/app (/Users/sam/code/app)
@@ -77,7 +77,7 @@ It exits 1 when a checked repo fails; a repo with no checkout here is listed and
 API_URL is required by owner/app. Pass --force to unset it anyway, or take it out of their manifests first.
 ```
 
-With `--force` the value is removed and the same repos are named on a `!` line. A name a repo lists as optional, and repos that could not be checked, are `!` lines and do not stop it. A store with no `repos.yaml` has no such check, and `ezc unset` without `-g` never runs it.
+With `--force` the value is removed and the same repos are named on a `!` line. A name a repo lists as optional, and repos that could not be checked, are `!` lines and do not stop it. A `repos.yaml` that cannot be read checks no repo: the unset is refused, and with `--force` that is a `!` line. A store with no `repos.yaml` has no such check, and `ezc unset` without `-g` never runs it.
 
 ## A repo's own secrets
 

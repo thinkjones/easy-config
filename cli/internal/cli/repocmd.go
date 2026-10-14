@@ -249,16 +249,21 @@ func repoList(sys System) error {
 func newRepoCheckCmd(sys System) *cobra.Command {
 	var all bool
 	cmd := &cobra.Command{
-		Use:   "check [<owner/repo>] [ENV]",
+		Use:   "check [<owner/repo> | .] [ENV]",
 		Short: "check a repo's environment, and that its encrypted files are for the store's recipients",
-		Long:  "Check what `ezc env` checks, in a repo's checkout, and that each encrypted file there is encrypted for exactly the recipients the store's recipients.yaml names. With no argument it checks the working repo, registered or not; with an ID, that repo; with --all, every repo in repos.yaml (the only argument is then ENV). A repo with no checkout on this machine is listed, and is not a failure. Exits 1 when a checked repo fails. Names and paths only.",
+		Long:  "Check what `ezc env` checks, in a repo's checkout, and that each encrypted file there is encrypted for exactly the recipients the store's recipients.yaml names. With no argument, or . (so that ENV can follow), it checks the working repo, registered or not; with an ID, that repo; with --all, every repo in repos.yaml (the only argument is then ENV). A repo with no checkout on this machine is listed, and is not a failure. Exits 1 when a checked repo fails. Names and paths only.",
 		Args:  maxArgs(2, "a repo ID and an environment name"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if all && len(args) > 1 {
 				return usagef("%s: with --all give at most an environment name. Try `%s`.", cmd.CommandPath(), helpFor(cmd))
 			}
-			if !all && len(args) > 0 && !registry.ValidID(args[0]) {
+			if !all && len(args) > 0 && args[0] != workingID && !registry.ValidID(args[0]) {
 				return repoIDUsage(cmd)
+			}
+			if all && len(args) == 1 || len(args) == 2 {
+				if err := checkEnvName("repo check", args[len(args)-1]); err != nil {
+					return err
+				}
 			}
 			return repoCheck(sys, args, all)
 		},
@@ -273,11 +278,14 @@ type repoTarget struct {
 	Here    bool
 }
 
+// workingID is the argument that names the working repo, so that ENV can follow it. It is never a valid ID.
+const workingID = "."
+
 // repoTargets are the repos a command acts on. With all, every repo in repos.yaml and at most one argument (ENV);
-// else no argument is the working repo, registered or not, and the first is a registered repo's ID. A repo with no
-// checkout here has Here false. Nothing is echoed from an invalid ID.
+// else no argument or workingID is the working repo, registered or not, and any other first argument is a
+// registered repo's ID. A repo with no checkout here has Here false. Nothing is echoed from an invalid ID.
 func repoTargets(sys System, args []string, all bool) ([]repoTarget, error) {
-	if !all && len(args) == 0 {
+	if !all && (len(args) == 0 || args[0] == workingID) {
 		w, err := workingRepo(sys, "")
 		if err != nil {
 			return nil, err
