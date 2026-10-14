@@ -1,14 +1,20 @@
 package cli
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"maps"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/thinkjones/easy-config/cli/internal/check"
 	"github.com/thinkjones/easy-config/cli/internal/config"
+	"github.com/thinkjones/easy-config/cli/internal/manifest"
 	"github.com/thinkjones/easy-config/cli/internal/paths"
 	"github.com/thinkjones/easy-config/cli/internal/recipients"
 	"github.com/thinkjones/easy-config/cli/internal/registry"
@@ -236,4 +242,237 @@ func repoList(sys System) error {
 		}
 	}
 	return nil
+}
+
+func newRepoCheckCmd(sys System) *cobra.Command {
+	var all bool
+	cmd := &cobra.Command{
+		Use:   "check [<owner/repo>] [ENV]",
+		Short: "check a repo's environment, and that its encrypted files are for the store's recipients",
+		Long:  "Check what `ezc env` checks, in a repo's checkout, and that each encrypted file there is encrypted for exactly the recipients the store's recipients.yaml names. With no argument it checks the working repo, registered or not; with an ID, that repo; with --all, every repo in repos.yaml (the only argument is then ENV). A repo with no checkout on this machine is listed, and is not a failure. Exits 1 when a checked repo fails. Names and paths only.",
+		Args:  maxArgs(2, "a repo ID and an environment name"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if all && len(args) > 1 {
+				return usagef("%s: with --all give at most an environment name. Try `%s`.", cmd.CommandPath(), helpFor(cmd))
+			}
+			if !all && len(args) > 0 && !registry.ValidID(args[0]) {
+				return repoIDUsage(cmd)
+			}
+			return repoCheck(sys, args, all)
+		},
+	}
+	cmd.Flags().BoolVar(&all, "all", false, "check every repo in repos.yaml")
+	return cmd
+}
+
+// repoTarget is a repo to act on: its ID, the .ezc folder of its checkout here, and whether it has one.
+type repoTarget struct {
+	ID, Ezc string
+	Here    bool
+}
+
+// repoTargets are the repos a command acts on. With all, every repo in repos.yaml and at most one argument (ENV);
+// else no argument is the working repo, registered or not, and the first is a registered repo's ID. A repo with no
+// checkout here has Here false. Nothing is echoed from an invalid ID.
+func repoTargets(sys System, args []string, all bool) ([]repoTarget, error) {
+	if !all && len(args) == 0 {
+		w, err := workingRepo(sys, "")
+		if err != nil {
+			return nil, err
+		}
+		return []repoTarget{{ID: w.ID, Ezc: w.Ezc, Here: true}}, nil
+	}
+	if all && len(args) > 1 || !all && !registry.ValidID(args[0]) {
+		return nil, usagef("give %s.", repoIDRule)
+	}
+	reg, _, _, err := loadRepos(sys)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := loadConfig(sys)
+	if err != nil {
+		return nil, err
+	}
+	ids := reg.IDs()
+	if !all {
+		if _, ok := reg.Repos[args[0]]; !ok {
+			return nil, fmt.Errorf("%s is not in %s.", args[0], registry.File)
+		}
+		ids = []string{args[0]}
+	}
+	targets := make([]repoTarget, 0, len(ids))
+	for _, id := range ids {
+		ezc, ok := checkoutOf(sys, cfg, id)
+		targets = append(targets, repoTarget{ID: id, Ezc: ezc, Here: ok})
+	}
+	return targets, nil
+}
+
+// repoDiffers are the encrypted files of a checkout that are not encrypted for exactly the registry's keys.
+func repoDiffers(sys System, ezc string, reg recipients.Registry) (map[string]recipients.Diff, error) {
+	enc, err := encryptedFiles(ezc)
+	if err != nil {
+		return nil, err
+	}
+	if err := unshowable(ezc, enc); err != nil {
+		return nil, err
+	}
+	return recipients.Differences(ezc, reg, backendFor(sys), enc)
+}
+
+func repoCheck(sys System, args []string, all bool) error {
+	touchStore(sys)
+	targets, err := repoTargets(sys, args, all)
+	if err != nil {
+		return err
+	}
+	env := ""
+	if all && len(args) == 1 || len(args) == 2 {
+		env = args[len(args)-1]
+	}
+	p, err := storePaths(sys)
+	if err != nil {
+		return err
+	}
+	reg, haveReg, err := recipients.Load(p.StoreEzc())
+	if err != nil {
+		return err
+	}
+	if len(targets) == 0 {
+		_, err := fmt.Fprintln(sys.Stdout, "No repos are registered. Run ezc repo add inside a repo.")
+		return err
+	}
+	var checked, failed, none int
+	for _, t := range targets {
+		if !t.Here {
+			none++
+			fmt.Fprintf(sys.Stdout, "%s: no checkout on this machine. Run ezc repo add inside it.\n", t.ID)
+			continue
+		}
+		checked++
+		report, ok := checkOne(sys, t, env, reg, haveReg)
+		if !ok {
+			failed++
+		}
+		fmt.Fprintf(sys.Stdout, "%s (%s)\n%s", t.ID, filepath.Dir(t.Ezc), report)
+	}
+	if all {
+		fmt.Fprintf(sys.Stdout, "%d checked, %d failed, %d with no checkout here\n", checked, failed, none)
+	}
+	if failed > 0 {
+		return &ExitError{1}
+	}
+	return nil
+}
+
+// checkOne is what `ezc env` checks in a checkout, then its encrypted files against the registry, as lines
+// indented by two spaces; false when either fails.
+func checkOne(sys System, t repoTarget, env string, reg recipients.Registry, haveReg bool) (string, bool) {
+	var b strings.Builder
+	ok := true
+	line := func(s string) {
+		for _, l := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
+			if l == "" {
+				b.WriteString("\n")
+			} else {
+				fmt.Fprintf(&b, "  %s\n", l)
+			}
+		}
+	}
+	notes := &bytes.Buffer{}
+	quiet := sys
+	quiet.Stderr = notes
+	m, err := loadManifest(filepath.Join(t.Ezc, manifestName), false)
+	if err != nil {
+		line("✗ " + err.Error())
+		return b.String(), false
+	}
+	res, err := load(quiet, t.Ezc, envName(sys, env))
+	if err != nil {
+		line("✗ " + err.Error())
+		return b.String(), false
+	}
+	warn(quiet, res, t.Ezc)
+	if notes.Len() > 0 {
+		line(notes.String())
+	}
+	if problems := check.Run(m, res); len(problems) > 0 {
+		ok = false
+		line(check.Report(problems, res))
+	} else {
+		line(check.ReportOK(res))
+	}
+	if !haveReg {
+		return b.String(), ok
+	}
+	diffs, err := repoDiffers(sys, t.Ezc, reg)
+	if err != nil {
+		line("✗ " + err.Error())
+		return b.String(), false
+	}
+	for _, f := range slices.Sorted(maps.Keys(diffs)) {
+		ok = false
+		line(fmt.Sprintf("✗ %s is not encrypted for exactly the store's recipients. Run ezc repo rewrap %s.", recipients.Printable(f), t.ID))
+	}
+	return b.String(), ok
+}
+
+func newRepoUsesCmd(sys System) *cobra.Command {
+	return &cobra.Command{
+		Use:   "uses <NAME>",
+		Short: "list the registered repos whose manifest declares a name",
+		Long:  "List the repos in repos.yaml whose manifest, in the checkout on this machine, declares NAME: where it is required, where it is optional, and which repos could not be looked at. Names only.",
+		Args:  exactArgs(1, "a variable name"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !manifest.ValidName(args[0]) {
+				return usagef("%s: give a variable name of letters, digits and _, not starting with a digit. Try `%s`.", cmd.CommandPath(), helpFor(cmd))
+			}
+			return repoUses(sys, args[0])
+		},
+	}
+}
+
+func repoUses(sys System, name string) error {
+	touchStore(sys)
+	reg, _, _, err := loadRepos(sys)
+	if err != nil {
+		return err
+	}
+	cfg, err := loadConfig(sys)
+	if err != nil {
+		return err
+	}
+	var required, optional, unchecked, unread []string
+	for _, id := range reg.IDs() {
+		ezc, ok := checkoutOf(sys, cfg, id)
+		if !ok {
+			unchecked = append(unchecked, id)
+			continue
+		}
+		m, err := loadManifest(filepath.Join(ezc, manifestName), false)
+		if err != nil {
+			unread = append(unread, id)
+			continue
+		}
+		switch registry.Uses(m, name) {
+		case registry.Required:
+			required = append(required, id)
+		case registry.Optional:
+			optional = append(optional, id)
+		}
+	}
+	if len(required) == 0 && len(optional) == 0 {
+		fmt.Fprintf(sys.Stdout, "No registered repo with a checkout here uses %s.\n", name)
+	}
+	say(sys.Stdout, "required by", required)
+	say(sys.Stdout, "optional in", optional)
+	say(sys.Stdout, "not checked (no checkout here)", unchecked)
+	say(sys.Stdout, "not checked (manifest cannot be read)", unread)
+	return nil
+}
+
+func say(w io.Writer, label string, ids []string) {
+	if len(ids) > 0 {
+		fmt.Fprintf(w, "%s: %s\n", label, strings.Join(ids, ", "))
+	}
 }

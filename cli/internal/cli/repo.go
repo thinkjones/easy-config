@@ -42,8 +42,8 @@ func newRepoCmd(sys System) *cobra.Command {
 	cmd := verbs(&cobra.Command{
 		Use:   "repo",
 		Short: "set up a repo's .ezc folder, and the store's list of the repos that use it",
-	}, "init, add, remove or list")
-	cmd.AddCommand(newRepoAddCmd(sys), newRepoRemoveCmd(sys), newRepoListCmd(sys))
+	}, "init, add, remove, list, check or uses")
+	cmd.AddCommand(newRepoAddCmd(sys), newRepoRemoveCmd(sys), newRepoListCmd(sys), newRepoCheckCmd(sys), newRepoUsesCmd(sys))
 	cmd.AddCommand(&cobra.Command{
 		Use:   "init",
 		Short: "create .ezc/ with a manifest, a local values file and the env.sh shim",

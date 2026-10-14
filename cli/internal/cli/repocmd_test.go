@@ -397,3 +397,152 @@ func TestRepoListNeverPrintsAnEscape(t *testing.T) {
 		t.Fatalf("got %q", out)
 	}
 }
+
+// checkoutOfRepo is a folder holding .ezc with manifest mToken and the given values; secret goes in common.enc.yaml
+// (encrypted for keys) when it is not empty.
+func checkoutOfRepo(t *testing.T, f *fake, values, secret string, keys ...string) string {
+	t.Helper()
+	top := t.TempDir()
+	dir := filepath.Join(top, ezcDir)
+	write(t, filepath.Join(dir, "manifest.yaml"), mToken)
+	write(t, filepath.Join(dir, "env.local.yaml"), values)
+	if secret != "" {
+		if err := f.backend.WritePolicy(dir, keys); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.backend.Set(filepath.Join(dir, "common.enc.yaml"), "TOKEN", secret); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return top
+}
+
+// checkFix is a store whose registry names gene, three registered repos and a checkout for two.
+func checkFix(t *testing.T) (repoFix, string, string) {
+	t.Helper()
+	x := repoStore(t, "")
+	good := checkoutOfRepo(t, x.f, "NAME: v4lue-good\nSIZE: 3\n", "s3cr3t-good", accessGene)
+	bad := checkoutOfRepo(t, x.f, "NAME: v4lue-bad\n", "s3cr3t-bad", accessGene)
+	for _, id := range []string{"o/bad", "o/good", "o/gone"} {
+		x.out("repo", "add", id)
+	}
+	if err := (recipients.Registry{Recipients: map[string]recipients.Recipient{"gene": accessEntry(accessGene)}}).Save(filepath.Join(x.store, ezcDir)); err != nil {
+		t.Fatal(err)
+	}
+	x.setConfig(config.Config{User: "gene", Checkouts: map[string]string{"o/good": good, "o/bad": bad}})
+	return x, good, bad
+}
+
+func noValues(t *testing.T, x repoFix, out string) {
+	t.Helper()
+	for _, v := range []string{"v4lue-good", "v4lue-bad", "s3cr3t-good", "s3cr3t-bad"} {
+		if strings.Contains(out, v) || strings.Contains(x.f.errOut.String(), v) {
+			t.Fatalf("a value is in the output: %s", v)
+		}
+	}
+}
+
+func TestRepoCheckAll(t *testing.T) {
+	x, good, bad := checkFix(t)
+	err := x.f.run("repo", "check", "--all")
+	wantExit(t, err, 1)
+	out := x.f.out.String()
+	noValues(t, x, out)
+	for _, want := range []string{
+		"o/bad (" + bad + ")\n  environment local: validation failed\n",
+		"o/good (" + good + ")\n  environment local ✓",
+		"o/gone: no checkout on this machine. Run ezc repo add inside it.\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	if !strings.HasSuffix(out, "2 checked, 1 failed, 1 with no checkout here\n") {
+		t.Errorf("last line of\n%s", out)
+	}
+}
+
+func TestRepoCheckOneAndTheWorkingRepo(t *testing.T) {
+	x, good, _ := checkFix(t)
+	write(t, filepath.Join(good, ezcDir, "env.prod.yaml"), "NAME: v4lue-good\nSIZE: 4\n")
+	out := x.out("repo", "check", "o/good", "prod")
+	if !strings.Contains(out, "o/good ("+good+")\n  ") || strings.Contains(out, "o/bad") || strings.Contains(out, "checked,") {
+		t.Fatalf("got %q", out)
+	}
+	if !strings.Contains(out, "environment prod") {
+		t.Fatalf("env not used: %q", out)
+	}
+	// No argument: the working repo, which is not registered.
+	x.f.out.Reset()
+	if err := x.f.run("repo", "check"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(x.f.out.String(), filepath.Base(x.f.wd)+" ("+x.f.wd+")\n  ") {
+		t.Fatalf("got %q", x.f.out.String())
+	}
+}
+
+func TestRepoCheckEncryptedFilesAgainstTheRegistry(t *testing.T) {
+	x := repoStore(t, "")
+	stale := checkoutOfRepo(t, x.f, "NAME: v4lue-good\nSIZE: 3\n", "s3cr3t-good", accessGene, accessStray)
+	x.out("repo", "add", "o/stale")
+	if err := (recipients.Registry{Recipients: map[string]recipients.Recipient{"gene": accessEntry(accessGene)}}).Save(filepath.Join(x.store, ezcDir)); err != nil {
+		t.Fatal(err)
+	}
+	x.setConfig(config.Config{User: "gene", Checkouts: map[string]string{"o/stale": stale}})
+	err := x.f.run("repo", "check", "o/stale")
+	wantExit(t, err, 1)
+	out := x.f.out.String()
+	noValues(t, x, out)
+	if !strings.Contains(out, "  ✗ common.enc.yaml is not encrypted for exactly the store's recipients. Run ezc repo rewrap o/stale.\n") {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestRepoCheckRefusals(t *testing.T) {
+	x, _, _ := checkFix(t)
+	err := x.f.run("repo", "check", "o/never")
+	if err == nil || err.Error() != "o/never is not in repos.yaml." {
+		t.Fatalf("got %v", err)
+	}
+	err = x.f.run("repo", "check", "a/b/\x1b[31m")
+	wantUsage(t, err, "repo ID")
+	if strings.Contains(err.Error(), "\x1b") {
+		t.Fatalf("echoed: %q", err)
+	}
+	wantUsage(t, x.f.run("repo", "check", "--all", "o/good", "prod"), "--all")
+	// A recorded checkout whose folder is gone is no checkout.
+	x.setConfig(config.Config{User: "gene", Checkouts: map[string]string{"o/good": filepath.Join(t.TempDir(), "gone")}})
+	x.f.out.Reset()
+	if err := x.f.run("repo", "check", "o/good"); err != nil || x.f.out.String() != "o/good: no checkout on this machine. Run ezc repo add inside it.\n" {
+		t.Fatalf("got %v, %q", err, x.f.out.String())
+	}
+}
+
+func TestRepoUses(t *testing.T) {
+	x := repoStore(t, "")
+	opt := "schemaVersion: v1\nrequired: {}\noptional:\n  API_URL: {type: str, desc: u}\n"
+	req := "schemaVersion: v1\nrequired:\n  API_URL: {type: str, desc: u}\n"
+	dirs := map[string]string{}
+	for id, m := range map[string]string{"a": req, "b": req, "c": opt, "e": empty} {
+		top := t.TempDir()
+		write(t, filepath.Join(top, ezcDir, "manifest.yaml"), m)
+		dirs[id] = top
+	}
+	for _, id := range []string{"a", "b", "c", "d", "e"} {
+		x.out("repo", "add", id)
+	}
+	x.setConfig(config.Config{User: "gene", Checkouts: dirs})
+	want := "required by: a, b\noptional in: c\nnot checked (no checkout here): d\n"
+	if out := x.out("repo", "uses", "API_URL"); out != want {
+		t.Fatalf("got %q", out)
+	}
+	if out := x.out("repo", "uses", "OTHER"); out != "No registered repo with a checkout here uses OTHER.\nnot checked (no checkout here): d\n" {
+		t.Fatalf("got %q", out)
+	}
+	err := x.f.run("repo", "uses", "1\x1b[31m")
+	wantUsage(t, err, "variable name")
+	if strings.Contains(err.Error(), "\x1b") {
+		t.Fatalf("echoed: %q", err)
+	}
+}
