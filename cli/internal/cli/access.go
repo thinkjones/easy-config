@@ -41,6 +41,8 @@ type access struct {
 	// letIn are the names a change may open a repo's secrets to without asking: its subject, and the names its
 	// confirm was asked about and let in.
 	letIn []string
+	// left are the repos with a checkout here that the last change's re-wrap left as it was.
+	left []string
 }
 
 // openAccess loads the store, its registry and this machine's public key. A store with no registry is an error.
@@ -427,6 +429,7 @@ func (a *access) uncommit(parent, made string) bool {
 // secrets would be opened to a name the change was neither about nor asked about is left as it was. No git runs in
 // a checkout, and what is written there is its owner's to commit.
 func (a *access) rewrapRepos(c change) {
+	a.left = nil
 	next := c.next
 	w := a.sys.Stdout
 	repos, found, _, err := loadRepos(a.sys)
@@ -456,6 +459,7 @@ func (a *access) rewrapRepos(c change) {
 		}
 		gains, err := repoGains(a.b, ezc, next)
 		if err != nil {
+			a.left = append(a.left, id)
 			fmt.Fprintf(w, "! %s could not be re-wrapped (%s). Run ezc repo rewrap %s.\n", id, firstLineOf(err), id)
 			continue
 		}
@@ -466,12 +470,16 @@ func (a *access) rewrapRepos(c change) {
 			}
 		}
 		if len(others) > 0 {
+			a.left = append(a.left, id)
 			// The names passed recipients.Load's rule. ezc repo rewrap asks about them.
 			fmt.Fprintf(w, "! %s: %s would also gain access to its secrets. Run ezc repo rewrap %s.\n", id, someNames(others), id)
 			continue
 		}
 		r, err := rewrapRepo(a.sys, a.b, ezc, next, c.retired)
 		var left *repoLeftError
+		if err != nil {
+			a.left = append(a.left, id)
+		}
 		switch {
 		case errors.As(err, &left):
 			fmt.Fprintf(w, "! %s could not be re-wrapped (%s), and %s in %s could not be put back as it was. Restore it with git there, then run ezc repo rewrap %s.\n", id, firstLineOf(err), strings.Join(left.files, ", "), ezc, id)

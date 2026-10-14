@@ -696,7 +696,18 @@ Needs this machine's key file, as every change to who can read the store does, a
 			// The rotation is on the remote, or the store has none: the old key opens nothing that is written from here on.
 			sayDue(sys.Stdout, was, list)
 			fmt.Fprintf(sys.Stdout, "✓ new key in %s\n", fresh)
-			fmt.Fprintf(sys.Stdout, "Back it up. The old key in %s no longer opens the store; delete it when you are sure.\n", old)
+			if len(a.left) == 0 {
+				fmt.Fprintf(sys.Stdout, "Back it up. The old key in %s no longer opens the store; delete it when you are sure.\n", old)
+				return nil
+			}
+			// The repos left as they were are still encrypted for the old key, and ezc repo rewrap now reads with the
+			// new one: deleting the old file could lose a repo's secrets.
+			target := a.left[0]
+			if len(a.left) > 1 {
+				target = "--all"
+			}
+			fmt.Fprintf(sys.Stdout, "Back it up. Keep the old key in %s: on this machine only it opens the secrets of %s, which were not re-wrapped. Re-wrap with it (%s=%s ezc repo rewrap %s), then delete it when you are sure.\n",
+				old, strings.Join(a.left, ", "), keyFileVariable, old, target)
 			return nil
 		},
 	}

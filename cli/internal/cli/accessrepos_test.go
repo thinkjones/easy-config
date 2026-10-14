@@ -277,6 +277,25 @@ func TestUserRotateRewrapsTheRepos(t *testing.T) {
 	noGitIn(t, f, filepath.Dir(app), filepath.Dir(web))
 }
 
+// A repo the rotation's re-wrap left as it was is still encrypted for the old key only, which ezc repo rewrap no
+// longer reads with: the old key is not to be deleted, and the command says how to re-wrap with it.
+func TestUserRotateKeepsTheOldKeyForTheReposItLeft(t *testing.T) {
+	f := newFake(t)
+	both := []string{accessGene, accessSam}
+	x, app, web := reposFix(t, f, map[string]recipients.Recipient{"gene": accessEntry(accessGene), "sam": accessEntry(accessSam)}, both, []string{accessGene})
+	before := folderBytes(t, app)
+	fresh, old := rotateNew(f, ""), setupKeyFile(f)
+	skipped := func(id string) string {
+		return "! " + id + ": sam would also gain access to its secrets. Run ezc repo rewrap " + id + ".\n"
+	}
+	keep := "Back it up. Keep the old key in " + old + ": on this machine only it opens the secrets of o/app, o/web, which were not re-wrapped. Re-wrap with it (" + keyFileVariable + "=" + old + " ezc repo rewrap --all), then delete it when you are sure.\n"
+	accessWant(t, f, "✓ rotate gene\n✓ pushed to "+x.bare+"\n"+skipped("o/app")+skipped("o/web")+"✓ new key in "+fresh+"\n"+keep, "user", "rotate")
+	if after := folderBytes(t, app); !mapsEqual(before, after) {
+		t.Fatal("o/app's files changed")
+	}
+	reposFor(t, f, web, []string{"common.enc.yaml"}, accessGene)
+}
+
 // A routine rotation lists no repo secret; a compromised key may have leaked them, so they are listed.
 func TestUserRotateCompromisedListsTheReposSecrets(t *testing.T) {
 	f := newFake(t)
