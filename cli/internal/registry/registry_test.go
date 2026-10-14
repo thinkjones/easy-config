@@ -102,6 +102,9 @@ func TestWithWithout(t *testing.T) {
 	if _, err := r.With("../x", Repo{}); err == nil || strings.Contains(err.Error(), "../x") {
 		t.Errorf("With of an invalid ID: %v", err)
 	}
+	if _, err := r.Without("\x1b[31mevil"); err == nil || strings.Contains(err.Error(), "\x1b") || strings.Contains(err.Error(), "evil") {
+		t.Errorf("Without of an invalid ID: %v", err)
+	}
 	if _, err := r.Without("c/d"); err == nil {
 		t.Error("Without of an unknown ID should fail")
 	}

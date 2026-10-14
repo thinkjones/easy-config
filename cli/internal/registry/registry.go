@@ -40,6 +40,8 @@ var idRE = regexp.MustCompile(`^(?:[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+|[A-Z
 
 const maxID = 100
 
+const errBadID = "not a valid repo ID (owner/repo, or a plain name of letters, digits, . _ and -)"
+
 // ValidID reports whether s can name a repo: owner/repo or a bare name of letters, digits, ".", "_" and "-",
 // at most 100 characters, never "." or ".." as a part.
 func ValidID(s string) bool {
@@ -141,7 +143,7 @@ func scalar(s string) string {
 // With returns a copy that also holds the repo.
 func (r Registry) With(id string, rep Repo) (Registry, error) {
 	if !ValidID(id) {
-		return Registry{}, errors.New("not a valid repo ID (owner/repo, or a plain name of letters, digits, . _ and -)")
+		return Registry{}, errors.New(errBadID)
 	}
 	if _, ok := r.Repos[id]; ok {
 		return Registry{}, fmt.Errorf("%s is already registered", id)
@@ -153,6 +155,9 @@ func (r Registry) With(id string, rep Repo) (Registry, error) {
 
 // Without returns a copy that does not hold the repo.
 func (r Registry) Without(id string) (Registry, error) {
+	if !ValidID(id) {
+		return Registry{}, errors.New(errBadID)
+	}
 	if _, ok := r.Repos[id]; !ok {
 		return Registry{}, fmt.Errorf("%s is not registered", id)
 	}
