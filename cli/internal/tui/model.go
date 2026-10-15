@@ -87,7 +87,7 @@ func New(d Deps, s Scope) *Model {
 	m := &Model{d: d, w: 120, h: 30, scope: s, plain: os.Getenv("NO_COLOR") != ""}
 	m.panes = [4]pane{
 		&valuesPane{m: m},
-		newStub(m, "access", "Loading…"),
+		&accessPane{m: m},
 		newStub(m, "repos", "Loading…"),
 		newStub(m, "doctor", "Loading…"),
 	}

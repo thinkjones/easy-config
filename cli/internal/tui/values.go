@@ -149,7 +149,7 @@ func (p *valuesPane) detail(v Value) []string {
 }
 
 func (p *valuesPane) hints() string {
-	return "s set  S set for " + p.m.env + "  u unset  r reveal  e env  g scope  p pull  P push"
+	return "s/S set  u unset  r reveal  e env  g scope  p/P pull/push"
 }
 
 func (p *valuesPane) help() [][2]string {
