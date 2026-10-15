@@ -214,3 +214,54 @@ func TestRepoCIFindingsFromTheStoreRegistry(t *testing.T) {
 		t.Errorf("output:\n%s", w.out)
 	}
 }
+
+func TestRepoWithoutLocalProvesTheUnnamedCase(t *testing.T) {
+	w := oldRepo(t)
+	os.Remove(filepath.Join(w.o.Dir, ".fs-config", "env.local.yaml"))
+	delete(w.tool.out, "local")
+	w.tool.out[""] = map[string]string{"A": "one"}
+	if err := Run(w.o); err != nil {
+		t.Fatalf("Run: %v\n%s", err, w.out)
+	}
+	out := w.out.String()
+	for _, want := range []string{"✓ (store): 1 names, identical", "✓ prod: 4 names, identical", "! with no environment named, ezc also loads this repo's common files; the old tool did not."} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if len(w.tool.cmds) != 2 || len(w.tool.cmds[0].Args) != 2 {
+		t.Errorf("old tool commands: %v", w.tool.cmds)
+	}
+}
+
+func TestRepoUnnamedCaseLoadsTheRepoFiles(t *testing.T) {
+	w := oldRepo(t)
+	old := filepath.Join(w.o.Dir, ".fs-config")
+	os.Remove(filepath.Join(old, "env.local.yaml"))
+	os.Remove(filepath.Join(old, "env.prod.yaml"))
+	write(t, filepath.Join(old, "common.yaml"), "R: two\nR: again\n")
+	w.tool.out[""] = map[string]string{"A": "one"}
+	before := snapshot(t, w.o.Dir)
+	err := Run(w.o)
+	if err == nil || !strings.Contains(err.Error(), ".ezc/common.yaml") {
+		t.Fatalf("err = %v\n%s", err, w.out)
+	}
+	sameSnapshot(t, before, snapshot(t, w.o.Dir))
+}
+
+func TestRepoUnnamedCaseSaysNothingWithoutCommonFiles(t *testing.T) {
+	w := oldRepo(t)
+	old := filepath.Join(w.o.Dir, ".fs-config")
+	for _, f := range []string{"env.local.yaml", "common.yaml", "common.enc.yaml"} {
+		os.Remove(filepath.Join(old, f))
+	}
+	delete(w.tool.out, "local")
+	w.tool.out[""] = map[string]string{"A": "one"}
+	w.tool.out["prod"] = map[string]string{"A": "one", "P": "four"}
+	if err := Run(w.o); err != nil {
+		t.Fatalf("Run: %v\n%s", err, w.out)
+	}
+	if strings.Contains(w.out.String(), "with no environment named") {
+		t.Errorf("note printed with no common files:\n%s", w.out)
+	}
+}

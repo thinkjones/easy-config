@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -134,7 +136,10 @@ func runRepo(o Options) error {
 		before map[string]string
 	}
 	var proofs []proof
-	if len(envs) == 0 {
+	// With no environment named and no env.local.yaml, the old tool composes the store alone: that case is proved
+	// too, whenever local is not one of the repo's environments.
+	unnamed := !slices.Contains(envs, resolve.DefaultEnv)
+	if unnamed {
 		before, err := o.before("", false)
 		if err != nil {
 			return err
@@ -170,8 +175,19 @@ func runRepo(o Options) error {
 	if !proved {
 		return o.notProved()
 	}
-	if len(envs) == 0 {
-		stage.notes = append(stage.notes, "! with no environment named, ezc also loads this repo's common files; the old tool did not.")
+	if unnamed {
+		// ezc, with no environment named, also loads the repo's common files: they must load, and a change is said.
+		alone, err := o.after(resolve.Options{StoreDir: o.StoreEzc}, stage.dir)
+		if err != nil {
+			return err
+		}
+		withRepo, err := o.after(resolve.Options{StoreDir: o.StoreEzc, RepoDir: stage.dir}, stage.dir)
+		if err != nil {
+			return err
+		}
+		if !maps.Equal(alone, withRepo) {
+			stage.notes = append(stage.notes, "! with no environment named, ezc also loads this repo's common files; the old tool did not.")
+		}
 	}
 	mise := filepath.Join(o.Dir, "mise.toml")
 	oldMise, hasMise, err := readMaybe(mise)

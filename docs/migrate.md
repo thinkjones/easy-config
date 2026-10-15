@@ -36,7 +36,7 @@ For the store it composes the store alone. For a repo it composes every environm
 The environment would change. Nothing was changed.
 ```
 
-and migrate exits 1. A repo with no `env.<name>.yaml` is proved for the store alone, and migrate says that ezc, with no environment named, also loads the repo's common files, which fsconfig did not.
+and migrate exits 1. When the repo has no `env.local.yaml`, the case with no environment named is proved too: fsconfig then composes the store alone, so migrate proves the store alone, makes sure ezc can load the repo's common files, and says when ezc, with no environment named, would load them as well, which fsconfig did not.
 
 ## What it changes
 
