@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -31,6 +32,14 @@ Every change it makes is an ezc command, shown before it runs, and runs as it wo
 		RunE: func(*cobra.Command, []string) error {
 			if !sys.StdinIsTerminal() || sys.StdoutIsTerminal == nil || !sys.StdoutIsTerminal() || sys.RunTUI == nil {
 				return usagef("ezc tui needs a terminal. Use the commands instead; ezc help lists them.")
+			}
+			// With no store at the default location, the wizard sets one up and then opens the views.
+			p, explicit, err := storePathsLoose(sys)
+			if err != nil {
+				return err
+			}
+			if info, err := os.Stat(p.StoreEzc()); !explicit && (err != nil || !info.IsDir()) {
+				return sys.RunTUI(tui.NewWizard(tuiDeps(sys), true))
 			}
 			scope := tui.RepoScope
 			if global {

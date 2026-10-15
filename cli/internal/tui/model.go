@@ -69,6 +69,8 @@ type Model struct {
 	out   *Outcome    // the output panel, when open
 
 	in *asking // a text input, when one has focus
+
+	wiz *wizard // the setup wizard, when it runs
 }
 
 // asking is a question in the status line.
@@ -110,7 +112,12 @@ func (m *Model) envLabel() string {
 func (m *Model) Scope() Scope { return m.scope }
 
 // Init loads the header; the first view loads once the header says which environment applies.
-func (m *Model) Init() tea.Cmd { return m.loadHeader() }
+func (m *Model) Init() tea.Cmd {
+	if m.wiz != nil {
+		return nil
+	}
+	return m.loadHeader()
+}
 
 func (m *Model) loadHeader() tea.Cmd {
 	return func() tea.Msg {
@@ -243,6 +250,8 @@ func (m *Model) render() []string {
 		body = m.box.render(m.w, m.busy)
 	case m.out != nil:
 		body = m.outputPanel()
+	case m.wiz != nil:
+		body = m.wizardBody()
 	default:
 		body = m.panes[m.cur].body(m.w, bodyH)
 	}
@@ -261,6 +270,9 @@ func (m *Model) render() []string {
 
 // headerLine is "ezc  store <store> · env <env>", with how the store stands on the right.
 func (m *Model) headerLine() string {
+	if m.wiz != nil {
+		return fit(stTitle.Render("ezc")+"  "+stText.Render("setup"), m.w)
+	}
 	left := stTitle.Render("ezc") + "  " + stText.Render("store "+m.head.Store+" · env "+m.envLabel())
 	var right []string
 	h := m.head
@@ -305,6 +317,9 @@ func (m *Model) statusLine() string {
 
 // footer is the views, the current view's keys and help.
 func (m *Model) footer() string {
+	if m.wiz != nil {
+		return fit(stMuted.Render("esc goes back · ctrl+c quits"), m.w)
+	}
 	var parts []string
 	for i, name := range viewNames {
 		label := fmt.Sprintf("%d %s", i+1, name)
@@ -328,7 +343,14 @@ func (m *Model) outputPanel() []string {
 		title = stError.Render("failed")
 	}
 	lines := append([]string{}, m.out.Lines...)
-	return panel(title, append(lines, "", stMuted.Render("any key to go back")), m.w, true)
+	next := "any key to go back"
+	switch {
+	case m.wiz != nil && m.out.OK && m.wiz.then:
+		next = "any key to open ezc"
+	case m.wiz != nil && m.out.OK:
+		next = "any key to finish"
+	}
+	return panel(title, append(lines, "", stMuted.Render(next)), m.w, true)
 }
 
 // ask opens a text input in the status line; submit gets its value on enter.

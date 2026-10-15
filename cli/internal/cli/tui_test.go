@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -272,3 +273,45 @@ func TestTUICommandNeedsATerminal(t *testing.T) {
 }
 
 var _ tea.Model = (*tui.Model)(nil)
+
+func TestTUIOpensTheWizardWithoutAStore(t *testing.T) {
+	f := newFake(t)
+	f.tty, f.outTTY = true, true
+	if err := f.run("tui"); err != nil || len(f.tuis) != 1 {
+		t.Fatalf("%v, %d runs", err, len(f.tuis))
+	}
+	if m := f.tuis[0].(*tui.Model); !m.Wizard() {
+		t.Fatal("not the wizard")
+	}
+	// With a store, the views.
+	x := repoStore(t, "")
+	x.f.tty, x.f.outTTY = true, true
+	if err := x.f.run("tui"); err != nil || x.f.tuis[0].(*tui.Model).Wizard() {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestSetupOnATerminalOpensTheWizard(t *testing.T) {
+	f := newFake(t)
+	f.tty, f.outTTY = true, true
+	if err := f.run("setup"); err != nil || len(f.tuis) != 1 || !f.tuis[0].(*tui.Model).Wizard() {
+		t.Fatalf("%v, %d runs", err, len(f.tuis))
+	}
+	entries, _ := os.ReadDir(f.env["EZC_HOME"])
+	if len(entries) != 0 {
+		t.Fatalf("setup wrote %v", entries)
+	}
+	// A flag, stdout that is no terminal, or no RunTUI: the plain path.
+	g := newFake(t)
+	g.tty, g.outTTY = true, true
+	g.run("setup", "--new-local", "--name", "gene")
+	if len(g.tuis) != 0 {
+		t.Fatal("the wizard opened with a flag")
+	}
+	h := newFake(t)
+	h.tty, h.stdin = true, "9\n"
+	h.run("setup")
+	if len(h.tuis) != 0 {
+		t.Fatal("the wizard opened with stdout no terminal")
+	}
+}

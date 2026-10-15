@@ -56,11 +56,20 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		case "esc":
 			m.box = nil
 			m.setStatus("cancelled", false)
+		case "i":
+			if m.wiz != nil && m.wiz.choice != 3 {
+				m.wiz.install = !m.wiz.install
+				m.wizardConfirm()
+			}
 		}
 		return nil
 	}
 	if m.out != nil {
+		ok := m.out.OK
 		m.out, m.box = nil, nil
+		if m.wiz != nil {
+			return m.wizardDone(ok)
+		}
 		return m.reload()
 	}
 	if m.in != nil {
@@ -76,6 +85,9 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		var cmd tea.Cmd
 		m.in.ti, cmd = m.in.ti.Update(msg)
 		return cmd
+	}
+	if m.wiz != nil {
+		return m.wizardKey(k)
 	}
 	switch k {
 	case "1", "2", "3", "4":

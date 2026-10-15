@@ -16,6 +16,7 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/recipients"
 	"github.com/thinkjones/easy-config/cli/internal/resolve"
 	"github.com/thinkjones/easy-config/cli/internal/setup"
+	"github.com/thinkjones/easy-config/cli/internal/tui"
 )
 
 const nameRule = "lower case letters, digits and -, starting with a letter or a digit"
@@ -123,6 +124,10 @@ func runSetup(sys System, o setupFlags) error {
 	e := setup.Env{Git: storeGit(sys), Backend: be, Run: sys.Exec, LookPath: sys.LookPath, Now: sys.Now, Paths: p, GOOS: sys.GOOS}
 	tty := sys.StdinIsTerminal()
 	has := setup.HasStore(e)
+	// On a terminal, with nothing said, the wizard asks; it runs this command again with the flags it gathered.
+	if !has && chosen == 0 && o.name == "" && !o.yes && tty && sys.StdoutIsTerminal != nil && sys.StdoutIsTerminal() && sys.RunTUI != nil {
+		return sys.RunTUI(tui.NewWizard(tuiDeps(sys), false))
+	}
 	if !has && chosen == 0 && !tty {
 		return usagef("ezc setup: say --new-local, --new-github owner/repo or --store <repo>.")
 	}
