@@ -98,6 +98,7 @@ Who can read the store is written in one file, `recipients.yaml`, and every encr
 | `ezc user list`, `add`, `requests`, `approve`, `deny`, `remove`, `rotate` | See and change who can read the store. |
 | `ezc bot add`, `remove`, `rotate` | Give CI a key of its own, take it away or replace it. |
 | `ezc tui` | Browse and change values, access and repos in a terminal UI; every change is a command shown first. |
+| `ezc migrate` | Move a store or a repo from fsconfig's `.fs-config/` to `.ezc/`, proving the environment unchanged. |
 | `ezc doctor` | Report the health of the machine, the store and the repo, with the fix for each finding. |
 | `ezc manifest validate`, `ezc manifest schema` | Check that the manifest is well formed; print its JSON Schema. |
 | `ezc codegen python` | Generate a pydantic config module from the manifest. |
@@ -114,6 +115,7 @@ Every flag and every exit status is in the [command reference](docs/reference.md
 | [Repos](docs/repos.md) | `repos.yaml`, where each repo is checked out, checking every repo, and how a repo's own secrets follow the store's recipients. |
 | [Bots and CI](docs/ci.md) | A key for a bot, the two secrets a job needs, and a GitHub Actions workflow. |
 | [The TUI](docs/tui.md) | `ezc tui`: the four views, their keys, what a change runs, and the setup wizard. |
+| [Migrating from fsconfig](docs/migrate.md) | `ezc migrate`: the order, the proof, what it changes and what it reports. |
 | [Reference](docs/reference.md) | Every command, the files, encryption and the resolution rules. |
 | [When something is wrong](docs/troubleshooting.md) | What `ezc doctor` reports and what to do about it. |
 

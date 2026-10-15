@@ -81,7 +81,7 @@ func stageRepo(o Options) (staged, error) {
 // manifest's $schema replaced. A folder or a link inside is an error: the migration would drop it.
 func (o Options) stage(renames map[string]string) (staged, error) {
 	var s staged
-	old := filepath.Join(o.Dir, oldDir)
+	old := filepath.Join(o.Dir, OldDir)
 	entries, err := os.ReadDir(old)
 	if err != nil {
 		return s, fmt.Errorf("could not read .fs-config/ (%s).", reason(err))

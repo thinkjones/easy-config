@@ -126,6 +126,10 @@ func policyFiles(sys System) []string {
 // keyFileVariable names, in the environment, the key file the default backend reads with; it wins over the config's.
 const keyFileVariable = "SOPS_AGE_KEY_FILE"
 
+// keyTextVariable names, in the environment, the key text the default backend reads; a CI job of the tool ezc
+// replaced passed its key in it, which ezc migrate reports.
+const keyTextVariable = "SOPS_AGE_KEY"
+
 // keySource says where the default backend finds the key, for display, and whether a key is there: the key
 // a CI job is given, else the key in the environment, else the key file the environment names, else the config's,
 // else the default key file (shown with ~).
@@ -141,8 +145,8 @@ func keySource(sys System) (note string, found bool) {
 	if sys.Getenv(botSecret) != "" {
 		return botSecret, true
 	}
-	if sys.Getenv("SOPS_AGE_KEY") != "" {
-		return "SOPS_AGE_KEY", true
+	if sys.Getenv(keyTextVariable) != "" {
+		return keyTextVariable, true
 	}
 	if file := sys.Getenv(keyFileVariable); file != "" {
 		_, err := os.Stat(file)
@@ -167,8 +171,8 @@ func keyInEnvironment(sys System) (variable, file string) {
 	if sys.Getenv(botSecret) != "" {
 		return botSecret, ""
 	}
-	if sys.Getenv("SOPS_AGE_KEY") != "" {
-		return "SOPS_AGE_KEY", ""
+	if sys.Getenv(keyTextVariable) != "" {
+		return keyTextVariable, ""
 	}
 	if file := sys.Getenv(keyFileVariable); file != "" {
 		return keyFileVariable, file
@@ -208,7 +212,7 @@ func keyFile(sys System) string {
 // environment as text, or there is no home to look in. The public half of the key is read from this file.
 func keyFileInUse(sys System) (string, bool) {
 	if sys.Backend == nil {
-		if sys.Getenv(botSecret) != "" || sys.Getenv("SOPS_AGE_KEY") != "" {
+		if sys.Getenv(botSecret) != "" || sys.Getenv(keyTextVariable) != "" {
 			return "", false
 		}
 		if file := sys.Getenv(keyFileVariable); file != "" {

@@ -26,8 +26,8 @@ import (
 // OldTool is the command of the tool ezc replaces; the proof runs it to compose the environment as it stands.
 const OldTool = "fsconfig"
 
-// oldDir is the old tool's folder, in a store and in a repo.
-const oldDir = ".fs-config"
+// OldDir is the old tool's folder, in a store and in a repo.
+const OldDir = ".fs-config"
 
 // newDir is ezc's.
 const newDir = ".ezc"
@@ -56,7 +56,7 @@ var ErrNotProved = errors.New("the environment would change")
 // Run migrates the store or the repo in o.Dir. Any error but ErrNotProved has printed nothing about itself and
 // is a sentence for the caller to print.
 func Run(o Options) error {
-	old := filepath.Join(o.Dir, oldDir)
+	old := filepath.Join(o.Dir, OldDir)
 	if st, err := os.Stat(old); err != nil || !st.IsDir() {
 		return errors.New("Nothing to migrate here: no .fs-config/ folder.")
 	}
@@ -125,7 +125,7 @@ func runRepo(o Options) error {
 		return errors.New("Set up the ezc store first: run ezc migrate in the old store's folder, commit and push it, then ezc setup --store <it>.")
 	}
 	o.say("Migrating the repo in %s", o.Dir)
-	envs, err := oldEnvs(filepath.Join(o.Dir, oldDir))
+	envs, err := oldEnvs(filepath.Join(o.Dir, OldDir))
 	if err != nil {
 		return err
 	}
@@ -209,7 +209,7 @@ func runRepo(o Options) error {
 		}
 		o.say("+ mise.toml rewritten for ezc")
 	}
-	if err := os.RemoveAll(filepath.Join(o.Dir, oldDir)); err != nil {
+	if err := os.RemoveAll(filepath.Join(o.Dir, OldDir)); err != nil {
 		o.say("! could not remove .fs-config/ (%s); remove it yourself.", reason(err))
 	} else {
 		o.say("- .fs-config/ removed")
@@ -334,3 +334,15 @@ func reason(err error) string {
 	}
 	return "it failed"
 }
+
+// Short and Long are ezc migrate's help, here because they name the old tool.
+const (
+	Short = "convert a store or a repo from fsconfig's .fs-config/ to .ezc/, proving the environment unchanged"
+	Long  = `Convert the store or the repo in the working directory from fsconfig's .fs-config/ folder to ezc's .ezc/.
+
+Run it in the old store first: .ezc/ is written beside .fs-config/ (global.* become common.*, recipients.yaml is converted, its bots' repos become repos.yaml, and the encryption policy is written for its keys). Commit and push it, run ezc setup --store on each machine, then run ezc migrate in each repo: .ezc/ with the env.sh shim replaces .fs-config/, and mise.toml is rewritten to ezc.
+
+Nothing is written until the proof passes: the environment is composed by fsconfig codegen shell (which must be on PATH) and by ezc, for the store alone or for every environment the repo names, and every name and value must be identical. Differences are listed by name, never by value. What still names fsconfig, and CI that passes its key in the old variable, is reported, not changed. No git runs: review the result and commit it.
+
+--dry-run does everything but write.`
+)

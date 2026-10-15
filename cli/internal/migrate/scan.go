@@ -16,7 +16,7 @@ import (
 var oldName = regexp.MustCompile(`(?i)fs[-_]?config`)
 
 // skipped are the folders the scan for the old tool's name does not enter.
-var skipped = []string{".git", newDir, oldDir, "node_modules", ".venv", "venv", "vendor", "dist", "build"}
+var skipped = []string{".git", newDir, OldDir, "node_modules", ".venv", "venv", "vendor", "dist", "build"}
 
 const (
 	maxScanned  = 1 << 20 // bytes; a bigger file is not text anyone edits by hand

@@ -31,7 +31,7 @@ func (o Options) before(env string, store bool) (map[string]string, error) {
 		}
 		defer os.RemoveAll(empty)
 		dir = empty
-		vars = append(vars, "FS_CONFIG_HOME="+o.Dir+string(os.PathSeparator)+oldDir)
+		vars = append(vars, "FS_CONFIG_HOME="+o.Dir+string(os.PathSeparator)+OldDir)
 	}
 	args := []string{"codegen", "shell"}
 	if env != "" {
