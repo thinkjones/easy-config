@@ -6,6 +6,13 @@ ezc  store github.com/o/store · env local
 │ ctrl+r    load again                                                                                                 │
 │ ?         this help                                                                                                  │
 │ q         quit                                                                                                       │
+│ s         set the selected name for every environment                                                                │
+│ S         set it for this environment only                                                                           │
+│ u         unset it from the file that supplies it                                                                    │
+│ r         reveal a secret, until the selection moves                                                                 │
+│ e         change the environment                                                                                     │
+│ g         the store's values, or the repo's                                                                          │
+│ p P       pull, push the store                                                                                       │
 │                                                                                                                      │
 │ esc or ? to close                                                                                                    │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
@@ -20,11 +27,4 @@ ezc  store github.com/o/store · env local
                                                                                                                         
                                                                                                                         
                                                                                                                         
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-1 values  2 access  3 repos  4 doctor  ? help                                                                           
+1 values  2 access  3 repos  4 doctor  ? help     s set  S set for local  u unset  r reveal  e env  g scope  p pull  P …

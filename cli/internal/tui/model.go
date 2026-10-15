@@ -86,7 +86,7 @@ type headerLoaded struct {
 func New(d Deps, s Scope) *Model {
 	m := &Model{d: d, w: 120, h: 30, scope: s, plain: os.Getenv("NO_COLOR") != ""}
 	m.panes = [4]pane{
-		newStub(m, "values", "No values."),
+		&valuesPane{m: m},
 		newStub(m, "access", "Loading…"),
 		newStub(m, "repos", "Loading…"),
 		newStub(m, "doctor", "Loading…"),
@@ -128,6 +128,12 @@ func (m *Model) reload() tea.Cmd {
 	}
 	m.stale[m.cur] = false
 	return tea.Batch(m.loadHeader(), m.panes[m.cur].load())
+}
+
+// changeEnv makes env the environment of every view, and loads the current one again.
+func (m *Model) changeEnv(env string) tea.Cmd {
+	m.env = env
+	return m.reload()
 }
 
 func (m *Model) forgetAll() {
@@ -285,11 +291,11 @@ func (m *Model) footer() string {
 			parts = append(parts, stMuted.Render(label))
 		}
 	}
-	line := strings.Join(parts, "  ")
+	line := strings.Join(parts, "  ") + "  " + stMuted.Render("? help")
 	if hints := m.panes[m.cur].hints(); hints != "" {
 		line += "     " + stText.Render(hints)
 	}
-	return fit(line+"  "+stMuted.Render("? help"), m.w)
+	return fit(line, m.w)
 }
 
 // outputPanel is what the last command printed.

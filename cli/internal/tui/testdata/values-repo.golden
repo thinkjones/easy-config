@@ -1,0 +1,30 @@
+ezc  store github.com/o/store · env local                                                                               
+╭─ values ── repo o/app ───────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ▶ LLM_API_KEY    secret   repo/common.enc.yaml  ••••••••            used by 3 repos                                  │
+│   CF_ACCOUNT_ID  str      store/common.yaml     a1b2c3d4e5f6        used by 5 repos                                  │
+│   BATCH_SIZE     int      store/env.local.yaml  20                  overrides common.yaml                            │
+│   PORT           int      (not set)                                                                                  │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ detail ── LLM_API_KEY ──────────────────────────────────────────────────────────────────────────────────────────────╮
+│ API key for whichever provider LLM_PROVIDER names                                                                    │
+│ required by  o/digest · o/website · o/gascity                                                                        │
+│ ! rotation due: readable by removed sam (2026-10-01)                                                                 │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                                        
+1 values  2 access  3 repos  4 doctor  ? help     s set  S set for local  u unset  r reveal  e env  g scope  p pull  P …

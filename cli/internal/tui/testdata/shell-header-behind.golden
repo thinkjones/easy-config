@@ -1,5 +1,5 @@
 ezc  store github.com/o/store · env local                                                        ▲ 2 behind  ● 1 request
-╭─ values ─────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+╭─ values ── repo o/app ───────────────────────────────────────────────────────────────────────────────────────────────╮
 │ No values.                                                                                                           │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                                                                         
@@ -27,4 +27,4 @@ ezc  store github.com/o/store · env local                                      
                                                                                                                         
                                                                                                                         
                                                                                                                         
-1 values  2 access  3 repos  4 doctor  ? help                                                                           
+1 values  2 access  3 repos  4 doctor  ? help     s set  S set for local  u unset  r reveal  e env  g scope  p pull  P …

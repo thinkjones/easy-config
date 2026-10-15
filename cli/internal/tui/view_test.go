@@ -159,7 +159,10 @@ type fakeRepos struct {
 	envs  []string
 }
 
-func (f *fakeRepos) Load(env string) ([]Repo, error) { f.envs = append(f.envs, env); return f.repos, f.err }
+func (f *fakeRepos) Load(env string) ([]Repo, error) {
+	f.envs = append(f.envs, env)
+	return f.repos, f.err
+}
 
 type fakeDoctor struct {
 	sections []Section
