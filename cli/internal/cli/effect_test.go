@@ -170,6 +170,8 @@ func effectIntruder(t *testing.T, f *fake) storeWriteFix {
 		t.Fatalf("commit: %v %v", done, err)
 	}
 	x.push(x.store)
+	// bot add's --repo must be registered.
+	registerRepos(t, x, "o/b")
 	return x
 }
 
@@ -239,7 +241,7 @@ func TestAccessChangeAsksBeforeItLetsSomebodyElseIn(t *testing.T) {
 
 	f.stdin = "y\n"
 	out, errOut, err := accessRun(f, "user", "add", "zed", "fake1dd04")
-	if err != nil || out != effectAlso+"✓ add zed\n✓ pushed to "+x.bare+"\n" || errOut != effectAsk {
+	if err != nil || out != effectAlso+"✓ add zed\n✓ pushed to "+x.bare+"\n"+noCheckoutHere("o/b") || errOut != effectAsk {
 		t.Fatalf("%v\nstdout %q\nstderr %q", err, out, errOut)
 	}
 }

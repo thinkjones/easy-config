@@ -123,6 +123,9 @@ func policyFiles(sys System) []string {
 	return []string{sops.PolicyFile}
 }
 
+// keyFileVariable names, in the environment, the key file the default backend reads with; it wins over the config's.
+const keyFileVariable = "SOPS_AGE_KEY_FILE"
+
 // keySource says where the default backend finds the key, for display, and whether a key is there: the key
 // a CI job is given, else the key in the environment, else the key file the environment names, else the config's,
 // else the default key file (shown with ~).
@@ -141,7 +144,7 @@ func keySource(sys System) (note string, found bool) {
 	if sys.Getenv("SOPS_AGE_KEY") != "" {
 		return "SOPS_AGE_KEY", true
 	}
-	if file := sys.Getenv("SOPS_AGE_KEY_FILE"); file != "" {
+	if file := sys.Getenv(keyFileVariable); file != "" {
 		_, err := os.Stat(file)
 		return file, err == nil
 	}
@@ -167,8 +170,8 @@ func keyInEnvironment(sys System) (variable, file string) {
 	if sys.Getenv("SOPS_AGE_KEY") != "" {
 		return "SOPS_AGE_KEY", ""
 	}
-	if file := sys.Getenv("SOPS_AGE_KEY_FILE"); file != "" {
-		return "SOPS_AGE_KEY_FILE", file
+	if file := sys.Getenv(keyFileVariable); file != "" {
+		return keyFileVariable, file
 	}
 	return "", ""
 }
@@ -208,7 +211,7 @@ func keyFileInUse(sys System) (string, bool) {
 		if sys.Getenv(botSecret) != "" || sys.Getenv("SOPS_AGE_KEY") != "" {
 			return "", false
 		}
-		if file := sys.Getenv("SOPS_AGE_KEY_FILE"); file != "" {
+		if file := sys.Getenv(keyFileVariable); file != "" {
 			return file, true
 		}
 	}

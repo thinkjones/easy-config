@@ -488,17 +488,11 @@ func sameRemote(remote, source string) bool {
 	if r == s {
 		return true
 	}
-	if !setup.IsSlug(source) || !onGitHub(remote) {
+	if !setup.IsSlug(source) {
 		return false
 	}
-	// What follows the host is the whole of the owner/repo: github.com/mirror/owner/repo is another repo.
-	shown := bare(gitstore.ShowURL(remote))
-	if _, rest, isURL := strings.Cut(shown, "://"); isURL {
-		_, path, _ := strings.Cut(rest, "/")
-		return path == s
-	}
-	_, path, _ := strings.Cut(shown, ":")
-	return path == s
+	slug, ok := githubSlug(remote)
+	return ok && slug == s
 }
 
 // remoteNote is "remote <url>" for a message, the URL without what it may carry besides the host and the path.

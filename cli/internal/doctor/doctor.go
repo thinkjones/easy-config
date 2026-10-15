@@ -145,6 +145,11 @@ type Options struct {
 	// Due is how many entries rotation-due.yaml holds, DueErr why it could not be read.
 	Due    int
 	DueErr string
+	// RepoRecipients is set when the repo's encrypted files were compared with the store's registry: the store has
+	// one and the repo has an encrypted file. RepoDiffer are the files that differ, RepoDifferErr why that could not be told.
+	RepoRecipients bool
+	RepoDiffer     []string
+	RepoDifferErr  string
 }
 
 // Collect gathers the picture Options asks for. It never fails: whatever it cannot read is a Broken item.
@@ -383,7 +388,29 @@ func repo(o Options) []Item {
 		items = append(items, environmentItem(o, m))
 	}
 	items = append(items, policyItem(o, o.RepoDir))
+	items = append(items, repoRecipientsItem(o)...)
 	return append(items, filesItems(o, o.RepoDir, false)...)
+}
+
+// repoRecipientsItem says whether the repo's encrypted files are encrypted for the store's registry. It is left out
+// when they were not compared.
+func repoRecipientsItem(o Options) []Item {
+	const fix = "Run ezc repo rewrap."
+	switch {
+	case !o.RepoRecipients:
+		return nil
+	case o.RepoDifferErr != "":
+		return []Item{{Broken, "recipients", o.RepoDifferErr, ""}}
+	case len(o.RepoDiffer) == 1:
+		return []Item{{Broken, "recipients", "1 file is not encrypted for the store's registry: " + displayName(o.RepoDiffer[0]), fix}}
+	case len(o.RepoDiffer) > 1:
+		names := make([]string, len(o.RepoDiffer))
+		for i, f := range o.RepoDiffer {
+			names[i] = displayName(f)
+		}
+		return []Item{{Broken, "recipients", fmt.Sprintf("%d files are not encrypted for the store's registry: %s", len(o.RepoDiffer), someNames(names)), fix}}
+	}
+	return []Item{{OK, "recipients", "every file is encrypted for the store's recipients", ""}}
 }
 
 // manifestItem loads dir's manifest. absent is the state of the item when there is none.

@@ -664,3 +664,32 @@ func TestGitItemVersion(t *testing.T) {
 		t.Errorf("%+v", it)
 	}
 }
+
+func TestRepoRecipientsItem(t *testing.T) {
+	o := healthy(t)
+	if slices.Contains(labels(Collect(o), "repo"), "recipients") {
+		t.Error("recipients shown in the repo when nothing was compared")
+	}
+	o.RepoRecipients = true
+	if it := item(t, Collect(o), "repo", "recipients"); it != (Item{OK, "recipients", "every file is encrypted for the store's recipients", ""}) {
+		t.Errorf("agree: %+v", it)
+	}
+	o.RepoDiffer = []string{"common.enc.yaml"}
+	want := Item{Broken, "recipients", "1 file is not encrypted for the store's registry: common.enc.yaml", "Run ezc repo rewrap."}
+	if it := item(t, Collect(o), "repo", "recipients"); it != want {
+		t.Errorf("differ: %+v", it)
+	}
+	o.RepoDiffer = []string{"common.enc.yaml", "env.prod.enc.yaml"}
+	want = Item{Broken, "recipients", "2 files are not encrypted for the store's registry: common.enc.yaml, env.prod.enc.yaml", "Run ezc repo rewrap."}
+	if it := item(t, Collect(o), "repo", "recipients"); it != want {
+		t.Errorf("differ: %+v", it)
+	}
+	o.RepoDiffer = []string{"bad\x1b[31mname.enc.yaml"}
+	if it := item(t, Collect(o), "repo", "recipients"); strings.Contains(it.Detail, "\x1b") {
+		t.Errorf("name not made safe: %q", it.Detail)
+	}
+	o.RepoDiffer, o.RepoDifferErr = nil, "common.enc.yaml: cannot read this file"
+	if it := item(t, Collect(o), "repo", "recipients"); it.State != Broken || it.Detail != o.RepoDifferErr {
+		t.Errorf("error: %+v", it)
+	}
+}

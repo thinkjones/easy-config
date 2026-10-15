@@ -17,6 +17,7 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/check"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
 	"github.com/thinkjones/easy-config/cli/internal/recipients"
+	"github.com/thinkjones/easy-config/cli/internal/registry"
 	"github.com/thinkjones/easy-config/cli/internal/resolve"
 	"github.com/thinkjones/easy-config/cli/internal/valuefile"
 )
@@ -503,15 +504,51 @@ func noEcho(cmd *cobra.Command, extra string) {
 	})
 }
 
+// unsetUsers is the guard on unsetting a name of the store: a registered repo that requires it refuses, unless
+// force; repos that only list it, and repos that could not be looked at, are `!` lines. It writes nothing. A
+// repos.yaml that cannot be read checks no repo: that refuses too, and with force it is a `!` line.
+func unsetUsers(sys System, name string, force bool) error {
+	if _, _, _, err := loadRepos(sys); err != nil {
+		// Whoever can push to the store wrote the file: what is wrong with it is repo list's to say.
+		if !force {
+			return fmt.Errorf("%s cannot be read, so no repo was checked for %s. Run ezc repo list to see why, or pass --force to unset it anyway.", registry.File, name)
+		}
+		fmt.Fprintf(sys.Stdout, "! %s cannot be read, so no repo was checked for %s.\n", registry.File, name)
+		return nil
+	}
+	required, optional, unchecked, unread, err := repoUsers(sys, name)
+	if err != nil {
+		return err
+	}
+	if len(required) > 0 && !force {
+		return fmt.Errorf("%s is required by %s. Pass --force to unset it anyway, or take it out of their manifests first.", name, strings.Join(required, ", "))
+	}
+	if len(required) > 0 {
+		fmt.Fprintf(sys.Stdout, "! %s is required by %s.\n", name, strings.Join(required, ", "))
+	}
+	if len(optional) > 0 {
+		fmt.Fprintf(sys.Stdout, "! %s is optional in %s.\n", name, strings.Join(optional, ", "))
+	}
+	if len(unchecked) > 0 {
+		fmt.Fprintf(sys.Stdout, "! not checked, no checkout here: %s\n", strings.Join(unchecked, ", "))
+	}
+	if len(unread) > 0 {
+		fmt.Fprintf(sys.Stdout, "! not checked, manifest cannot be read: %s\n", strings.Join(unread, ", "))
+	}
+	return nil
+}
+
 func newUnsetCmd(sys System) *cobra.Command {
 	var (
-		global, undeclare bool
-		env               string
+		global, undeclare, force bool
+		env                      string
 	)
 	cmd := &cobra.Command{
 		Use:   "unset NAME",
 		Short: "remove a variable's value from the plaintext and encrypted file",
 		Long: `Remove NAME from the repo's common.yaml and common.enc.yaml, or env.ENV.yaml and env.ENV.enc.yaml with --env, whichever hold it. With -g the store's files are used instead. The declaration in the scope's manifest stays unless --undeclare is given; that is refused while any other values file in the scope still holds NAME.
+
+With -g, a name that a registered repo's manifest requires (in the checkout on this machine) is refused unless --force is given; a name a repo lists as optional, and repos that could not be checked, are printed as lines starting with !. A repos.yaml that cannot be read checks no repo, and is refused the same way.
 
 In the store, removing a secret that is recorded as needing a new value (rotation-due.yaml) clears its entry, also when the secret is no longer in its file.`,
 		Args: exactArgs(1, "a variable name"),
@@ -532,6 +569,11 @@ In the store, removing a secret that is recorded as needing a new value (rotatio
 				return err
 			}
 			_, declared := m.Lookup(name)
+			if sc.store {
+				if err := unsetUsers(sys, name, force); err != nil {
+					return err
+				}
+			}
 			be := backendFor(sys)
 			base := valuesBase(env)
 			files := []string{valuesFile(base, false), valuesFile(base, true)}
@@ -613,6 +655,7 @@ In the store, removing a secret that is recorded as needing a new value (rotatio
 	cmd.Flags().BoolVarP(&global, "global", "g", false, "remove from the global store")
 	cmd.Flags().StringVar(&env, "env", "", "remove from the environment's files, not the common ones")
 	cmd.Flags().BoolVar(&undeclare, "undeclare", false, "also remove the name's declaration from the manifest")
+	cmd.Flags().BoolVar(&force, "force", false, "unset it even when a registered repo requires it")
 	noEcho(cmd, "")
 	return cmd
 }
