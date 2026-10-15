@@ -1,4 +1,7 @@
-[← README](../README.md)
+---
+title: The store
+nav_order: 3
+---
 
 # The store
 

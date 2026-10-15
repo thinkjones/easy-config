@@ -1,4 +1,7 @@
-[← README](../README.md)
+---
+title: Migrating from fsconfig
+nav_order: 8
+---
 
 # Migrating from fsconfig
 

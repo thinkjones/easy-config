@@ -1,4 +1,7 @@
-[← README](../README.md)
+---
+title: Set up
+nav_order: 2
+---
 
 # Set up
 

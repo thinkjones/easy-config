@@ -107,6 +107,8 @@ Every flag and every exit status is in the [command reference](docs/reference.md
 
 ## Documentation
 
+The pages below are also the documentation site, [thinkjones.github.io/easy-config](https://thinkjones.github.io/easy-config/), published by GitHub Pages from `docs/`.
+
 | Page | What is in it |
 | --- | --- |
 | [Set up](docs/setup.md) | What `ezc setup` makes, what it never overwrites, and how it adopts a store made by hand. |
@@ -121,7 +123,7 @@ Every flag and every exit status is in the [command reference](docs/reference.md
 
 ## Status and known limits
 
-This is `ezc` 0.6.
+This is `ezc` 0.7.
 
 - **A repo is re-wrapped only where it is checked out.** A change to who can read the store re-wraps the registered repos checked out on the machine that makes it; run `ezc repo rewrap --all` on a machine that has the others (see [Repos](docs/repos.md#after-a-change-to-who-can-read-the-store)). A repo's secrets that a key leaving it could read are listed, not recorded in `rotation-due.yaml`.
 - **`ezc setup --ci` works with github.com only.** The token is offered to `https://github.com` and no other host, so a store on a GitHub Enterprise host or anywhere else cannot be cloned by `--ci`.

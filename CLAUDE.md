@@ -12,6 +12,7 @@ Guidance for Claude Code in this repository. [`AGENTS.md`](AGENTS.md) is the rou
 | Same gate with the real-sops and real-git tests required, not skipped | `mise run cli:test:sops` |
 | Regenerate the committed manifest JSON Schema | `mise run schema:build` |
 | Fail when the committed schema is stale | `mise run schema:check` |
+| Build the docs site locally, as GitHub Pages does (Ruby 3) | `cd docs && bundle install && bundle exec jekyll serve` |
 | Rewrite the TUI's golden screens (read the diff before committing) | `cd cli && go test ./internal/tui -run Golden -update` |
 
 ## Sharp edges

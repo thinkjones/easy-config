@@ -1,4 +1,7 @@
-[← README](../README.md)
+---
+title: The TUI
+nav_order: 7
+---
 
 # The TUI
 
