@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/resolve"
 	"github.com/thinkjones/easy-config/cli/internal/setup"
 	"github.com/thinkjones/easy-config/cli/internal/tui"
+	"github.com/thinkjones/easy-config/cli/share"
 )
 
 const nameRule = "lower case letters, digits and -, starting with a letter or a digit"
@@ -318,6 +320,7 @@ func runSetup(sys System, o setupFlags) error {
 		fmt.Fprintf(sys.Stdout, "+ wrote %s\n", p.Config())
 		made = true
 	}
+	installSkills(sys)
 
 	who, err := setup.Recipient(e, public)
 	if err != nil {
@@ -506,4 +509,43 @@ func remoteNote(remote string) string {
 		return "no remote"
 	}
 	return "remote " + gitstore.ShowURL(remote)
+}
+
+// installSkills writes ezc's agent skills where Claude Code reads them: CLAUDE_CONFIG_DIR, else ~/.claude. A skill
+// that cannot be written is a ! line; it never fails setup.
+func installSkills(sys System) {
+	dir := sys.Getenv("CLAUDE_CONFIG_DIR")
+	if dir == "" {
+		home := homeDir(sys)
+		if home == "" {
+			return
+		}
+		dir = filepath.Join(home, ".claude")
+	}
+	results, err := setup.InstallSkills(dir, share.Skills)
+	if err != nil {
+		fmt.Fprintf(sys.Stdout, "! could not read ezc's skills (%v)\n", err)
+		return
+	}
+	for _, r := range results {
+		switch r.Status {
+		case "installed":
+			fmt.Fprintf(sys.Stdout, "+ installed the skill %s\n", r.Name)
+		case "updated":
+			fmt.Fprintf(sys.Stdout, "+ updated the skill %s\n", r.Name)
+		case "kept":
+			fmt.Fprintf(sys.Stdout, "✓ the skill %s\n", r.Name)
+		default:
+			fmt.Fprintf(sys.Stdout, "! could not install the skill %s (%s)\n", r.Name, skillReason(r.Err))
+		}
+	}
+}
+
+// skillReason is a write error without its path.
+func skillReason(err error) string {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err.Error()
+	}
+	return "it failed"
 }

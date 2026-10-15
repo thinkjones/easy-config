@@ -63,7 +63,7 @@ func setupFreshOutput(f *fake) string {
 	return "✓ git\n✓ fake\n" +
 		"+ created your key: ~/.config/sops/age/keys.txt\n" + setupBackupNotice +
 		"+ created the store: " + setupStore(f) + "\n" +
-		"+ wrote " + setupConfig(f) + "\n" + setupNextLine
+		"+ wrote " + setupConfig(f) + "\n" + setupSkillsInstalled + setupNextLine
 }
 
 // setupPublicKey is the public half of the machine's key.
@@ -245,7 +245,7 @@ func TestSetupAgainChangesNothing(t *testing.T) {
 		if err := f.run(again...); err != nil {
 			t.Fatal(err)
 		}
-		want := "✓ git\n✓ fake\n✓ your key: ~/.config/sops/age/keys.txt\n✓ the store: " + setupStore(f) + "\n✓ the config: " + setupConfig(f) + "\n"
+		want := "✓ git\n✓ fake\n✓ your key: ~/.config/sops/age/keys.txt\n✓ the store: " + setupStore(f) + "\n✓ the config: " + setupConfig(f) + "\n" + setupSkillsKept
 		if got := f.out.String(); got != want {
 			t.Fatalf("%v: stdout:\n%s\nwant:\n%s", again, got, want)
 		}
@@ -364,7 +364,7 @@ func TestSetupPublishesExistingLocalStore(t *testing.T) {
 	if got := setupGitOut(t, f, "rev-parse", "HEAD"); got != commit {
 		t.Fatal("a second store was made")
 	}
-	want := "✓ git\n✓ fake\n✓ your key: ~/.config/sops/age/keys.txt\n✓ the store: " + setupStore(f) + "\n+ published the store: o/r\n+ wrote " + setupConfig(f) + "\n" + setupNextLine
+	want := "✓ git\n✓ fake\n✓ your key: ~/.config/sops/age/keys.txt\n✓ the store: " + setupStore(f) + "\n+ published the store: o/r\n+ wrote " + setupConfig(f) + "\n" + setupSkillsKept + setupNextLine
 	if f.out.String() != want {
 		t.Fatalf("stdout:\n%s\nwant:\n%s", f.out.String(), want)
 	}
@@ -382,7 +382,7 @@ func TestSetupClone(t *testing.T) {
 		if err := f.run(args...); err != nil {
 			t.Fatal(err)
 		}
-		want := "✓ git\n✓ fake\n✓ your key: ~/.config/sops/age/keys.txt\n+ cloned the store: " + setupStore(f) + "\n+ wrote " + setupConfig(f) + "\n" + setupNextLine
+		want := "✓ git\n✓ fake\n✓ your key: ~/.config/sops/age/keys.txt\n+ cloned the store: " + setupStore(f) + "\n+ wrote " + setupConfig(f) + "\n" + setupSkillsInstalled + setupNextLine
 		if f.out.String() != want {
 			t.Fatalf("stdout:\n%s\nwant:\n%s", f.out.String(), want)
 		}
@@ -430,7 +430,7 @@ func TestSetupCloneOwnerRepo(t *testing.T) {
 	if len(f.execs) != 1 || f.execs[0].Name != "gh" || !reflect.DeepEqual(f.execs[0].Args, want) {
 		t.Fatalf("ran %+v", f.execs)
 	}
-	if !strings.HasSuffix(f.out.String(), "+ wrote "+setupConfig(f)+"\n"+setupNextLine) {
+	if !strings.HasSuffix(f.out.String(), "+ wrote "+setupConfig(f)+"\n"+setupSkillsInstalled+setupNextLine) {
 		t.Fatalf("stdout:\n%s", f.out.String())
 	}
 
@@ -906,9 +906,15 @@ func setupAgainChangesNothing(t *testing.T, f *fake, want string) {
 	}
 }
 
+// setupSkillsInstalled and setupSkillsKept are setup's lines about ezc's skills, on a first run and a later one.
+const (
+	setupSkillsInstalled = "+ installed the skill ezc-convert\n+ installed the skill ezc-migrate\n"
+	setupSkillsKept      = "✓ the skill ezc-convert\n✓ the skill ezc-migrate\n"
+)
+
 // setupSecondRun is what a second setup prints when all is in place.
 func setupSecondRun(f *fake) string {
-	return "✓ git\n✓ fake\n✓ your key: ~/.config/sops/age/keys.txt\n✓ the store: " + setupStore(f) + "\n✓ the config: " + setupConfig(f) + "\n"
+	return "✓ git\n✓ fake\n✓ your key: ~/.config/sops/age/keys.txt\n✓ the store: " + setupStore(f) + "\n✓ the config: " + setupConfig(f) + "\n" + setupSkillsKept
 }
 
 // setupCommitHolds fails unless the store's last commit has this message and exactly these files of .ezc.
@@ -936,7 +942,7 @@ func TestSetupAdoptsAHandMadeStore(t *testing.T) {
 		}
 		want := "✓ git\n✓ fake\n+ created your key: ~/.config/sops/age/keys.txt\n" + setupBackupNotice +
 			"+ made the store a git repo: " + setupStore(f) + "\n+ wrote the registry and the encryption policy\n" +
-			"+ wrote " + setupConfig(f) + "\n" + setupNextLine
+			"+ wrote " + setupConfig(f) + "\n" + setupSkillsInstalled + setupNextLine
 		if f.out.String() != want {
 			t.Fatalf("stdout:\n%s\nwant:\n%s", f.out.String(), want)
 		}
@@ -971,7 +977,7 @@ func TestSetupAdoptsAHandMadeStore(t *testing.T) {
 		}
 		want := "✓ git\n✓ fake\n+ created your key: ~/.config/sops/age/keys.txt\n" + setupBackupNotice +
 			"+ made the store a git repo: " + setupStore(f) + "\n" +
-			"+ wrote " + setupConfig(f) + "\n" + setupByHandNotice
+			"+ wrote " + setupConfig(f) + "\n" + setupSkillsInstalled + setupByHandNotice
 		if f.out.String() != want {
 			t.Fatalf("stdout:\n%s\nwant:\n%s", f.out.String(), want)
 		}
@@ -993,7 +999,7 @@ func TestSetupAdoptsAHandMadeStore(t *testing.T) {
 		}
 		want := "✓ git\n✓ fake\n✓ your key: ~/.config/sops/age/keys.txt\n" +
 			"+ made the store a git repo: " + setupStore(f) + "\n+ wrote the encryption policy\n" +
-			"+ wrote " + setupConfig(f) + "\n" + setupNextLine
+			"+ wrote " + setupConfig(f) + "\n" + setupSkillsInstalled + setupNextLine
 		if f.out.String() != want {
 			t.Fatalf("stdout:\n%s\nwant:\n%s", f.out.String(), want)
 		}
@@ -1018,7 +1024,7 @@ func TestSetupAdoptsAHandMadeStore(t *testing.T) {
 		}
 		want := "✓ git\n✓ fake\n+ created your key: ~/.config/sops/age/keys.txt\n" + setupBackupNotice +
 			"✓ the store: " + setupStore(f) + "\n+ wrote the registry and the encryption policy\n" +
-			"+ wrote " + setupConfig(f) + "\n" + setupNextLine
+			"+ wrote " + setupConfig(f) + "\n" + setupSkillsInstalled + setupNextLine
 		if f.out.String() != want {
 			t.Fatalf("stdout:\n%s\nwant:\n%s", f.out.String(), want)
 		}
@@ -1345,6 +1351,9 @@ func TestSetupCI(t *testing.T) {
 	}
 	if f.out.String() != setupCIReport(f) || f.errOut.Len() != 0 {
 		t.Fatalf("stdout:\n%s\nwant:\n%s\nstderr:\n%s", f.out.String(), setupCIReport(f), f.errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(f.env["HOME"], ".claude")); err == nil {
+		t.Error("setup --ci installed the skills")
 	}
 
 	// The clone is shallow, and git is told which variable holds the token, never the token.

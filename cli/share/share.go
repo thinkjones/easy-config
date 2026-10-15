@@ -2,7 +2,7 @@
 package share
 
 import (
-	_ "embed"
+	"embed"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,6 +12,11 @@ import (
 //
 //go:embed env.sh
 var EnvSh string
+
+// Skills holds the agent skills ezc setup installs: skills/<name>/SKILL.md.
+//
+//go:embed skills
+var Skills embed.FS
 
 // ShimVersion is the number on the first line of EnvSh ("# ezc-shim: 1").
 const ShimVersion = 1

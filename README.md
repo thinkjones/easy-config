@@ -85,7 +85,7 @@ Who can read the store is written in one file, `recipients.yaml`, and every encr
 
 | Command | What it does |
 | --- | --- |
-| `ezc setup` | Take a machine from nothing to a working store: check the tools, create your key, create or clone the store, write the config. `--ci` sets a CI job up to read a store. |
+| `ezc setup` | Take a machine from nothing to a working store: check the tools, create your key, create or clone the store, write the config, and install the `ezc-convert` and `ezc-migrate` agent skills for Claude Code. `--ci` sets a CI job up to read a store. |
 | `ezc join` | Ask for access to an existing store from this machine. |
 | `ezc repo init` | Create `.ezc/` in the working directory with a manifest, `env.local.yaml` and the `env.sh` shim. |
 | `ezc repo add`, `remove`, `list`, `check`, `uses`, `rewrap` | Register the repos that use the store; check them all, find who uses a name, and keep their own secrets encrypted for the store's recipients. |
