@@ -9,6 +9,7 @@ var shellKeys = [][2]string{
 	{"1 2 3 4", "values, access, repos, doctor"},
 	{"↑ ↓  j k", "move"},
 	{"tab", "the next panel"},
+	{"e", "change the environment"},
 	{"ctrl+r", "load again"},
 	{"?", "this help"},
 	{"q", "quit"},
@@ -82,6 +83,8 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 	case "?":
 		m.help = true
 		return nil
+	case "e":
+		return m.askEnv()
 	case "q":
 		return tea.Quit
 	case "ctrl+r":

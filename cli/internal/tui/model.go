@@ -88,8 +88,8 @@ func New(d Deps, s Scope) *Model {
 	m.panes = [4]pane{
 		&valuesPane{m: m},
 		&accessPane{m: m},
-		newStub(m, "repos", "Loading…"),
-		newStub(m, "doctor", "Loading…"),
+		&reposPane{m: m},
+		&doctorPane{m: m},
 	}
 	for i := range m.stale {
 		m.stale[i] = true
@@ -128,6 +128,16 @@ func (m *Model) reload() tea.Cmd {
 	}
 	m.stale[m.cur] = false
 	return tea.Batch(m.loadHeader(), m.panes[m.cur].load())
+}
+
+// askEnv asks for the environment every view uses.
+func (m *Model) askEnv() tea.Cmd {
+	return m.ask("Environment:", false, func(env string) tea.Cmd {
+		if env = strings.TrimSpace(env); env == "" {
+			return nil
+		}
+		return m.changeEnv(env)
+	})
 }
 
 // changeEnv makes env the environment of every view, and loads the current one again.
@@ -322,35 +332,3 @@ func (m *Model) ask(prompt string, secret bool, submit func(string) tea.Cmd) tea
 	m.in = &asking{prompt: prompt, ti: ti, submit: submit}
 	return m.in.ti.Focus()
 }
-
-// stub is a view not built yet: a panel with one line.
-type stub struct {
-	m           *Model
-	name, empty string
-}
-
-func newStub(m *Model, name, empty string) *stub { return &stub{m: m, name: name, empty: empty} }
-
-type stubLoaded struct{ name string }
-
-func (s *stub) body(w, _ int) []string { return panel(s.name, []string{s.empty}, w, true) }
-func (s *stub) key(string) tea.Cmd     { return nil }
-func (s *stub) hints() string          { return "" }
-func (s *stub) help() [][2]string      { return nil }
-func (s *stub) forget()                {}
-func (s *stub) load() tea.Cmd {
-	return func() tea.Msg {
-		switch s.name {
-		case "values":
-			s.m.d.Values.List(s.m.scope, s.m.env)
-		case "access":
-			s.m.d.Access.Load()
-		case "repos":
-			s.m.d.Repos.Load(s.m.env)
-		case "doctor":
-			s.m.d.Doctor.Check(s.m.env)
-		}
-		return stubLoaded{s.name}
-	}
-}
-func (s *stub) loaded(msg tea.Msg) bool { l, ok := msg.(stubLoaded); return ok && l.name == s.name }

@@ -158,7 +158,6 @@ func (p *valuesPane) help() [][2]string {
 		{"S", "set it for this environment only"},
 		{"u", "unset it from the file that supplies it"},
 		{"r", "reveal a secret, until the selection moves"},
-		{"e", "change the environment"},
 		{"g", "the store's values, or the repo's"},
 		{"p P", "pull, push the store"},
 	}
@@ -174,13 +173,6 @@ func (p *valuesPane) key(k string) tea.Cmd {
 	case "tab":
 		p.focus = 1 - p.focus
 		return nil
-	case "e":
-		return m.ask("Environment:", false, func(env string) tea.Cmd {
-			if env = strings.TrimSpace(env); env == "" {
-				return nil
-			}
-			return m.changeEnv(env)
-		})
 	case "g":
 		if m.head.Repo == "" {
 			m.setStatus("not in a repo: the store only", false)

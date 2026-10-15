@@ -3,6 +3,7 @@ ezc  store github.com/o/store · env local
 │ 1 2 3 4   values, access, repos, doctor                                                                              │
 │ ↑ ↓  j k  move                                                                                                       │
 │ tab       the next panel                                                                                             │
+│ e         change the environment                                                                                     │
 │ ctrl+r    load again                                                                                                 │
 │ ?         this help                                                                                                  │
 │ q         quit                                                                                                       │
@@ -10,7 +11,6 @@ ezc  store github.com/o/store · env local
 │ S         set it for this environment only                                                                           │
 │ u         unset it from the file that supplies it                                                                    │
 │ r         reveal a secret, until the selection moves                                                                 │
-│ e         change the environment                                                                                     │
 │ g         the store's values, or the repo's                                                                          │
 │ p P       pull, push the store                                                                                       │
 │                                                                                                                      │
