@@ -1,4 +1,7 @@
-[← README](../README.md)
+---
+title: Set up
+nav_order: 2
+---
 
 # Set up
 
@@ -12,6 +15,8 @@ ezc setup --ci --store owner/repo     # in a CI job: see "Bots and CI"
 `ezc setup` takes a machine from nothing to a working store. It checks that `git` and `sops` are installed (and offers to install `sops` with Homebrew when `brew` is there; otherwise it says how to install it and stops, with nothing made), creates your key, creates or clones the store, and writes `config.toml` in ezc's home (`$EZC_HOME` when set, else `~/Library/ezc` on macOS and `~/.local/share/ezc` on Linux). The store is a git repo at `store` in that folder. On a terminal with no store and no flag at all, setup opens the [setup wizard](tui.md#the-setup-wizard), which asks what to do and runs setup (or `ezc join`) with the flags it gathered. With some flags, setup asks on the terminal for what they leave out: your name, where the store comes from, and whether to install with brew; `--name` and `--yes` answer in advance. Without a terminal it needs one of the three flags above.
 
 Each line it prints is something that was already there (`✓`) or something it made (`+`). It ends with the command to run next when the store can take a secret, that is when it has an encryption policy. A new key is written to `~/.config/sops/age/keys.txt` (or the `key_file` of `config.toml`, or the file `SOPS_AGE_KEY_FILE` names), readable only by you. Back that file up when setup says so: without it your secrets cannot be read, and it cannot be recovered. Setup never prints the private key.
+
+Setup also installs ezc's two agent skills where Claude Code reads them, `skills/<name>/SKILL.md` under `$CLAUDE_CONFIG_DIR` when it is set, else under `~/.claude`: `ezc-convert`, which moves a repo from `.env` files or hard-coded values to a manifest and `.ezc/`, and `ezc-migrate`, which moves a store and its repos from fsconfig with [`ezc migrate`](migrate.md). A missing skill is installed (`+ installed the skill <name>`), one that differs from this ezc's is replaced (`+ updated the skill <name>`: they are ezc's own files, so edit a copy under another name), and an identical one is left (`✓`). A skill that cannot be written is a `!` line and does not stop setup. `ezc setup --ci` installs none.
 
 A new store starts with an empty manifest, `recipients.yaml` naming you and your public key, the encryption policy written from it, and one commit. Your name is `--name`, else the `user` of `config.toml`, else your login name (`$USER`) in lower case; it is lower case letters, digits and `-`, starting with a letter or a digit. When none of these gives one, setup stops and asks for `--name`.
 

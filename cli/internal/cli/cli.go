@@ -142,6 +142,7 @@ Config
 		newJoinCmd(sys),
 		newRepoCmd(sys),
 		newTUICmd(sys),
+		newMigrateCmd(sys),
 	)
 	return root
 }

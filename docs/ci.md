@@ -1,4 +1,7 @@
-[← README](../README.md)
+---
+title: Bots and CI
+nav_order: 6
+---
 
 # Bots and CI
 

@@ -85,7 +85,7 @@ Who can read the store is written in one file, `recipients.yaml`, and every encr
 
 | Command | What it does |
 | --- | --- |
-| `ezc setup` | Take a machine from nothing to a working store: check the tools, create your key, create or clone the store, write the config. `--ci` sets a CI job up to read a store. |
+| `ezc setup` | Take a machine from nothing to a working store: check the tools, create your key, create or clone the store, write the config, and install the `ezc-convert` and `ezc-migrate` agent skills for Claude Code. `--ci` sets a CI job up to read a store. |
 | `ezc join` | Ask for access to an existing store from this machine. |
 | `ezc repo init` | Create `.ezc/` in the working directory with a manifest, `env.local.yaml` and the `env.sh` shim. |
 | `ezc repo add`, `remove`, `list`, `check`, `uses`, `rewrap` | Register the repos that use the store; check them all, find who uses a name, and keep their own secrets encrypted for the store's recipients. |
@@ -98,6 +98,7 @@ Who can read the store is written in one file, `recipients.yaml`, and every encr
 | `ezc user list`, `add`, `requests`, `approve`, `deny`, `remove`, `rotate` | See and change who can read the store. |
 | `ezc bot add`, `remove`, `rotate` | Give CI a key of its own, take it away or replace it. |
 | `ezc tui` | Browse and change values, access and repos in a terminal UI; every change is a command shown first. |
+| `ezc migrate` | Move a store or a repo from fsconfig's `.fs-config/` to `.ezc/`, proving the environment unchanged. |
 | `ezc doctor` | Report the health of the machine, the store and the repo, with the fix for each finding. |
 | `ezc manifest validate`, `ezc manifest schema` | Check that the manifest is well formed; print its JSON Schema. |
 | `ezc codegen python` | Generate a pydantic config module from the manifest. |
@@ -105,6 +106,8 @@ Who can read the store is written in one file, `recipients.yaml`, and every encr
 Every flag and every exit status is in the [command reference](docs/reference.md#commands); `ezc help <command>` gives a command's flags on the command line.
 
 ## Documentation
+
+The pages below are also the documentation site, [thinkjones.github.io/easy-config](https://thinkjones.github.io/easy-config/), published by GitHub Pages from `docs/`.
 
 | Page | What is in it |
 | --- | --- |
@@ -114,12 +117,13 @@ Every flag and every exit status is in the [command reference](docs/reference.md
 | [Repos](docs/repos.md) | `repos.yaml`, where each repo is checked out, checking every repo, and how a repo's own secrets follow the store's recipients. |
 | [Bots and CI](docs/ci.md) | A key for a bot, the two secrets a job needs, and a GitHub Actions workflow. |
 | [The TUI](docs/tui.md) | `ezc tui`: the four views, their keys, what a change runs, and the setup wizard. |
+| [Migrating from fsconfig](docs/migrate.md) | `ezc migrate`: the order, the proof, what it changes and what it reports. |
 | [Reference](docs/reference.md) | Every command, the files, encryption and the resolution rules. |
 | [When something is wrong](docs/troubleshooting.md) | What `ezc doctor` reports and what to do about it. |
 
 ## Status and known limits
 
-This is `ezc` 0.6.
+This is `ezc` 0.7.
 
 - **A repo is re-wrapped only where it is checked out.** A change to who can read the store re-wraps the registered repos checked out on the machine that makes it; run `ezc repo rewrap --all` on a machine that has the others (see [Repos](docs/repos.md#after-a-change-to-who-can-read-the-store)). A repo's secrets that a key leaving it could read are listed, not recorded in `rotation-due.yaml`.
 - **`ezc setup --ci` works with github.com only.** The token is offered to `https://github.com` and no other host, so a store on a GitHub Enterprise host or anywhere else cannot be cloned by `--ci`.

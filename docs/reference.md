@@ -1,4 +1,7 @@
-[← README](../README.md)
+---
+title: Reference
+nav_order: 9
+---
 
 # Reference
 
@@ -8,7 +11,7 @@
 | --- | --- |
 | `ezc version` | Print ezc's version. |
 | `ezc help [command]` | Help for ezc, or for one command. |
-| `ezc setup [--new-local \| --new-github owner/repo \| --store REPO] [--name NAME] [--yes]` | Set the machine up: check the tools, create your key, create or clone the store, write the config. Changes only what is missing; see [Set up](setup.md#set-up). On a terminal with no store and no flag it opens the [setup wizard](tui.md#the-setup-wizard). |
+| `ezc setup [--new-local \| --new-github owner/repo \| --store REPO] [--name NAME] [--yes]` | Set the machine up: check the tools, create your key, create or clone the store, write the config, install the agent skills. Changes only what is missing; see [Set up](setup.md#set-up). On a terminal with no store and no flag it opens the [setup wizard](tui.md#the-setup-wizard). |
 | `ezc setup --ci --store owner/repo` | Set a CI job up to read a store on github.com: clone its latest commit with the token in `EZC_STORE_TOKEN` (or `GH_TOKEN`), check that the key in `EZC_AGE_KEY` reads it and write the config. No key file is made and nothing is asked. See [Bots and CI](ci.md#bots-and-ci). |
 | `ezc join <owner/repo \| URL \| path> [--name NAME] [--kind user\|machine] [--owner USER]` | Ask for access to an existing store from this machine: clone it, create your key when there is none, write the config, and push a request holding your public key on the branch `ezc/join-NAME`, with a pull request when `gh` is installed and the store is on GitHub. Changes nothing on the store's main branch. See [Joining a store](access.md#joining-a-store). |
 | `ezc join --print [--name NAME] [--kind user\|machine] [--owner USER]` | Print the `ezc user add` line for this machine's key, creating the key when there is none. Takes no repo, needs no store and pushes nothing. |
@@ -36,6 +39,7 @@
 | `ezc bot rotate <name> [--print-private] [--compromised] [--yes]` | Replace a bot's key in one commit named `rotate bot <name>` and deliver the new one to its repos, as `ezc bot add` does. `--compromised` also records every secret the old key could read as due for a new value. |
 | `ezc store audit` | Check the store's values files against its manifest: every value declared, every `required` name set in at least one file, secrets in encrypted files and nothing else there, no value still a placeholder or the wrong shape, and no value in an encrypted file left unencrypted. Prints names, files and the fix for each, never a value; exits 1 when there is anything to fix. |
 | `ezc tui [-g]` | Open the terminal UI: the values of the repo you are in (the store's with `-g`), access, repos and the doctor. Every change is an ezc command, shown before it runs, run without a terminal. With no store set up it opens the setup wizard. Needs a terminal; a usage error without one. See [The TUI](tui.md). |
+| `ezc migrate [--dry-run]` | Move the store or the repo in the working directory from fsconfig's `.fs-config/` to `.ezc/`. Nothing is written until the environment, composed by `fsconfig codegen shell` and by ezc, is identical in every name and value for the store alone or for each of the repo's environments; differences are listed by name, and exit 1. The store keeps `.fs-config/`; a repo's is replaced and its `mise.toml` rewritten. What still names fsconfig is reported, not changed. No git runs. `--dry-run` writes nothing. See [Migrating from fsconfig](migrate.md). |
 | `ezc doctor [ENV] [--only machine\|store\|repo]` | Report the health of the machine (ezc, the encryption tool, the key), the store (location, how it stands against its remote, whether your key is a recipient, whether every encrypted file is encrypted for the registry, pending access requests, secrets that need a new value, manifest, audit, policy, unrecognised files) and the repo (manifest, `env.sh` shim version, environments, whether the environment resolves and passes the manifest, and whether its encrypted files are encrypted for the store's recipients). Each line is a check (`✓`), a warning (`!`) or a problem (`✗`), with what to do about it. Prints names, counts and paths, never a value; exits 1 when anything is broken, and warnings alone exit 0. Works without a key and outside a repo. |
 | `ezc repo init` | Create `.ezc/` in the working directory with `manifest.yaml`, `env.local.yaml` and the `env.sh` shim. Existing files are kept; an `env.sh` from an older shim is updated, and one written by a newer `ezc` is kept as it is. Prints how to load the environment. |
 | `ezc repo add [<id>] [--name NAME]` | Register the working repo in the store's `repos.yaml` and record its folder in `config.toml`'s `[checkouts]`. Its ID is the `owner/repo` of its `origin` on github.com, else `--name`, else the folder's name; with an ID, that repo is registered and its checkout recorded only when it is the working repo. One commit, `repo add <id>`, not pushed. See [Repos](repos.md#the-registry). |

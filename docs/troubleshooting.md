@@ -1,4 +1,7 @@
-[← README](../README.md)
+---
+title: When something is wrong
+nav_order: 10
+---
 
 # When something is wrong
 

@@ -1,0 +1,5 @@
+# Builds the site as GitHub Pages does: bundle exec jekyll serve, from this folder.
+source "https://rubygems.org"
+
+gem "github-pages", group: :jekyll_plugins
+gem "webrick"

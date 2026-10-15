@@ -1,0 +1,39 @@
+title: ezc
+description: One store for secrets and variables, layered into every repo, validated against a manifest, and encrypted with SOPS and age.
+url: https://thinkjones.github.io
+baseurl: /easy-config
+
+remote_theme: just-the-docs/just-the-docs@v0.10.1
+plugins:
+  - jekyll-remote-theme
+  - jekyll-relative-links
+  - jekyll-seo-tag
+
+relative_links:
+  enabled: true
+  collections: false
+
+search_enabled: true
+heading_anchors: true
+
+aux_links:
+  GitHub: https://github.com/thinkjones/easy-config
+aux_links_new_tab: true
+
+gh_edit_link: true
+gh_edit_link_text: Edit this page on GitHub
+gh_edit_repository: https://github.com/thinkjones/easy-config
+gh_edit_branch: main
+gh_edit_source: docs
+gh_edit_view_mode: edit
+
+back_to_top: true
+back_to_top_text: Back to top
+
+footer_content: "ezc is MIT licensed."
+
+# Design history stays in the repo but not on the site.
+exclude:
+  - superpowers/
+  - Gemfile
+  - Gemfile.lock
