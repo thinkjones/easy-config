@@ -29,6 +29,21 @@ func TestOldNames(t *testing.T) {
 	}
 }
 
+func TestOldNamesSkipsCachesAndHiddenFolders(t *testing.T) {
+	root := t.TempDir()
+	for _, p := range []string{".pytest_cache/v/cache/nodeids", ".newsfeed/digest.md", "src/__pycache__/x.txt", ".mypy_cache/a.json"} {
+		write(t, filepath.Join(root, p), "fsconfig\n")
+	}
+	write(t, filepath.Join(root, ".github", "workflows", "a.yml"), "run: fsconfig env\n")
+	write(t, filepath.Join(root, ".claude", "skills", "x", "SKILL.md"), "fsconfig\n")
+	write(t, filepath.Join(root, ".envrc"), "fsconfig\n")
+	got := oldNames(root, nil)
+	want := []string{"! .claude/skills/x/SKILL.md:1 names the old tool", "! .envrc:1 names the old tool", "! .github/workflows/a.yml:1 names the old tool"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %q", got)
+	}
+}
+
 func TestOldNamesStopsAtTwenty(t *testing.T) {
 	root := t.TempDir()
 	for i := range 25 {

@@ -15,8 +15,12 @@ import (
 // oldName matches a mention of the old tool or its folder.
 var oldName = regexp.MustCompile(`(?i)fs[-_]?config`)
 
-// skipped are the folders the scan for the old tool's name does not enter.
-var skipped = []string{".git", newDir, OldDir, "node_modules", ".venv", "venv", "vendor", "dist", "build"}
+// skipped are the folders the scan for the old tool's name does not enter, besides every hidden folder but
+// visited: dependencies, build output and caches hold copies, not files anyone edits.
+var skipped = []string{"node_modules", "venv", "vendor", "dist", "build", "__pycache__"}
+
+// visited are the hidden folders the scan enters: CI and agent configuration.
+var visited = []string{".github", ".claude"}
 
 const (
 	maxScanned  = 1 << 20 // bytes; a bigger file is not text anyone edits by hand
@@ -35,7 +39,8 @@ func oldNames(root string, override map[string]string) []string {
 			return nil
 		}
 		if d.IsDir() {
-			if p != root && slices.Contains(skipped, d.Name()) {
+			hidden := strings.HasPrefix(d.Name(), ".") && !slices.Contains(visited, d.Name())
+			if p != root && (hidden || slices.Contains(skipped, d.Name())) {
 				return filepath.SkipDir
 			}
 			return nil
