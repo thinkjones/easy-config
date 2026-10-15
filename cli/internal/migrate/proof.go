@@ -1,7 +1,9 @@
 package migrate
 
 import (
+	"errors"
 	"sort"
+	"strings"
 
 	"github.com/thinkjones/easy-config/cli/internal/resolve"
 )
@@ -9,18 +11,14 @@ import (
 // storeLabel names the proof of the store alone.
 const storeLabel = "(store)"
 
-// afterStore composes the staged store alone with ezc's resolver.
-func (o Options) afterStore(stage string) (map[string]string, error) {
-	return o.after(resolve.Options{StoreDir: stage})
-}
-
-// after composes with ezc's resolver and keeps what ezc exports.
-func (o Options) after(ro resolve.Options) (map[string]string, error) {
+// after composes with ezc's resolver and keeps what ezc exports. An error names the staged folder as the .ezc it
+// will become, not the temporary folder it is in.
+func (o Options) after(ro resolve.Options, stage string) (map[string]string, error) {
 	ro.Home = o.Home
 	ro.Decrypt = o.Backend.Decrypt
 	res, err := resolve.Load(ro)
 	if err != nil {
-		return nil, err
+		return nil, errors.New(strings.ReplaceAll(err.Error(), stage, newDir))
 	}
 	env := map[string]string{}
 	for _, n := range res.Exported() {

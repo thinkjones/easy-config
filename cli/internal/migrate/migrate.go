@@ -13,10 +13,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/proc"
+	"github.com/thinkjones/easy-config/cli/internal/recipients"
+	"github.com/thinkjones/easy-config/cli/internal/resolve"
 )
 
 // OldTool is the command of the tool ezc replaces; the proof runs it to compose the environment as it stands.
@@ -92,7 +96,7 @@ func runStore(o Options) error {
 	if err != nil {
 		return err
 	}
-	after, err := o.afterStore(stage.dir)
+	after, err := o.after(resolve.Options{StoreDir: stage.dir}, stage.dir)
 	if err != nil {
 		return err
 	}
@@ -114,9 +118,170 @@ func runStore(o Options) error {
 	return nil
 }
 
-// runRepo migrates a repo that loads its environment through the old tool.
+// runRepo migrates a repo that loads its environment through the old tool: .ezc/ with the shim takes the place
+// of .fs-config/, and mise.toml is rewritten to ezc. Each environment is proved over the ezc store.
 func runRepo(o Options) error {
-	return errors.New("migrating a repo is not built yet")
+	if st, err := os.Stat(o.StoreEzc); o.StoreEzc == "" || err != nil || !st.IsDir() {
+		return errors.New("Set up the ezc store first: run ezc migrate in the old store's folder, commit and push it, then ezc setup --store <it>.")
+	}
+	o.say("Migrating the repo in %s", o.Dir)
+	envs, err := oldEnvs(filepath.Join(o.Dir, oldDir))
+	if err != nil {
+		return err
+	}
+	type proof struct {
+		label  string
+		before map[string]string
+	}
+	var proofs []proof
+	if len(envs) == 0 {
+		before, err := o.before("", false)
+		if err != nil {
+			return err
+		}
+		proofs = append(proofs, proof{storeLabel, before})
+	}
+	for _, env := range envs {
+		before, err := o.before(env, false)
+		if err != nil {
+			return err
+		}
+		proofs = append(proofs, proof{env, before})
+	}
+	stage, err := stageRepo(o)
+	if stage.dir != "" {
+		defer os.RemoveAll(stage.dir)
+	}
+	if err != nil {
+		return err
+	}
+	proved := true
+	for _, p := range proofs {
+		ro := resolve.Options{StoreDir: o.StoreEzc, RepoDir: stage.dir, Env: p.label}
+		if p.label == storeLabel {
+			ro = resolve.Options{StoreDir: o.StoreEzc}
+		}
+		after, err := o.after(ro, stage.dir)
+		if err != nil {
+			return err
+		}
+		proved = o.prove(p.label, p.before, after) && proved
+	}
+	if !proved {
+		return o.notProved()
+	}
+	if len(envs) == 0 {
+		stage.notes = append(stage.notes, "! with no environment named, ezc also loads this repo's common files; the old tool did not.")
+	}
+	mise := filepath.Join(o.Dir, "mise.toml")
+	oldMise, hasMise, err := readMaybe(mise)
+	if err != nil {
+		return fmt.Errorf("could not read mise.toml (%s). Nothing was changed.", reason(err))
+	}
+	newMise := rewriteMise(oldMise)
+	override := map[string]string{}
+	if hasMise {
+		override["mise.toml"] = newMise
+	}
+	stage.notes = append(stage.notes, oldNames(o.Dir, override)...)
+	stage.notes = append(stage.notes, ciFindings(o.Dir, o.KeyTextVariable, botsOf(o.StoreEzc))...)
+	if o.DryRun {
+		if hasMise && newMise != oldMise {
+			stage.notes = append([]string{"would rewrite mise.toml"}, stage.notes...)
+		}
+		return o.dryRun(stage.files, stage.notes)
+	}
+	if o.afterProof != nil {
+		o.afterProof()
+	}
+	// Read again: what is written must be what was there, not what was read before the proof.
+	if oldMise, hasMise, err = readMaybe(mise); err != nil {
+		return fmt.Errorf("could not read mise.toml (%s). Nothing was changed.", reason(err))
+	}
+	newMise = rewriteMise(oldMise)
+	if err := o.place(stage); err != nil {
+		return err
+	}
+	if hasMise && newMise != oldMise {
+		if err := replaceFile(mise, newMise); err != nil {
+			os.RemoveAll(filepath.Join(o.Dir, newDir))
+			return fmt.Errorf("could not write mise.toml (%s). Nothing was changed.", reason(err))
+		}
+		o.say("+ mise.toml rewritten for ezc")
+	}
+	if err := os.RemoveAll(filepath.Join(o.Dir, oldDir)); err != nil {
+		o.say("! could not remove .fs-config/ (%s); remove it yourself.", reason(err))
+	} else {
+		o.say("- .fs-config/ removed")
+	}
+	o.sayNotes(stage.notes)
+	o.say("Next: ezc repo add, commit .ezc/ and mise.toml, and run ezc doctor.")
+	return nil
+}
+
+// oldEnvs are the environments a repo's .fs-config/ names, from its env.<name>.yaml files, sorted.
+func oldEnvs(old string) ([]string, error) {
+	entries, err := os.ReadDir(old)
+	if err != nil {
+		return nil, fmt.Errorf("could not read .fs-config/ (%s).", reason(err))
+	}
+	var envs []string
+	for _, e := range entries {
+		name, ok := strings.CutPrefix(e.Name(), "env.")
+		if name, ok2 := strings.CutSuffix(name, ".yaml"); ok && ok2 && !strings.HasSuffix(name, ".enc") {
+			envs = append(envs, name)
+		}
+	}
+	sort.Strings(envs)
+	return envs, nil
+}
+
+// botsOf maps each bot of the store's registry to its repos; none when the registry cannot be read.
+func botsOf(storeEzc string) map[string][]string {
+	reg, _, err := recipients.Load(storeEzc)
+	if err != nil {
+		return nil
+	}
+	bots := map[string][]string{}
+	for name, r := range reg.Recipients {
+		if r.Kind == "bot" {
+			bots[name] = r.Repos
+		}
+	}
+	return bots
+}
+
+// readMaybe is a file's text, and false with no error when it does not exist.
+func readMaybe(path string) (string, bool, error) {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
+	}
+	return string(b), err == nil, err
+}
+
+// replaceFile writes text over path through a temporary file and a rename, keeping path's mode.
+func replaceFile(path, text string) error {
+	st, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".mise.toml.ezc-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(text); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), st.Mode().Perm()); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 func (o Options) notProved() error {
