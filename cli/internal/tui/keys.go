@@ -56,11 +56,6 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		case "esc":
 			m.box = nil
 			m.setStatus("cancelled", false)
-		case "i":
-			if m.wiz != nil && m.wiz.choice != 3 {
-				m.wiz.install = !m.wiz.install
-				m.wizardConfirm()
-			}
 		}
 		return nil
 	}

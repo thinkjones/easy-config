@@ -203,3 +203,46 @@ func TestNoEnvironmentNamed(t *testing.T) {
 		t.Fatalf("status %q", m.status)
 	}
 }
+
+// A reveal that arrives after the selection, scope or environment moved is dropped.
+func TestLateRevealIsDropped(t *testing.T) {
+	for name, move := range map[string][]string{"scope": {"g"}, "down and back": {"j", "k"}, "reload": {"ctrl+r"}} {
+		t.Run(name, func(t *testing.T) {
+			m, _ := newTestWith(t, sketch)
+			_, reveal := m.Update(key("r"))
+			press(t, m, move...)
+			if name == "scope" {
+				press(t, m, "g")
+			}
+			drain(t, m, reveal)
+			if strings.Contains(view(m), revealedSecret) || strings.Contains(fmt.Sprintf("%+v", *valuesPaneOf(m)), revealedSecret) {
+				t.Fatalf("a late reveal was shown after %s", name)
+			}
+		})
+	}
+}
+
+// A load that a later one overtook is dropped: the list is always the latest scope's.
+func TestOlderLoadIsDropped(t *testing.T) {
+	m, _ := newTestWith(t, sketch)
+	_, toStore := m.Update(key("g"))
+	_, toRepo := m.Update(key("g"))
+	drain(t, m, toRepo)
+	drain(t, m, toStore)
+	if got := len(valuesPaneOf(m).vals); got != 4 || m.scope != RepoScope {
+		t.Fatalf("%d values in scope %v:\n%s", got, m.scope, view(m))
+	}
+}
+
+func TestOlderAccessLoadIsDropped(t *testing.T) {
+	m, f := onAccess(t, accessFixture)
+	_, older := m.Update(key("ctrl+r"))
+	f.access.data.Recipients = f.access.data.Recipients[:1]
+	_, newer := m.Update(key("ctrl+r"))
+	drain(t, m, newer)
+	f.access.data.Recipients = nil
+	drain(t, m, older)
+	if got := len(m.panes[accessView].(*accessPane).data.Recipients); got != 1 {
+		t.Fatalf("%d recipients", got)
+	}
+}

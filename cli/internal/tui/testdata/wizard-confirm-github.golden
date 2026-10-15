@@ -1,9 +1,9 @@
 ezc  setup                                                                                                              
 ╭─ a new store on GitHub ──────────────────────────────────────────────────────────────────────────────────────────────╮
 │ This runs:                                                                                                           │
-│   ezc setup --new-github o/store --name gene --yes                                                                   │
+│   ezc setup --new-github o/store --name gene                                                                         │
 │                                                                                                                      │
-│ i [x] also install missing tools with brew                                                                           │
+│ If a tool is missing, setup says how to install it; install it yourself, then run this again.                        │
 │                                                                                                                      │
 │ y run · esc cancel                                                                                                   │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

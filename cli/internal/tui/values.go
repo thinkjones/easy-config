@@ -18,14 +18,18 @@ type valuesPane struct {
 	sel, off int
 	focus    int // 0 the list, 1 the detail
 	revealed struct{ name, value string }
+	seq      int // the latest load; an older one's result is dropped
+	rseq     int // the latest reveal; forget moves it on, so a reveal that arrives after a move is dropped
 }
 
 type valuesLoaded struct {
+	seq  int
 	vals []Value
 	err  error
 }
 
 type revealedMsg struct {
+	seq         int
 	name, value string
 	err         error
 }
@@ -33,15 +37,21 @@ type revealedMsg struct {
 func (p *valuesPane) load() tea.Cmd {
 	m := p.m
 	scope, env := m.scope, m.env
+	p.seq++
+	seq := p.seq
 	return func() tea.Msg {
 		vals, err := m.d.Values.List(scope, env)
-		return valuesLoaded{vals, err}
+		return valuesLoaded{seq, vals, err}
 	}
 }
 
 func (p *valuesPane) loaded(msg tea.Msg) bool {
 	switch msg := msg.(type) {
 	case valuesLoaded:
+		if msg.seq != p.seq {
+			return true
+		}
+		p.forget()
 		p.vals, p.err = nil, ""
 		if msg.err != nil {
 			p.err = clean(msg.err.Error())
@@ -52,6 +62,9 @@ func (p *valuesPane) loaded(msg tea.Msg) bool {
 		p.sel = max(0, min(p.sel, len(p.vals)-1))
 		return true
 	case revealedMsg:
+		if msg.seq != p.rseq {
+			return true
+		}
 		if msg.err != nil {
 			p.m.setStatus(msg.err.Error(), false)
 		} else if v, ok := p.selected(); ok && v.Name == msg.name {
@@ -68,7 +81,10 @@ func cleanValue(v Value) Value {
 	return v
 }
 
-func (p *valuesPane) forget() { p.revealed.name, p.revealed.value = "", "" }
+func (p *valuesPane) forget() {
+	p.revealed.name, p.revealed.value = "", ""
+	p.rseq++
+}
 
 func (p *valuesPane) selected() (Value, bool) {
 	if p.sel < 0 || p.sel >= len(p.vals) {
@@ -203,10 +219,10 @@ func (p *valuesPane) key(k string) tea.Cmd {
 			m.setStatus(v.Name+" is not a secret: its value is shown", false)
 			return nil
 		}
-		scope, env := m.scope, m.env
+		scope, env, seq := m.scope, m.env, p.rseq
 		return func() tea.Msg {
 			value, err := m.d.Values.Reveal(scope, v.Name, env)
-			return revealedMsg{v.Name, value, err}
+			return revealedMsg{seq, v.Name, value, err}
 		}
 	case "u":
 		return p.unset(v)

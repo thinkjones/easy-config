@@ -15,6 +15,7 @@ import (
 
 	"github.com/thinkjones/easy-config/cli/internal/gitstore"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
+	"github.com/thinkjones/easy-config/cli/internal/proc"
 	"github.com/thinkjones/easy-config/cli/internal/recipients"
 	"github.com/thinkjones/easy-config/cli/internal/registry"
 	"github.com/thinkjones/easy-config/cli/internal/tui"
@@ -149,7 +150,7 @@ func (v tuiValues) List(s tui.Scope, env string) ([]tui.Value, error) {
 		val := tui.Value{Name: name, Type: typeOf(ms, name)}
 		for _, m := range ms {
 			if d, ok := m.Lookup(name); ok {
-				val.Desc = d.Desc
+				val.Desc, val.Secret = d.Desc, d.IsSecret()
 				break
 			}
 		}
@@ -169,7 +170,7 @@ func (v tuiValues) List(s tui.Scope, env string) ([]tui.Value, error) {
 		for _, p := range res.Overrides(name) {
 			val.Overrides = append(val.Overrides, filepath.Base(p))
 		}
-		val.Secret = res.Encrypted[name]
+		val.Secret = val.Secret || res.Encrypted[name]
 		for _, n := range append([]string{name}, res.Refs[name]...) {
 			for _, m := range ms {
 				if d, ok := m.Lookup(n); ok && d.IsSecret() {
@@ -337,6 +338,16 @@ func (c tuiCommands) Run(args []string, stdin string) tui.Outcome {
 	sys.StdinIsTerminal, sys.StderrIsTerminal, sys.StdoutIsTerminal = no, no, no
 	sys.ReadSecret = func(string) (string, error) { return "", errors.New("there is no terminal to ask on") }
 	sys.RunTUI = nil
+	// A program wired to the terminal (brew, an editor) would fight the TUI for it: it is not run.
+	var wanted string
+	exec := sys.Exec
+	sys.Exec = func(c proc.Command) ([]byte, []byte, error) {
+		if c.Interactive {
+			wanted = c.Name
+			return nil, nil, errors.New("there is no terminal for it")
+		}
+		return exec(c)
+	}
 	err := Run(args, sys)
 	var lines []string
 	if text := strings.TrimRight(buf.String(), "\n"); text != "" {
@@ -345,6 +356,9 @@ func (c tuiCommands) Run(args []string, stdin string) tui.Outcome {
 	var exit *ExitError
 	if err != nil && !errors.As(err, &exit) {
 		lines = append(lines, "✗ "+err.Error())
+	}
+	if wanted != "" {
+		lines = append(lines, "! "+wanted+" needs the terminal, which the TUI is using: run this command on the command line.")
 	}
 	return tui.Outcome{Lines: lines, OK: err == nil}
 }

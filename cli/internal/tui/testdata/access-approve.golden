@@ -1,7 +1,7 @@
 ezc  store github.com/o/store · env local                                                                               
 ╭─ Approve sam ────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ This runs:                                                                                                           │
-│   ezc user approve sam --yes                                                                                         │
+│   ezc user approve sam --key age1samsamsamsamsamsamsamsamsamsamsamsamsamsamsamsamsamsamsam                           │
 │                                                                                                                      │
 │ name       sam                                                                                                       │
 │ kind       user                                                                                                      │

@@ -8,6 +8,7 @@ import (
 
 // accessPane is the access view: who can read the store, who asked to, and the secrets due for a new value.
 type accessPane struct {
+	seq        int // the latest load; an older one's result is dropped
 	m          *Model
 	data       AccessData
 	err        string
@@ -18,15 +19,18 @@ type accessPane struct {
 }
 
 type accessLoaded struct {
+	seq  int
 	data AccessData
 	err  error
 }
 
 func (p *accessPane) load() tea.Cmd {
 	m := p.m
+	p.seq++
+	seq := p.seq
 	return func() tea.Msg {
 		d, err := m.d.Access.Load()
-		return accessLoaded{d, err}
+		return accessLoaded{seq, d, err}
 	}
 }
 
@@ -34,6 +38,9 @@ func (p *accessPane) loaded(msg tea.Msg) bool {
 	l, ok := msg.(accessLoaded)
 	if !ok {
 		return false
+	}
+	if l.seq != p.seq {
+		return true
 	}
 	p.data, p.err = cleanAccess(l.data), ""
 	if l.err != nil {
@@ -186,7 +193,8 @@ func (p *accessPane) key(k string) tea.Cmd {
 			"",
 			"Approving lets "+q.Name+" read every secret of the store. Check the key with "+q.Name+" first.",
 		)
-		m.confirm("Approve "+q.Name, [][]string{{"user", "approve", q.Name, "--yes"}}, "", notes)
+		// --key approves exactly the key shown here, and answers no question about letting anyone else in.
+		m.confirm("Approve "+q.Name, [][]string{{"user", "approve", q.Name, "--key", q.Key}}, "", notes)
 		return nil
 	case "x", "R":
 		if p.focus != 0 {

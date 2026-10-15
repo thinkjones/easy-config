@@ -6,6 +6,7 @@ import (
 
 // reposPane is the repos view: the registry, each repo checked in its checkout here for the environment.
 type reposPane struct {
+	seq      int // the latest load; an older one's result is dropped
 	m        *Model
 	repos    []Repo
 	err      string
@@ -14,6 +15,7 @@ type reposPane struct {
 }
 
 type reposLoaded struct {
+	seq   int
 	repos []Repo
 	err   error
 }
@@ -21,9 +23,11 @@ type reposLoaded struct {
 func (p *reposPane) load() tea.Cmd {
 	m := p.m
 	env := m.env
+	p.seq++
+	seq := p.seq
 	return func() tea.Msg {
 		r, err := m.d.Repos.Load(env)
-		return reposLoaded{r, err}
+		return reposLoaded{seq, r, err}
 	}
 }
 
@@ -31,6 +35,9 @@ func (p *reposPane) loaded(msg tea.Msg) bool {
 	l, ok := msg.(reposLoaded)
 	if !ok {
 		return false
+	}
+	if l.seq != p.seq {
+		return true
 	}
 	p.repos, p.err = nil, ""
 	if l.err != nil {

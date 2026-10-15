@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/thinkjones/easy-config/cli/internal/config"
+	"github.com/thinkjones/easy-config/cli/internal/proc"
 	"github.com/thinkjones/easy-config/cli/internal/recipients"
 	"github.com/thinkjones/easy-config/cli/internal/tui"
 )
@@ -107,13 +108,17 @@ func TestTUIValuesList(t *testing.T) {
 		}
 	}
 	// In the repo, a declared name with no value is listed with no file.
-	write(t, filepath.Join(f.wd, ezcDir, "manifest.yaml"), "schemaVersion: v1\nrequired:\n  PORT: {type: int, desc: the port}\n")
+	write(t, filepath.Join(f.wd, ezcDir, "manifest.yaml"), "schemaVersion: v1\nrequired:\n  PORT: {type: int, desc: the port}\n  APP_KEY: {type: secret, desc: the key}\n")
 	vals, err = tuiDeps(f.sys()).Values.List(tui.RepoScope, "local")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if port := tuiValue(t, vals, "PORT"); port.File != "" || port.Type != "int" {
 		t.Errorf("PORT %+v", port)
+	}
+	// A declared secret with no value is still a secret: its value is typed hidden.
+	if key := tuiValue(t, vals, "APP_KEY"); !key.Secret || key.File != "" {
+		t.Errorf("APP_KEY %+v", key)
 	}
 }
 
@@ -313,5 +318,20 @@ func TestSetupOnATerminalOpensTheWizard(t *testing.T) {
 	h.run("setup")
 	if len(h.tuis) != 0 {
 		t.Fatal("the wizard opened with stdout no terminal")
+	}
+}
+
+// A command run for the TUI never gets the terminal: the TUI owns it. brew, which setup would hand it to, is not run.
+func TestTUICommandsNeverHandOverTheTerminal(t *testing.T) {
+	f := setupFake(t)
+	f.backend.Missing = true
+	f.paths["brew"] = "/opt/homebrew/bin/brew"
+	f.execFn = func(proc.Command) ([]byte, []byte, error) { return nil, nil, nil }
+	out := tuiDeps(f.sys()).Commands.Run([]string{"setup", "--new-local", "--name", "gene", "--yes"}, "")
+	if out.OK || len(f.execs) != 0 {
+		t.Fatalf("ran %+v\n%+v", f.execs, out)
+	}
+	if !slices.ContainsFunc(out.Lines, func(l string) bool { return strings.Contains(l, "needs the terminal") }) {
+		t.Fatalf("%+v", out.Lines)
 	}
 }

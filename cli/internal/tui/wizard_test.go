@@ -31,7 +31,6 @@ func TestGoldenWizard(t *testing.T) {
 			m, _ := newWizard(t, true)
 			press(t, m, "2")
 			answer(t, m, "o/store", "gene")
-			press(t, m, "i")
 			return m
 		},
 		"wizard-done": func(t *testing.T) *Model {
@@ -56,16 +55,13 @@ func TestWizardCommandLines(t *testing.T) {
 		want    []string
 	}{
 		{[]string{"1"}, []string{""}, false, []string{"setup", "--new-local"}},
-		{[]string{"2"}, []string{"o/store", "gene"}, true, []string{"setup", "--new-github", "o/store", "--name", "gene", "--yes"}},
+		{[]string{"2"}, []string{"o/store", "gene"}, false, []string{"setup", "--new-github", "o/store", "--name", "gene"}},
 		{[]string{"3"}, []string{"o/store", "sam"}, false, []string{"join", "o/store", "--name", "sam"}},
 		{[]string{"4"}, []string{"/srv/store", ""}, false, []string{"setup", "--store", "/srv/store"}},
 	} {
 		m, f := newWizard(t, false)
 		press(t, m, c.keys...)
 		answer(t, m, c.answers...)
-		if c.install {
-			press(t, m, "i")
-		}
 		if !strings.Contains(view(m), "ezc "+strings.Join(c.want, " ")) {
 			t.Fatalf("%v: the confirm screen:\n%s", c.want, view(m))
 		}
@@ -83,10 +79,10 @@ func TestWizardJoinNeedsAName(t *testing.T) {
 	if m.box != nil || m.status != "join needs your name in the store" || len(f.commands.runs) != 0 {
 		t.Fatalf("status %q", m.status)
 	}
-	press(t, m, "3", "i")
+	press(t, m, "3")
 	answer(t, m, "o/store", "sam")
-	if strings.Contains(view(m), "--yes") || strings.Contains(view(m), "install") {
-		t.Fatalf("join offers the install:\n%s", view(m))
+	if strings.Contains(view(m), "--yes") {
+		t.Fatalf("\n%s", view(m))
 	}
 }
 
@@ -142,11 +138,20 @@ func TestWizardEscQuitsAtTheStart(t *testing.T) {
 	}
 }
 
-func TestWizardToggleIsPlainText(t *testing.T) {
-	m, _ := newWizard(t, false)
+// The wizard offers no install: setup would hand the terminal to brew while the TUI owns it. It says what to do.
+func TestWizardOffersNoInstall(t *testing.T) {
+	m, f := newWizard(t, false)
 	press(t, m, "1")
 	answer(t, m, "")
-	if v := view(m); !strings.Contains(v, "i [ ] also install missing tools with brew") || strings.Contains(v, "?[") {
+	press(t, m, "i")
+	if v := view(m); strings.Contains(v, "brew") && !strings.Contains(v, "install it yourself") || strings.Contains(v, "--yes") || strings.Contains(v, "[x]") {
 		t.Fatalf("\n%s", v)
+	}
+	if !strings.Contains(view(m), "If a tool is missing, setup says how to install it; install it yourself, then run this again.") {
+		t.Fatalf("\n%s", view(m))
+	}
+	press(t, m, "y")
+	if slices.Contains(f.commands.runs[0].args, "--yes") {
+		t.Fatalf("%v", f.commands.runs[0].args)
 	}
 }

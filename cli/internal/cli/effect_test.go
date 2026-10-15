@@ -344,3 +344,51 @@ func TestAccessChangeAsksInAStoreWithNoEncryptedFile(t *testing.T) {
 		t.Fatalf("%v\nstdout %q", err, out)
 	}
 }
+
+// --key approves the request that holds exactly that key without asking, and answers nothing else: a change that
+// would also let somebody in is refused, as without a terminal.
+func TestUserApproveKeyAnswersOnlyItsOwnQuestion(t *testing.T) {
+	j := joinMachines(t)
+	j.join(j.b, "--name", "sam")
+	key := setupPublicKey(t, j.b)
+	dir := filepath.Join(j.x.store, ezcDir)
+	reg := accessRegistry(t, dir)
+	reg.Recipients["mallory"] = recipients.Recipient{Key: effectIntruderKey, Kind: recipients.KindUser, Added: "2026-10-11", AddedBy: "mallory"}
+	if err := reg.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := j.x.g.Commit(j.x.store, "tidy", gitstore.Author{}, ezcDir); err != nil {
+		t.Fatal(err)
+	}
+	j.x.push(j.x.store)
+	head := j.x.git("rev-parse", "HEAD")
+
+	_, _, err := accessRun(j.a, "user", "approve", "sam", "--key", key)
+	var u *UsageError
+	if !errors.As(err, &u) || !strings.Contains(err.Error(), "this would also let mallory read the store") {
+		t.Fatalf("got %v", err)
+	}
+	if j.x.git("rev-parse", "HEAD") != head {
+		t.Fatal("the store changed")
+	}
+	j.x.wantClean()
+}
+
+func TestUserApproveKeyMustBeTheRequests(t *testing.T) {
+	j := joinMachines(t)
+	j.join(j.b, "--name", "sam")
+	head := j.x.git("rev-parse", "HEAD")
+	_, _, err := accessRun(j.a, "user", "approve", "sam", "--key", accessStray)
+	if err == nil || err.Error() != "The request of sam holds another key than the one given. Nothing was changed." {
+		t.Fatalf("got %v", err)
+	}
+	if j.x.git("rev-parse", "HEAD") != head {
+		t.Fatal("the store changed")
+	}
+	if _, _, err := accessRun(j.a, "user", "approve", "sam", "--key", setupPublicKey(t, j.b)); err != nil {
+		t.Fatal(err)
+	}
+	if got := accessRegistry(t, filepath.Join(j.x.store, ezcDir)).Recipients["sam"]; got.Key != setupPublicKey(t, j.b) {
+		t.Fatalf("entry %+v", got)
+	}
+}

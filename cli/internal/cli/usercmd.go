@@ -406,6 +406,7 @@ func (a *access) dropRequest(name, message string) error {
 
 func newUserApproveCmd(sys System) *cobra.Command {
 	var yes bool
+	var key string
 	cmd := &cobra.Command{
 		Use:   "approve <name>",
 		Short: "let whoever filed a request read the store",
@@ -415,7 +416,7 @@ The request's branch is never merged: only its request file is read, so nothing 
 
 Approving trusts a key that somebody else wrote down. Compare the key printed here, and by ` + "`ezc user requests`" + `, with the one the person gives you some other way before you run this. The host and the author are whatever the requester typed.
 
-On a terminal it asks ` + "`Approve <name>? [y/N]`" + ` after showing the request, and anything but y or yes changes nothing. Without a terminal it needs --yes. What was shown is what is added: the request is not read again after the answer.
+On a terminal it asks ` + "`Approve <name>? [y/N]`" + ` after showing the request, and anything but y or yes changes nothing. Without a terminal it needs --yes, or --key with the request's whole public key: --key approves only the request that holds exactly that key, and answers no other question, so a change that would also let somebody else in is refused as it is without a terminal. What was shown is what is added: the request is not read again after the answer.
 
 Needs this machine's key file, as ` + "`ezc user add`" + ` does, and refuses a name that is taken, a key that is registered and a request that is not valid. A failure puts the store back as it was, and so does a push the remote refuses because it moved in the meantime; a push that fails for another reason leaves the commit and the branch.`,
 		Args: exactArgs(1, "a name"),
@@ -435,6 +436,11 @@ Needs this machine's key file, as ` + "`ezc user add`" + ` does, and refuses a n
 			if q.Err != nil {
 				return fmt.Errorf("The request of %s is not valid (%s). Refuse it with ezc user deny %s.", name, q.Err, name)
 			}
+			if key != "" && q.Req.Key != key {
+				return fmt.Errorf("The request of %s holds another key than the one given. Nothing was changed.", name)
+			}
+			// --key answers Approve? for the key it names; only --yes answers whether others may come in too.
+			approved := yes || key != ""
 			// Approved already, by a run whose push or whose clean-up failed: only what is left of the request goes.
 			cur, already := a.reg.Recipients[name]
 			already = already && cur.Key == q.Req.Key
@@ -457,13 +463,13 @@ Needs this machine's key file, as ` + "`ezc user add`" + ` does, and refuses a n
 				}
 			}
 
-			if !already && !yes && !sys.StdinIsTerminal() {
+			if !already && !approved && !sys.StdinIsTerminal() {
 				return usagef("%s: say --yes to approve without being asked: there is no terminal to ask on. Try `%s`.", cmd.CommandPath(), helpFor(cmd))
 			}
 
 			// The key is shown before anything is changed, and q is what is added: nothing reads the request again.
 			showRequest(sys.Stdout, q)
-			if !already && !yes {
+			if !already && !approved {
 				switch strings.ToLower(ask.ask("Approve " + name + "? [y/N] ")) {
 				case "y", "yes":
 				default:
@@ -500,7 +506,8 @@ Needs this machine's key file, as ` + "`ezc user add`" + ` does, and refuses a n
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&yes, "yes", false, "approve without being asked; needed when there is no terminal")
+	cmd.Flags().BoolVar(&yes, "yes", false, "approve without being asked, and let in whoever else recipients.yaml names; needed when there is no terminal")
+	cmd.Flags().StringVar(&key, "key", "", "approve without being asked when the request holds exactly this public key, and nothing more")
 	return cmd
 }
 

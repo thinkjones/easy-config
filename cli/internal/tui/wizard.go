@@ -11,7 +11,6 @@ type wizard struct {
 	then       bool // ezc tui opens after a setup that worked; else the wizard quits
 	choice     int  // 1 to 4, 0 before one is made
 	repo, name string
-	install    bool
 }
 
 // wizardChoices are the wizard's first question.
@@ -48,9 +47,6 @@ func (z *wizard) args() []string {
 	}
 	if z.name != "" {
 		args = append(args, "--name", z.name)
-	}
-	if z.install {
-		args = append(args, "--yes")
 	}
 	return args
 }
@@ -111,17 +107,11 @@ func (m *Model) askName() tea.Cmd {
 	})
 }
 
-// wizardConfirm opens the confirm screen for the answers; i toggles the install for setup.
+// wizardConfirm opens the confirm screen for the answers. Setup's install with brew is not offered: brew would need
+// the terminal, which the TUI is using.
 func (m *Model) wizardConfirm() {
 	z := m.wiz
-	var notes []string
-	if z.choice != 3 {
-		mark := "[ ]"
-		if z.install {
-			mark = "[x]"
-		}
-		notes = append(notes, "i "+mark+" also install missing tools with brew")
-	}
+	notes := []string{"If a tool is missing, setup says how to install it; install it yourself, then run this again."}
 	m.confirm(wizardChoices[z.choice-1], [][]string{z.args()}, "", notes)
 }
 

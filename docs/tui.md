@@ -62,9 +62,9 @@ The value you type is hidden for a secret, and goes to the command on its standa
 
 Every change is an `ezc` command. Before it runs, a screen shows the command line, and `y` runs it; `esc` cancels. What the command printed is shown after it, and the views load again.
 
-The command runs as it does without a terminal: it asks nothing. So a change the command would ask about first is refused, and the screen shows the command's own sentence. An access change that would also let in someone `recipients.yaml` names besides the person it is about is one: run it on the command line, after `ezc user list`. `ezc user approve` is the exception: its confirm screen is its question, so the TUI passes `--yes`.
+The command runs as it does without a terminal: it asks nothing. So a change the command would ask about first is refused, and the screen shows the command's own sentence. An access change that would also let in someone `recipients.yaml` names besides the person it is about is one: run it on the command line, after `ezc user list`. Approving a request runs `ezc user approve NAME --key KEY` with the key the confirm screen showed: the command approves only that key, and still refuses when approving would also let someone else in.
 
-What the TUI does not do: `ezc edit`, `ezc repo rewrap` (it asks before it lets anyone read a repo's secrets), and declaring a new name.
+A program that needs the terminal, such as an editor or brew, is not run: the output says so, and the command is run on the command line. What the TUI does not do: `ezc edit`, `ezc repo rewrap` (it asks before it lets anyone read a repo's secrets), and declaring a new name.
 
 ## A revealed secret
 
@@ -79,4 +79,4 @@ With no store set up, `ezc tui` opens the setup wizard, and so does `ezc setup` 
 3. join a store as a new person or machine (`ezc join owner/repo --name NAME`),
 4. an existing store, with this machine's key (`ezc setup --store REPO`),
 
-then the store's repo and your name, and shows the command before it runs it. `i` on that screen adds `--yes`, which lets setup install missing tools with brew. Once setup has worked, `ezc tui` opens its views; see [Set up](setup.md) for what setup makes.
+then the store's repo and your name, and shows the command before it runs it. It does not install missing tools: brew would need the terminal, which the TUI is using, so setup says what to install and you run the wizard again afterwards. Once setup has worked, `ezc tui` opens its views; see [Set up](setup.md) for what setup makes.

@@ -77,17 +77,17 @@ func TestHostileRequestStaysOnItsRow(t *testing.T) {
 	}
 }
 
-func TestApproveShowsTheRequestAndPassesYes(t *testing.T) {
+func TestApproveShowsTheRequestAndPinsItsKey(t *testing.T) {
 	m, f := onAccess(t, accessFixture)
 	press(t, m, "tab", "j", "a")
 	v := view(m)
-	for _, want := range []string{"ezc user approve sam --yes", samKey, "sams-mac", "2026-10-05", "Sam <sam@example.com>"} {
+	for _, want := range []string{"ezc user approve sam --key " + samKey, "sams-mac", "2026-10-05", "Sam <sam@example.com>"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("no %q on\n%s", want, v)
 		}
 	}
 	press(t, m, "y")
-	if len(f.commands.runs) != 1 || !slices.Equal(f.commands.runs[0].args, []string{"user", "approve", "sam", "--yes"}) {
+	if len(f.commands.runs) != 1 || !slices.Equal(f.commands.runs[0].args, []string{"user", "approve", "sam", "--key", samKey}) {
 		t.Fatalf("runs %+v", f.commands.runs)
 	}
 }
@@ -151,11 +151,12 @@ func TestAddBot(t *testing.T) {
 	}
 }
 
-func TestOnlyApprovePassesYes(t *testing.T) {
+// No access action answers the command's question about letting somebody else in.
+func TestNoAccessActionPassesYes(t *testing.T) {
 	m, f := onAccess(t, accessFixture)
 	press(t, m, "x", "y", "enter", "R", "y", "enter", "tab", "d", "y", "enter", "j", "a", "y", "enter")
 	for _, r := range f.commands.runs {
-		if slices.Contains(r.args, "--yes") != (r.args[1] == "approve") {
+		if slices.Contains(r.args, "--yes") {
 			t.Errorf("--yes in %v", r.args)
 		}
 	}

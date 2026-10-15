@@ -7,12 +7,14 @@ import (
 
 // doctorPane is the doctor view: the checks ezc doctor runs.
 type doctorPane struct {
+	seq      int // the latest load; an older one's result is dropped
 	m        *Model
 	sections []Section
 	err      string
 }
 
 type doctorLoaded struct {
+	seq      int
 	sections []Section
 	err      error
 }
@@ -20,9 +22,11 @@ type doctorLoaded struct {
 func (p *doctorPane) load() tea.Cmd {
 	m := p.m
 	env := m.env
+	p.seq++
+	seq := p.seq
 	return func() tea.Msg {
 		s, err := m.d.Doctor.Check(env)
-		return doctorLoaded{s, err}
+		return doctorLoaded{seq, s, err}
 	}
 }
 
@@ -30,6 +34,9 @@ func (p *doctorPane) loaded(msg tea.Msg) bool {
 	l, ok := msg.(doctorLoaded)
 	if !ok {
 		return false
+	}
+	if l.seq != p.seq {
+		return true
 	}
 	p.sections, p.err = nil, ""
 	if l.err != nil {
