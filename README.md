@@ -97,6 +97,7 @@ Who can read the store is written in one file, `recipients.yaml`, and every encr
 | `ezc store audit`, `ezc store rewrap` | Check the store's files against its manifest; make its encrypted files match `recipients.yaml` again. |
 | `ezc user list`, `add`, `requests`, `approve`, `deny`, `remove`, `rotate` | See and change who can read the store. |
 | `ezc bot add`, `remove`, `rotate` | Give CI a key of its own, take it away or replace it. |
+| `ezc tui` | Browse and change values, access and repos in a terminal UI; every change is a command shown first. |
 | `ezc doctor` | Report the health of the machine, the store and the repo, with the fix for each finding. |
 | `ezc manifest validate`, `ezc manifest schema` | Check that the manifest is well formed; print its JSON Schema. |
 | `ezc codegen python` | Generate a pydantic config module from the manifest. |
@@ -112,12 +113,13 @@ Every flag and every exit status is in the [command reference](docs/reference.md
 | [Access](docs/access.md) | `recipients.yaml`, joining, approving a request, removing someone, rotating a key. |
 | [Repos](docs/repos.md) | `repos.yaml`, where each repo is checked out, checking every repo, and how a repo's own secrets follow the store's recipients. |
 | [Bots and CI](docs/ci.md) | A key for a bot, the two secrets a job needs, and a GitHub Actions workflow. |
+| [The TUI](docs/tui.md) | `ezc tui`: the four views, their keys, what a change runs, and the setup wizard. |
 | [Reference](docs/reference.md) | Every command, the files, encryption and the resolution rules. |
 | [When something is wrong](docs/troubleshooting.md) | What `ezc doctor` reports and what to do about it. |
 
 ## Status and known limits
 
-This is `ezc` 0.5. The TUI comes later.
+This is `ezc` 0.6.
 
 - **A repo is re-wrapped only where it is checked out.** A change to who can read the store re-wraps the registered repos checked out on the machine that makes it; run `ezc repo rewrap --all` on a machine that has the others (see [Repos](docs/repos.md#after-a-change-to-who-can-read-the-store)). A repo's secrets that a key leaving it could read are listed, not recorded in `rotation-due.yaml`.
 - **`ezc setup --ci` works with github.com only.** The token is offered to `https://github.com` and no other host, so a store on a GitHub Enterprise host or anywhere else cannot be cloned by `--ci`.

@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/gitstore/gittest"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
@@ -43,6 +45,8 @@ type fake struct {
 	gitFail   string                                     // a git command with one of these arguments, space separated, fails
 	hostname  string                                     // System.Hostname; "" means test-host
 	execHook  func(proc.Command)                         // called before each git command, when set
+	outTTY    bool                                       // StdoutIsTerminal
+	tuis      []tea.Model                                // every model RunTUI was given
 
 	t    *testing.T
 	gits []proc.Command // every git command Exec ran; they are not in execs
@@ -107,7 +111,7 @@ func (f *fake) sys() System {
 			f.children = append(f.children, append(call, env...))
 			return f.childExit, nil
 		},
-		Version: "0.5.0",
+		Version: "0.6.0",
 		Exec: func(c proc.Command) ([]byte, []byte, error) {
 			if c.Name == "git" {
 				return f.runGit(c)
@@ -130,6 +134,8 @@ func (f *fake) sys() System {
 		},
 		StdinIsTerminal:  func() bool { return f.tty },
 		StderrIsTerminal: func() bool { return f.errTTY },
+		StdoutIsTerminal: func() bool { return f.outTTY },
+		RunTUI:           func(m tea.Model) error { f.tuis = append(f.tuis, m); return nil },
 		Now: func() time.Time {
 			if f.now.IsZero() {
 				return time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
@@ -184,7 +190,7 @@ func TestVersion(t *testing.T) {
 	if err := f.run("version"); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.out.String(); got != "ezc 0.5.0\n" {
+	if got := f.out.String(); got != "ezc 0.6.0\n" {
 		t.Fatalf("got %q", got)
 	}
 }

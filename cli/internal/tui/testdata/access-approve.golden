@@ -1,0 +1,30 @@
+ezc  store github.com/o/store · env local                                                                               
+╭─ Approve sam ────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ This runs:                                                                                                           │
+│   ezc user approve sam --key age1samsamsamsamsamsamsamsamsamsamsamsamsamsamsamsamsamsamsam                           │
+│                                                                                                                      │
+│ name       sam                                                                                                       │
+│ kind       user                                                                                                      │
+│ host       sams-mac                                                                                                  │
+│ requested  2026-10-05                                                                                                │
+│ git author Sam <sam@example.com>                                                                                     │
+│ key        age1samsamsamsamsamsamsamsamsamsamsamsamsamsamsamsamsamsamsam                                             │
+│                                                                                                                      │
+│ Approving lets sam read every secret of the store. Check the key with sam first.                                     │
+│                                                                                                                      │
+│ y run · esc cancel                                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+1 values  2 access  3 repos  4 doctor  ? help     a approve  d deny  tab recipients                                     

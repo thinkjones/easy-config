@@ -1,0 +1,30 @@
+ezc  store github.com/o/store · env local                                                                               
+╭─ recipients ─────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ▶ ci                bot       -             2026-10-02  gene          repos o/app                                    │
+│   gene              user      -             2026-10-01  gene          (this machine)                                 │
+│   gene-laptop       machine   gene          2026-10-03  gene                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ requests ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ▶ bad               not valid: the key is not a valid key                                                            │
+│   sam               user      sams-mac              2026-10-05                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ rotation due ───────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ common.enc.yaml/API_TOKEN             removed zed           on 2026-10-06                                            │
+│ env.prod.enc.yaml/DB_PASSWORD         removed zed           on 2026-10-06                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+✗ common.enc.yaml not encrypted for exactly recipients.yaml. Run ezc store rewrap.                                      
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+1 values  2 access  3 repos  4 doctor  ? help     x remove  R rotate  b add bot  tab requests                           

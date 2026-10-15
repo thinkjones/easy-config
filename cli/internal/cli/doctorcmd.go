@@ -26,46 +26,14 @@ func newDoctorCmd(sys System) *cobra.Command {
 Each line is a check, a warning (!) or a problem (✗), with what to do about it. Prints names, counts and paths, never a value. Exits 1 when anything is broken; warnings alone exit 0. Works without a key, and outside a repo.`,
 		Args: maxArgs(1, "at most one environment name"),
 		RunE: func(_ *cobra.Command, args []string) error {
-			if only != "" && !slices.Contains(doctor.Sections, only) {
-				return usagef("ezc doctor: --only takes %s, not %q. Try `ezc help doctor`.", strings.Join(doctor.Sections, ", "), only)
-			}
 			arg := ""
 			if len(args) > 0 {
 				arg = args[0]
 			}
-			if err := checkEnvName("doctor", arg); err != nil {
-				return err
-			}
-			p, explicit, err := storePathsLoose(sys)
+			report, err := doctorReport(sys, arg, only)
 			if err != nil {
 				return err
 			}
-			repo, err := repoDir(sys)
-			if err != nil {
-				return err
-			}
-			note, found := keySource(sys)
-			o := doctor.Options{
-				Only:       only,
-				Version:    sys.Version,
-				Home:       homeDir(sys),
-				StoreDir:   p.StoreEzc(),
-				StoreSet:   explicit,
-				RepoDir:    repo,
-				Env:        envName(sys, arg),
-				Backend:    backendFor(sys),
-				KeyNote:    note,
-				KeyFound:   found,
-				ExtraFiles: policyFiles(sys),
-			}
-			machineOptions(sys, &o)
-			if only == "" || only == "store" {
-				storeOptions(sys, p.StoreEzc(), &o)
-			}
-			if only == "" || only == "repo" {
-				repoOptions(sys, p.StoreEzc(), repo, &o)
-			}
-			report := doctor.Collect(o)
 			fmt.Fprint(sys.Stdout, report.String())
 			if report.Broken() {
 				return &ExitError{1}
@@ -75,6 +43,47 @@ Each line is a check, a warning (!) or a problem (✗), with what to do about it
 	}
 	cmd.Flags().StringVar(&only, "only", "", "report one part: "+strings.Join(doctor.Sections, ", "))
 	return cmd
+}
+
+// doctorReport is what ezc doctor reports for the environment arg ("" for the default), with only one section
+// when only is set. The TUI's doctor view shows it too.
+func doctorReport(sys System, arg, only string) (doctor.Report, error) {
+	if only != "" && !slices.Contains(doctor.Sections, only) {
+		return doctor.Report{}, usagef("ezc doctor: --only takes %s, not %q. Try `ezc help doctor`.", strings.Join(doctor.Sections, ", "), only)
+	}
+	if err := checkEnvName("doctor", arg); err != nil {
+		return doctor.Report{}, err
+	}
+	p, explicit, err := storePathsLoose(sys)
+	if err != nil {
+		return doctor.Report{}, err
+	}
+	repo, err := repoDir(sys)
+	if err != nil {
+		return doctor.Report{}, err
+	}
+	note, found := keySource(sys)
+	o := doctor.Options{
+		Only:       only,
+		Version:    sys.Version,
+		Home:       homeDir(sys),
+		StoreDir:   p.StoreEzc(),
+		StoreSet:   explicit,
+		RepoDir:    repo,
+		Env:        envName(sys, arg),
+		Backend:    backendFor(sys),
+		KeyNote:    note,
+		KeyFound:   found,
+		ExtraFiles: policyFiles(sys),
+	}
+	machineOptions(sys, &o)
+	if only == "" || only == "store" {
+		storeOptions(sys, p.StoreEzc(), &o)
+	}
+	if only == "" || only == "repo" {
+		repoOptions(sys, p.StoreEzc(), repo, &o)
+	}
+	return doctor.Collect(o), nil
 }
 
 // machineOptions fills in the config and git. An invalid config.toml is a finding, not a failure.

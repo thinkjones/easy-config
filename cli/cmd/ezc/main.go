@@ -17,13 +17,14 @@ import (
 	"runtime"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"golang.org/x/term"
 
 	"github.com/thinkjones/easy-config/cli/internal/cli"
 	"github.com/thinkjones/easy-config/cli/internal/proc"
 )
 
-const version = "0.5.0"
+const version = "0.6.0"
 
 func main() {
 	os.Exit(run())
@@ -46,8 +47,13 @@ func run() int {
 		ReadSecret:       readSecret,
 		StdinIsTerminal:  func() bool { return term.IsTerminal(int(os.Stdin.Fd())) },
 		StderrIsTerminal: func() bool { return term.IsTerminal(int(os.Stderr.Fd())) },
-		Now:              time.Now,
-		Hostname:         os.Hostname,
+		StdoutIsTerminal: func() bool { return term.IsTerminal(int(os.Stdout.Fd())) },
+		RunTUI: func(m tea.Model) error {
+			_, err := tea.NewProgram(m).Run()
+			return err
+		},
+		Now:      time.Now,
+		Hostname: os.Hostname,
 	})
 	var exit *cli.ExitError
 	var usage *cli.UsageError

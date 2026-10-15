@@ -1,0 +1,30 @@
+ezc  store github.com/o/store · env local                                                                               
+╭─ keys ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 1 2 3 4   values, access, repos, doctor                                                                              │
+│ ↑ ↓  j k  move                                                                                                       │
+│ tab       the next panel                                                                                             │
+│ e         change the environment                                                                                     │
+│ ctrl+r    load again                                                                                                 │
+│ ?         this help                                                                                                  │
+│ q         quit                                                                                                       │
+│ s         set the selected name for every environment                                                                │
+│ S         set it for this environment only                                                                           │
+│ u         unset it from the file that supplies it                                                                    │
+│ r         reveal a secret, until the selection moves                                                                 │
+│ g         the store's values, or the repo's                                                                          │
+│ p P       pull, push the store                                                                                       │
+│                                                                                                                      │
+│ esc or ? to close                                                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+1 values  2 access  3 repos  4 doctor  ? help     s/S set  u unset  r reveal  e env  g scope  p/P pull/push             
