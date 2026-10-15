@@ -102,10 +102,14 @@ type Values interface {
 type Access interface{ Load() (AccessData, error) }
 
 // Repos reads the repos view, each repo checked for env.
-type Repos interface{ Load(env string) ([]Repo, error) }
+type Repos interface {
+	Load(env string) ([]Repo, error)
+}
 
 // Doctor reads the doctor's report for env.
-type Doctor interface{ Check(env string) ([]Section, error) }
+type Doctor interface {
+	Check(env string) ([]Section, error)
+}
 
 // Commands runs one ezc command line (without "ezc") with stdin, and is the only way the TUI changes anything.
 type Commands interface {
