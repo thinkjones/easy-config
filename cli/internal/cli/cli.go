@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
@@ -40,6 +41,10 @@ type System struct {
 	StdinIsTerminal func() bool
 	// StderrIsTerminal reports whether stderr is a terminal.
 	StderrIsTerminal func() bool
+	// StdoutIsTerminal reports whether stdout is a terminal; ezc tui draws there.
+	StdoutIsTerminal func() bool
+	// RunTUI runs a Bubble Tea model on the terminal until it quits; nil where there is none (tests).
+	RunTUI func(m tea.Model) error
 	// Now is the clock.
 	Now func() time.Time
 	// Hostname is this machine's name, which a join request carries.
@@ -136,6 +141,7 @@ Config
 		newSetupCmd(sys),
 		newJoinCmd(sys),
 		newRepoCmd(sys),
+		newTUICmd(sys),
 	)
 	return root
 }

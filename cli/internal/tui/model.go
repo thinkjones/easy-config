@@ -55,8 +55,9 @@ type Model struct {
 	panes [4]pane
 	stale [4]bool
 
-	scope Scope
-	env   string
+	scope   Scope
+	env     string // "" is the commands' default
+	started bool   // the first header arrived
 
 	help     bool
 	status   string
@@ -96,6 +97,17 @@ func New(d Deps, s Scope) *Model {
 	}
 	return m
 }
+
+// envLabel is the environment as the header shows it; "" is the commands' default, which names none.
+func (m *Model) envLabel() string {
+	if m.env == "" {
+		return "default"
+	}
+	return m.env
+}
+
+// Scope is the scope the values view shows.
+func (m *Model) Scope() Scope { return m.scope }
 
 // Init loads the header; the first view loads once the header says which environment applies.
 func (m *Model) Init() tea.Cmd { return m.loadHeader() }
@@ -161,7 +173,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.w, m.h = msg.Width, msg.Height
 		return m, nil
 	case headerLoaded:
-		first := m.env == ""
+		first := !m.started
+		m.started = true
 		m.head, m.headErr = cleanHeader(msg.h), ""
 		if msg.err != nil {
 			m.headErr = clean(msg.err.Error())
@@ -248,7 +261,7 @@ func (m *Model) render() []string {
 
 // headerLine is "ezc  store <store> · env <env>", with how the store stands on the right.
 func (m *Model) headerLine() string {
-	left := stTitle.Render("ezc") + "  " + stText.Render("store "+m.head.Store+" · env "+m.env)
+	left := stTitle.Render("ezc") + "  " + stText.Render("store "+m.head.Store+" · env "+m.envLabel())
 	var right []string
 	h := m.head
 	switch {

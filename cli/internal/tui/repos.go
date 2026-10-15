@@ -47,7 +47,7 @@ func (p *reposPane) loaded(msg tea.Msg) bool {
 func (p *reposPane) forget() {}
 
 func (p *reposPane) body(w, h int) []string {
-	title := "repos ── env " + p.m.env
+	title := "repos ── env " + p.m.envLabel()
 	switch {
 	case p.err != "":
 		return panel(title, []string{stError.Render("✗ " + p.err)}, w, true)

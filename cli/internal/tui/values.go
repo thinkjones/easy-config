@@ -230,6 +230,10 @@ func (p *valuesPane) set(v Value, forEnv bool) tea.Cmd {
 	}
 	args := []string{"set", v.Name}
 	where := "every environment"
+	if forEnv && m.env == "" {
+		m.setStatus("no environment is named: choose one with e first", false)
+		return nil
+	}
 	if forEnv {
 		args = append(args, "--env", m.env)
 		where = "environment " + m.env

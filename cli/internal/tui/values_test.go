@@ -192,3 +192,14 @@ func TestValuesKeysOnAnEmptyList(t *testing.T) {
 		t.Fatalf("status %q", m.status)
 	}
 }
+
+func TestNoEnvironmentNamed(t *testing.T) {
+	m, f := newTestWith(t, func(f fakes) { sketch(f); f.store.h.Env = "" })
+	if first := strings.Split(view(m), "\n")[0]; !strings.Contains(first, "· env default") {
+		t.Fatalf("header %q", first)
+	}
+	press(t, m, "S")
+	if m.in != nil || m.status != "no environment is named: choose one with e first" || len(f.commands.runs) != 0 {
+		t.Fatalf("status %q", m.status)
+	}
+}
