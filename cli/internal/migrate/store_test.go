@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
+	"github.com/thinkjones/easy-config/cli/internal/proc"
 	"github.com/thinkjones/easy-config/cli/internal/recipients"
 	"github.com/thinkjones/easy-config/cli/internal/registry"
 )
@@ -172,7 +173,7 @@ func TestOldToolFailureRefuses(t *testing.T) {
 			w.o.LookPath = func(string) (string, error) { return "", errors.New("not found") }
 		}, "fsconfig is not on PATH; the proof runs it to compose the environment as it stands."},
 		{"fails", func(w *world) { w.tool.fail = exitErr(1) },
-			"fsconfig codegen shell failed in DIR (exit status 1). Run fsconfig env there to see why."},
+			"fsconfig codegen shell failed in DIR (exit status 1). To see why, run FS_CONFIG_HOME=DIR/.fs-config fsconfig codegen shell >/dev/null in an empty folder."},
 		{"garbage", func(w *world) { w.tool.print = "oops\n" },
 			"the old tool printed something that is not an export line"},
 	}
@@ -239,3 +240,30 @@ func TestStoreRecipientsDiffer(t *testing.T) {
 }
 
 var _ = backend.FakePolicy
+
+func TestStagingErrorNamesEzcNotTheTemporaryFolder(t *testing.T) {
+	noTemp(t)
+	w := oldStore(t)
+	os.Chmod(filepath.Join(w.o.Dir, ".fs-config", "manifest.yaml"), 0o444)
+	err := Run(w.o)
+	if err == nil || err.Error() != "could not write .ezc/manifest.yaml (permission denied)." {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestOldToolHasATimeLimit(t *testing.T) {
+	noTemp(t)
+	w := oldStore(t)
+	if err := Run(w.o); err != nil {
+		t.Fatalf("Run: %v\n%s", err, w.out)
+	}
+	if c := w.tool.cmds[0]; c.Timeout != oldToolTimeout || oldToolTimeout <= 0 {
+		t.Errorf("timeout %v", c.Timeout)
+	}
+	w = oldStore(t)
+	w.tool.fail = proc.ErrTimeout
+	err := Run(w.o)
+	if err == nil || !strings.Contains(err.Error(), "(timed out)") {
+		t.Errorf("err = %v", err)
+	}
+}

@@ -140,7 +140,10 @@ func (o Options) replaceSchema(path string) error {
 			lines[i] = "$schema: " + o.SchemaURL + end
 		}
 	}
-	return os.WriteFile(path, []byte(strings.Join(lines, "")), 0o644)
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "")), 0o644); err != nil {
+		return fmt.Errorf("could not write .ezc/manifest.yaml (%s).", reason(err))
+	}
+	return nil
 }
 
 func copyFile(src, dst string) error {

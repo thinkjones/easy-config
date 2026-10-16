@@ -10,6 +10,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/thinkjones/easy-config/cli/internal/recipients"
 )
 
 // oldName matches a mention of the old tool or its folder.
@@ -19,8 +21,8 @@ var oldName = regexp.MustCompile(`(?i)fs[-_]?config`)
 // visited: dependencies, build output and caches hold copies, not files anyone edits.
 var skipped = []string{"node_modules", "venv", "vendor", "dist", "build", "__pycache__"}
 
-// visited are the hidden folders the scan enters: CI and agent configuration.
-var visited = []string{".github", ".claude"}
+// visited are the hidden folders the scan enters: CI, agent and tool configuration (.config/mise.toml).
+var visited = []string{".github", ".claude", ".config"}
 
 const (
 	maxScanned  = 1 << 20 // bytes; a bigger file is not text anyone edits by hand
@@ -67,7 +69,7 @@ func oldNames(root string, override map[string]string) []string {
 		}
 		files++
 		if files <= maxFiles {
-			lines = append(lines, fmt.Sprintf("! %s:%s names the old tool", rel, strings.Join(at, ",")))
+			lines = append(lines, fmt.Sprintf("! %s:%s names the old tool", recipients.Printable(rel), strings.Join(at, ",")))
 		}
 		return nil
 	})
@@ -123,7 +125,7 @@ found:
 			return nil
 		}
 		rel, _ := filepath.Rel(root, p)
-		lines = append(lines, fmt.Sprintf("! %s passes %s to CI; ezc reads EZC_AGE_KEY. Run %s, then see docs/ci.md.", filepath.ToSlash(rel), keyVar, fix))
+		lines = append(lines, fmt.Sprintf("! %s passes %s to CI; ezc reads EZC_AGE_KEY. Run %s, then see docs/ci.md.", recipients.Printable(filepath.ToSlash(rel)), keyVar, fix))
 		return nil
 	})
 	return lines
