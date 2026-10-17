@@ -67,7 +67,7 @@ func TestRepoMigrates(t *testing.T) {
 		t.Errorf("mise.toml =\n%s", got)
 	}
 	out := w.out.String()
-	for _, want := range []string{"Migrating the repo in " + dir, "✓ local: 4 names, identical", "✓ prod: 4 names, identical", "Next: ezc repo add, commit .ezc/ and mise.toml, and run ezc doctor."} {
+	for _, want := range []string{"Migrating the repo in " + dir, "✓ local: 4 names, identical", "✓ prod: 4 names, identical", "Next: ezc repo add, commit the changes, and run ezc doctor."} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -264,4 +264,44 @@ func TestRepoUnnamedCaseSaysNothingWithoutCommonFiles(t *testing.T) {
 	if strings.Contains(w.out.String(), "with no environment named") {
 		t.Errorf("note printed with no common files:\n%s", w.out)
 	}
+}
+
+func TestRepoRewritesEveryMiseFile(t *testing.T) {
+	noTemp(t)
+	w := oldRepo(t)
+	dir := w.o.Dir
+	for _, f := range []string{".mise.toml", ".config/mise.toml", "mise.local.toml"} {
+		write(t, filepath.Join(dir, f), oldMise)
+	}
+	if err := Run(w.o); err != nil {
+		t.Fatalf("Run: %v\n%s", err, w.out)
+	}
+	out := w.out.String()
+	for _, f := range []string{"mise.toml", ".mise.toml", ".config/mise.toml", "mise.local.toml"} {
+		if got := read(t, filepath.Join(dir, f)); got != rewriteMise(oldMise) {
+			t.Errorf("%s =\n%s", f, got)
+		}
+		if !strings.Contains(out, "+ "+f+" rewritten for ezc") {
+			t.Errorf("output lacks %s:\n%s", f, out)
+		}
+	}
+	if strings.Contains(out, "names the old tool") {
+		t.Errorf("a rewritten file reported:\n%s", out)
+	}
+}
+
+func TestRepoMiseFailurePutsEveryFileBack(t *testing.T) {
+	w := oldRepo(t)
+	dir := w.o.Dir
+	write(t, filepath.Join(dir, ".config", "mise.toml"), oldMise)
+	before := snapshot(t, dir)
+	// mise.toml is written first; .config/mise.toml then cannot be, so mise.toml must be put back.
+	w.o.afterProof = func() { os.Chmod(filepath.Join(dir, ".config"), 0o555) }
+	t.Cleanup(func() { os.Chmod(filepath.Join(dir, ".config"), 0o755) })
+	err := Run(w.o)
+	os.Chmod(filepath.Join(dir, ".config"), 0o755)
+	if err == nil || !strings.HasPrefix(err.Error(), "could not write .config/mise.toml (") || !strings.HasSuffix(err.Error(), "). Nothing was changed.") {
+		t.Fatalf("err = %v", err)
+	}
+	sameSnapshot(t, before, snapshot(t, dir))
 }

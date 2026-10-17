@@ -4,10 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/thinkjones/easy-config/cli/internal/proc"
 )
+
+// oldToolTimeout stops the old tool when it waits, as the encryption tool can for a key's passphrase.
+const oldToolTimeout = 2 * time.Minute
 
 // before composes the environment as the old tool does: `codegen shell [env]`, its stdout parsed and its stderr
 // dropped. For the store it runs in an empty folder with FS_CONFIG_HOME at the old store, so that it composes the
@@ -37,10 +42,15 @@ func (o Options) before(env string, store bool) (map[string]string, error) {
 	if env != "" {
 		args = append(args, env)
 	}
-	out, _, err := o.Exec(proc.Command{Dir: dir, Env: vars, Name: OldTool, Args: args})
+	out, _, err := o.Exec(proc.Command{Dir: dir, Env: vars, Name: OldTool, Args: args, Timeout: oldToolTimeout})
 	if err != nil {
-		return nil, fmt.Errorf("%s %s failed in %s (%s). Run %s env%s there to see why.",
-			OldTool, strings.Join(args, " "), o.Dir, exitReason(err), OldTool, envArg(env))
+		failed := fmt.Sprintf("%s %s failed in %s (%s).", OldTool, strings.Join(args, " "), o.Dir, exitReason(err))
+		if store {
+			// The store was composed from an empty folder, so that is where to look; stdout holds the values.
+			return nil, fmt.Errorf("%s To see why, run FS_CONFIG_HOME=%s %s %s >/dev/null in an empty folder.",
+				failed, filepath.Join(o.Dir, OldDir), OldTool, strings.Join(args, " "))
+		}
+		return nil, fmt.Errorf("%s Run %s env%s there to see why.", failed, OldTool, envArg(env))
 	}
 	return parseExports(out)
 }

@@ -102,3 +102,18 @@ func TestConvertRecipientsSameKeyTwice(t *testing.T) {
 		t.Fatalf("error %v", err)
 	}
 }
+
+func TestConvertRecipientsHumanReposAreNotRegistered(t *testing.T) {
+	k := fakeKeys(t, 2)
+	in := strings.Replace(oldRecipients(k[0], k[1]), "repos: []", "repos: [owner/c]", 1)
+	users, repos, err := convert([]byte(in), "2026-10-15", (&backend.Fake{}).ValidRecipient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := repos.IDs(); !reflect.DeepEqual(got, []string{"owner/a", "owner/b"}) {
+		t.Errorf("repos = %v, want only the bot's", got)
+	}
+	if r := users.Recipients["gene"].Repos; len(r) != 0 {
+		t.Errorf("gene's repos = %v", r)
+	}
+}

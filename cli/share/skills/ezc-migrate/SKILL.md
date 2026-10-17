@@ -23,7 +23,13 @@ ezc version
 fsconfig doctor          # the old setup must be healthy, or the proof cannot run
 ```
 
-List the repos: the old store's `recipients.yaml` names the CI repos, and each checkout with a `.fs-config/` folder is one (`ls ~/dev/repos/*/.fs-config`).
+List the repos. Each checkout with a `.fs-config/` folder is one, wherever it lives, so search the whole home folder rather than one projects folder:
+
+```bash
+find ~ -maxdepth 5 -type d -name .fs-config -not -path "$HOME/.*" -not -path "$HOME/Library/*" -not -path '*/node_modules/*' 2>/dev/null
+```
+
+It skips the home folder's hidden folders (the Trash, plugin caches), which hold copies, not repos, and takes a few seconds. The old store's `recipients.yaml` names the CI repos too; a repo it names with no checkout here needs cloning first. The store's own `.fs-config/` (the one holding `global.yaml`) is in the list: it is migrated first and removed last.
 
 ## 2. The store
 
@@ -53,28 +59,29 @@ For each repo, in its checkout:
 ```bash
 ezc migrate --dry-run
 ezc migrate
+ezc repo add            # registers the repo in the store's repos.yaml (a commit in the store)
 ```
 
-Then act on every `!` line it printed:
+Register the repo before anything else: `ezc bot add --repo` refuses a repo that is not in `repos.yaml`. A repo that a bot of the old store listed is already there (`✓ <id> is registered`). Then act on every `!` line migrate printed:
 
-- **A file that still names fsconfig.** A generated `env.py` or similar: run the repo's codegen again (`ezc codegen python -m .ezc/manifest.yaml -o <the same path>`). `.envrc`: replace any fsconfig line with `source_env .ezc/env.sh` if the repo uses direnv, and keep `export APP_ENV=…` (ezc reads it). A README or docs: update the commands. Comments in `mise.toml`: reword them.
+- **A file that still names fsconfig.** A generated `env.py` or similar: run the repo's codegen again (`ezc codegen python -m .ezc/manifest.yaml -o <the same path>`). `.envrc`: replace any fsconfig line with `source_env .ezc/env.sh` if the repo uses direnv, and keep `export APP_ENV=…` (ezc reads it). A README or docs: update the commands. Comments in a mise file: reword them.
 - **A workflow that passes `SOPS_AGE_KEY`.** ezc's CI reads `EZC_AGE_KEY` and clones the store with `EZC_STORE_TOKEN`. Run the command the line names (`ezc bot rotate <name>` when the store's registry already has the bot, else `ezc bot add <name> --repo <owner/repo>`), save a token that can read the store as `EZC_STORE_TOKEN`, replace the old setup action with `ezc setup --ci --store <owner/store>`, and delete the old `SOPS_AGE_KEY` and store-token secrets once the job is green.
 
 Then:
 
 ```bash
-ezc repo add            # registers the repo in the store's repos.yaml (a commit in the store)
 ezc doctor              # if it reports the repo's recipients, run ezc repo rewrap
 ezc env && ezc env prod # each environment
 mise run <a-real-task>
-git add -A .ezc .fs-config mise.toml && git commit
+git status              # .ezc/ added, .fs-config/ removed, each mise file migrate rewrote
+git add -A .ezc .fs-config && git add -u && git commit
 ```
 
 Push the store too: `ezc store push` sends the `repo add` commits.
 
 ## 4. Finish
 
-When `ls ~/dev/repos/*/.fs-config` finds nothing:
+When the search in step 1 finds only the store's `.fs-config/`:
 
 ```bash
 cd <the store's checkout> && git rm -r .fs-config && git commit -m "Remove .fs-config: every repo uses ezc" && git push
@@ -84,4 +91,4 @@ Then retire fsconfig: remove its binary and shim (`~/.local/bin/fsconfig`, `~/.l
 
 ## Putting a repo back
 
-Before it is committed: `git restore --staged --worktree .fs-config mise.toml && rm -rf .ezc`.
+Before it is committed: `rm -rf .ezc`, then `git restore --staged --worktree .fs-config` and each mise file migrate said it rewrote (`+ <file> rewritten for ezc`).

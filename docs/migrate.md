@@ -18,7 +18,7 @@ It acts on the working directory, which must hold `.fs-config/` and no `.ezc/`. 
 
 1. **The store first.** In the old store's checkout, run `ezc migrate`. Commit `.ezc/` and push.
 2. **Each machine** runs `ezc setup --store <that repo>`, so that its ezc store is the migrated one. If migrate said the encrypted file is not encrypted for exactly `recipients.yaml`'s keys, run `ezc store rewrap` once.
-3. **Each repo**: `ezc migrate --dry-run`, then `ezc migrate`, act on what it reports, `ezc repo add`, and commit.
+3. **Each repo**: `ezc migrate --dry-run`, then `ezc migrate`, then `ezc repo add` (before anything that needs the repo registered, such as `ezc bot add --repo`), act on what it reports, and commit.
 4. **When every repo has moved**, delete `.fs-config/` from the store and retire fsconfig.
 
 ## The proof
@@ -36,7 +36,7 @@ For the store it composes the store alone. For a repo it composes every environm
 The environment would change. Nothing was changed.
 ```
 
-and migrate exits 1. When the repo has no `env.local.yaml`, the case with no environment named is proved too: fsconfig then composes the store alone, so migrate proves the store alone, makes sure ezc can load the repo's common files, and says when ezc, with no environment named, would load them as well, which fsconfig did not.
+and migrate exits 1. fsconfig is given two minutes per environment; one that waits longer, for a passphrase say, is stopped and the migration refused. When the repo has no `env.local.yaml`, the case with no environment named is proved too: fsconfig then composes the store alone, so migrate proves the store alone, makes sure ezc can load the repo's common files, and says when ezc, with no environment named, would load them as well, which fsconfig did not.
 
 ## What it changes
 
@@ -46,22 +46,22 @@ In the **store**, `.ezc/` is written beside `.fs-config/`, which fsconfig still 
 | --- | --- |
 | `global.yaml`, `global.enc.yaml` | `common.yaml`, `common.enc.yaml`, byte for byte |
 | `recipients.yaml` | `recipients.yaml` in ezc's form: `purpose: human` becomes `kind: user`, `machine` becomes `kind: bot` with its `repos`, each dated today and added by `migrate` |
-| the bots' `repos` | `repos.yaml` |
+| the bots' `repos` | `repos.yaml` (a person's `repos` are dropped) |
 | the encryption policy | written again for `recipients.yaml`'s keys |
 | `manifest.yaml` | the same, with `$schema` pointing at ezc's schema |
 | any other file | copied |
 
-In a **repo**, `.ezc/` takes the place of `.fs-config/`: the same files, `manifest.yaml`'s `$schema` pointed at ezc's schema, and the `env.sh` shim. `mise.toml` is rewritten: the shim's path becomes `.ezc/env.sh`, `fsconfig env`, `codegen python`, `manifest` and `doctor` become their ezc commands, `fsconfig codegen shell` becomes `ezc env export`, and `.fs-config/` becomes `.ezc/`. The repo's own encryption policy is copied as it is; `ezc repo rewrap` writes it from the store's registry when you need it to.
+In a **repo**, `.ezc/` takes the place of `.fs-config/`: the same files, `manifest.yaml`'s `$schema` pointed at ezc's schema, and the `env.sh` shim. Each mise file the repo has (`mise.toml`, `mise.local.toml`, `.mise.toml`, `.mise.local.toml`, `.config/mise.toml`, `.config/mise/config.toml`, `mise/config.toml`) is rewritten: the shim's path becomes `.ezc/env.sh`, `fsconfig env`, `codegen python`, `manifest` and `doctor` become their ezc commands, `fsconfig codegen shell` becomes `ezc env export`, and `.fs-config/` becomes `.ezc/`. The repo's own encryption policy is copied as it is; `ezc repo rewrap` writes it from the store's registry when you need it to.
 
-A failure while writing puts the folder back: no `.ezc/`, `.fs-config/` and `mise.toml` as they were.
+A failure while writing puts the folder back: no `.ezc/`, and `.fs-config/` and the mise files as they were. Only `.fs-config/` is removed after that: if its removal fails part way (a file it cannot delete), migrate has succeeded, says `! could not remove .fs-config/`, and leaves what is left of it for you to delete; what was removed is not put back, and is in git history.
 
 ## What it reports
 
 migrate changes nothing else. After the proof it lists, as `!` lines:
 
-- every file that still names fsconfig, with the first line numbers: a generated `env.py` (run `ezc codegen python` again), `.envrc`, a README, a CI workflow;
+- every file that still names fsconfig, with the first line numbers (hidden folders other than `.github`, `.claude` and `.config` are not searched, nor dependency and cache folders such as `node_modules` and `__pycache__`): a generated `env.py` (run `ezc codegen python` again), `.envrc`, a README, a CI workflow;
 - every file under `.github/` that passes `SOPS_AGE_KEY` to a job. ezc's CI reads `EZC_AGE_KEY`: run `ezc bot rotate <name>` when the store's registry already has a bot for the repo, else `ezc bot add`, and follow [Bots and CI](ci.md#bots-and-ci).
 
 ## Putting it back
 
-The store keeps `.fs-config/` until you delete it, and a repo's old folder is in its git history: `git restore --staged --worktree .fs-config mise.toml && rm -rf .ezc` undoes a repo's migration before you commit it.
+The store keeps `.fs-config/` until you delete it, and a repo's old folder is in its git history: `rm -rf .ezc`, then `git restore --staged --worktree .fs-config` and the mise files it rewrote, undoes a repo's migration before you commit it.

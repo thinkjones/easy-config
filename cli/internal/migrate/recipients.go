@@ -59,10 +59,13 @@ func convert(old []byte, today string, valid func(key string) error) (recipients
 			if !registry.ValidID(id) {
 				return none, registry.Registry{}, fmt.Errorf("recipient %d: a repo is not a valid repo ID", n)
 			}
-			repos.Repos[id] = registry.Repo{Added: today, AddedBy: addedBy}
 		}
+		// Only a bot's repos are repos ezc acts on (its key is delivered there); a person's list is dropped.
 		if r.Kind == "bot" && len(e.Repos) > 0 {
 			r.Repos = e.Repos
+			for _, id := range e.Repos {
+				repos.Repos[id] = registry.Repo{Added: today, AddedBy: addedBy}
+			}
 		}
 		users.Recipients[name] = r
 	}

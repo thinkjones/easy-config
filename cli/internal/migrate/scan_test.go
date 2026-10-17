@@ -73,3 +73,24 @@ func TestCIFindings(t *testing.T) {
 		t.Errorf("no .github: %q", got)
 	}
 }
+
+func TestOldNamesPrintsFileNamesSafely(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "a\x1b[2Jb.md"), "fsconfig\n")
+	write(t, filepath.Join(root, ".github", "w\x07.yml"), "SOPS_AGE_KEY: x\n")
+	if got, want := oldNames(root, nil), []string{"! .github/w?.yml:1 names the old tool", "! a?[2Jb.md:1 names the old tool"}; !reflect.DeepEqual(got, want) && !reflect.DeepEqual(got, want[1:]) {
+		t.Errorf("got %q", got)
+	}
+	got := ciFindings(root, "SOPS_AGE_KEY", nil)
+	if len(got) != 1 || !strings.HasPrefix(got[0], "! .github/w?.yml passes") {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestOldNamesVisitsDotConfig(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, ".config", "mise.toml"), "run = \"fsconfig env\"\n")
+	if got, want := oldNames(root, nil), []string{"! .config/mise.toml:1 names the old tool"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %q", got)
+	}
+}

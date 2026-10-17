@@ -96,7 +96,7 @@ func runStore(o Options) error {
 		defer os.RemoveAll(stage.dir)
 	}
 	if err != nil {
-		return err
+		return asEzc(err, stage.dir)
 	}
 	after, err := o.after(resolve.Options{StoreDir: stage.dir}, stage.dir)
 	if err != nil {
@@ -121,7 +121,7 @@ func runStore(o Options) error {
 }
 
 // runRepo migrates a repo that loads its environment through the old tool: .ezc/ with the shim takes the place
-// of .fs-config/, and mise.toml is rewritten to ezc. Each environment is proved over the ezc store.
+// of .fs-config/, and its mise files are rewritten to ezc. Each environment is proved over the ezc store.
 func runRepo(o Options) error {
 	if st, err := os.Stat(o.StoreEzc); o.StoreEzc == "" || err != nil || !st.IsDir() {
 		return errors.New("Set up the ezc store first: run ezc migrate in the old store's folder, commit and push it, then ezc setup --store <it>.")
@@ -158,7 +158,7 @@ func runRepo(o Options) error {
 		defer os.RemoveAll(stage.dir)
 	}
 	if err != nil {
-		return err
+		return asEzc(err, stage.dir)
 	}
 	proved := true
 	for _, p := range proofs {
@@ -189,41 +189,32 @@ func runRepo(o Options) error {
 			stage.notes = append(stage.notes, "! with no environment named, ezc also loads this repo's common files; the old tool did not.")
 		}
 	}
-	mise := filepath.Join(o.Dir, "mise.toml")
-	oldMise, hasMise, err := readMaybe(mise)
+	rewrites, override, err := o.miseRewrites()
 	if err != nil {
-		return fmt.Errorf("could not read mise.toml (%s). Nothing was changed.", reason(err))
-	}
-	newMise := rewriteMise(oldMise)
-	override := map[string]string{}
-	if hasMise {
-		override["mise.toml"] = newMise
+		return err
 	}
 	stage.notes = append(stage.notes, oldNames(o.Dir, override)...)
 	stage.notes = append(stage.notes, ciFindings(o.Dir, o.KeyTextVariable, botsOf(o.StoreEzc))...)
 	if o.DryRun {
-		if hasMise && newMise != oldMise {
-			stage.notes = append([]string{"would rewrite mise.toml"}, stage.notes...)
+		var would []string
+		for _, r := range rewrites {
+			would = append(would, "would rewrite "+r.rel)
 		}
-		return o.dryRun(stage.files, stage.notes)
+		return o.dryRun(stage.files, append(would, stage.notes...))
 	}
 	if o.afterProof != nil {
 		o.afterProof()
 	}
 	// Read again: what is written must be what was there, not what was read before the proof.
-	if oldMise, hasMise, err = readMaybe(mise); err != nil {
-		return fmt.Errorf("could not read mise.toml (%s). Nothing was changed.", reason(err))
+	if rewrites, _, err = o.miseRewrites(); err != nil {
+		return err
 	}
-	newMise = rewriteMise(oldMise)
 	if err := o.place(stage); err != nil {
 		return err
 	}
-	if hasMise && newMise != oldMise {
-		if err := replaceFile(mise, newMise); err != nil {
-			os.RemoveAll(filepath.Join(o.Dir, newDir))
-			return fmt.Errorf("could not write mise.toml (%s). Nothing was changed.", reason(err))
-		}
-		o.say("+ mise.toml rewritten for ezc")
+	if err := o.rewrite(rewrites); err != nil {
+		os.RemoveAll(filepath.Join(o.Dir, newDir))
+		return err
 	}
 	if err := os.RemoveAll(filepath.Join(o.Dir, OldDir)); err != nil {
 		o.say("! could not remove .fs-config/ (%s); remove it yourself.", reason(err))
@@ -231,8 +222,65 @@ func runRepo(o Options) error {
 		o.say("- .fs-config/ removed")
 	}
 	o.sayNotes(stage.notes)
-	o.say("Next: ezc repo add, commit .ezc/ and mise.toml, and run ezc doctor.")
+	o.say("Next: ezc repo add, commit the changes, and run ezc doctor.")
 	return nil
+}
+
+// miseFiles are the mise configuration files a repo can have, relative to it, in the order they are rewritten.
+var miseFiles = []string{"mise.toml", "mise.local.toml", ".mise.toml", ".mise.local.toml", ".config/mise.toml", ".config/mise/config.toml", "mise/config.toml"}
+
+// miseRewrite is a mise file whose text the rewrite changes.
+type miseRewrite struct{ rel, old, new string }
+
+// miseRewrites reads every mise file of the repo: those the rewrite changes, and the text each will have (by
+// path relative to the repo) for the scan, which must not report what the rewrite fixes.
+func (o Options) miseRewrites() ([]miseRewrite, map[string]string, error) {
+	var rewrites []miseRewrite
+	override := map[string]string{}
+	for _, rel := range miseFiles {
+		old, ok, err := readMaybe(filepath.Join(o.Dir, filepath.FromSlash(rel)))
+		if err != nil {
+			return nil, nil, fmt.Errorf("could not read %s (%s). Nothing was changed.", rel, reason(err))
+		}
+		if !ok {
+			continue
+		}
+		override[rel] = rewriteMise(old)
+		if override[rel] != old {
+			rewrites = append(rewrites, miseRewrite{rel, old, override[rel]})
+		}
+	}
+	return rewrites, override, nil
+}
+
+// rewrite writes each mise file's new text; on a failure it puts back the ones it wrote.
+func (o Options) rewrite(rewrites []miseRewrite) error {
+	for i, r := range rewrites {
+		if err := replaceFile(filepath.Join(o.Dir, filepath.FromSlash(r.rel)), r.new); err != nil {
+			var stuck []string
+			for _, done := range rewrites[:i] {
+				if replaceFile(filepath.Join(o.Dir, filepath.FromSlash(done.rel)), done.old) != nil {
+					stuck = append(stuck, done.rel)
+				}
+			}
+			if len(stuck) > 0 {
+				return fmt.Errorf("could not write %s (%s), and %s could not be put back: restore them with git.", r.rel, reason(err), strings.Join(stuck, ", "))
+			}
+			return fmt.Errorf("could not write %s (%s). Nothing was changed.", r.rel, reason(err))
+		}
+	}
+	for _, r := range rewrites {
+		o.say("+ %s rewritten for ezc", r.rel)
+	}
+	return nil
+}
+
+// asEzc names a staging error's temporary folder as the .ezc it was to become.
+func asEzc(err error, stage string) error {
+	if stage == "" {
+		return err
+	}
+	return errors.New(strings.ReplaceAll(err.Error(), stage, newDir))
 }
 
 // oldEnvs are the environments a repo's .fs-config/ names, from its env.<name>.yaml files, sorted.
@@ -282,7 +330,7 @@ func replaceFile(path, text string) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".mise.toml.ezc-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".ezc-rewrite-*")
 	if err != nil {
 		return err
 	}
@@ -356,7 +404,7 @@ const (
 	Short = "convert a store or a repo from fsconfig's .fs-config/ to .ezc/, proving the environment unchanged"
 	Long  = `Convert the store or the repo in the working directory from fsconfig's .fs-config/ folder to ezc's .ezc/.
 
-Run it in the old store first: .ezc/ is written beside .fs-config/ (global.* become common.*, recipients.yaml is converted, its bots' repos become repos.yaml, and the encryption policy is written for its keys). Commit and push it, run ezc setup --store on each machine, then run ezc migrate in each repo: .ezc/ with the env.sh shim replaces .fs-config/, and mise.toml is rewritten to ezc.
+Run it in the old store first: .ezc/ is written beside .fs-config/ (global.* become common.*, recipients.yaml is converted, its bots' repos become repos.yaml, and the encryption policy is written for its keys). Commit and push it, run ezc setup --store on each machine, then run ezc migrate in each repo: .ezc/ with the env.sh shim replaces .fs-config/, and its mise files (mise.toml, .mise.toml, .config/mise.toml and the like) are rewritten to ezc.
 
 Nothing is written until the proof passes: the environment is composed by fsconfig codegen shell (which must be on PATH) and by ezc, for the store alone or for every environment the repo names, and every name and value must be identical. Differences are listed by name, never by value. What still names fsconfig, and CI that passes its key in the old variable, is reported, not changed. No git runs: review the result and commit it.
 
