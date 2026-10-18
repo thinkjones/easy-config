@@ -300,26 +300,8 @@ A name the scope's manifest does not declare is declared by this command, as req
 			if err != nil {
 				return err
 			}
-			if strings.ContainsRune(value, 0) {
-				return fmt.Errorf("%s: contains a NUL byte, which an environment variable cannot hold", name)
-			}
-			if !utf8.ValidString(value) {
-				return fmt.Errorf("%s: not valid UTF-8", name)
-			}
-			switch {
-			case strings.TrimSpace(value) == "":
-				return fmt.Errorf("%s: empty", name)
-			case check.IsPlaceholder(value):
-				return fmt.Errorf("%s: placeholder, not a value", name)
-			}
-			if _, ok := resolve.Escape(value); !ok && !v.IsSecret() && !expand {
-				return fmt.Errorf("%s: a value that starts with ~ is expanded to your home folder when loaded. Pass --expand to keep that meaning.", name)
-			}
-			// A reference's final text is not known here, as in the store audit.
-			if !expand || !strings.ContainsRune(value, '$') {
-				if why := check.ValidateValue(v, value); why != "" {
-					return fmt.Errorf("%s: %s", name, why)
-				}
+			if err := checkValue(name, v, value, expand, "Pass --expand to keep that meaning."); err != nil {
+				return err
 			}
 
 			// A new name is declared first, so a failure to declare leaves nothing behind; if the value then
@@ -449,6 +431,33 @@ func valueToSet(sys System, name string, secret bool, args []string) (string, er
 		value = strings.TrimSuffix(rest, "\r")
 	}
 	return value, nil
+}
+
+// checkValue is an error naming name, never echoing value, when value cannot be stored for v. tilde is the advice
+// for a literal value that starts with ~.
+func checkValue(name string, v manifest.Var, value string, expand bool, tilde string) error {
+	if strings.ContainsRune(value, 0) {
+		return fmt.Errorf("%s: contains a NUL byte, which an environment variable cannot hold", name)
+	}
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("%s: not valid UTF-8", name)
+	}
+	switch {
+	case strings.TrimSpace(value) == "":
+		return fmt.Errorf("%s: empty", name)
+	case check.IsPlaceholder(value):
+		return fmt.Errorf("%s: placeholder, not a value", name)
+	}
+	if _, ok := resolve.Escape(value); !ok && !v.IsSecret() && !expand {
+		return fmt.Errorf("%s: a value that starts with ~ is expanded to your home folder when loaded. %s", name, tilde)
+	}
+	// A reference's final text is not known here, as in the store audit.
+	if !expand || !strings.ContainsRune(value, '$') {
+		if why := check.ValidateValue(v, value); why != "" {
+			return fmt.Errorf("%s: %s", name, why)
+		}
+	}
+	return nil
 }
 
 // writeValue stores the value, plaintext or through the backend. A plaintext value is written so that it

@@ -22,7 +22,7 @@ func newEnvCmd(sys System) *cobra.Command {
 
 Exits 1 when a required variable is missing or invalid. Names and paths only; --verbose adds which file set each name.
 
-An environment named "export" cannot be passed to ` + "`ezc env`" + ` (it is the subcommand); set EZC_ENV instead.`,
+An environment named "export" or "import" cannot be passed to ` + "`ezc env`" + ` (they are its subcommands); set EZC_ENV instead. ` + "`ezc env import ENV FILE`" + ` sets an environment's values from a .env file.`,
 		Args: maxArgs(1, "at most one environment name"),
 		RunE: func(_ *cobra.Command, args []string) error {
 			return envCheck(sys, firstArg(args), manifestFlag, verbose)
@@ -30,7 +30,7 @@ An environment named "export" cannot be passed to ` + "`ezc env`" + ` (it is the
 	}
 	cmd.Flags().StringVarP(&manifestFlag, "manifest", "m", "", "the manifest to check against; the values come from that manifest's folder, not this repo")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "show which file set each name")
-	cmd.AddCommand(newExportCmd(sys))
+	cmd.AddCommand(newExportCmd(sys), newImportCmd(sys))
 	return cmd
 }
 

@@ -89,7 +89,7 @@ Who can read the store is written in one file, `recipients.yaml`, and every encr
 | `ezc join` | Ask for access to an existing store from this machine. |
 | `ezc repo init` | Create `.ezc/` in the working directory with a manifest, `env.local.yaml` and the `env.sh` shim. |
 | `ezc repo add`, `remove`, `list`, `check`, `uses`, `rewrap` | Register the repos that use the store; check them all, find who uses a name, and keep their own secrets encrypted for the store's recipients. |
-| `ezc env` | Check an environment against the manifest. `ezc env export` prints it, for `eval` or as JSON. |
+| `ezc env` | Check an environment against the manifest. `ezc env export` prints it, for `eval` or as JSON; `ezc env import ENV FILE` sets its values from a `.env` file, secrets encrypted. |
 | `ezc run` | Run a command with the environment added to its own. |
 | `ezc list`, `ezc get` | List the names an environment holds and where each comes from; print one value (a secret needs `--reveal`). |
 | `ezc set`, `ezc unset`, `ezc edit` | Write, remove or hand-edit values, in the repo or with `-g` in the store. |
