@@ -434,7 +434,7 @@ func newRepoRewrapCmd(sys System) *cobra.Command {
 		Short: "encrypt a repo's secrets for the people the store's recipients.yaml names",
 		Long: `Write the encryption policy of a repo's checkout from the store's recipients.yaml, and re-wrap each encrypted file there for exactly the keys it names. With no argument it re-wraps the working repo; with an ID, that repo; with --all, every repo in repos.yaml that has a checkout on this machine. The result is left in the checkout's .ezc for you to commit there: no git runs in a repo.
 
-Refused before anything is written when the store has no recipients.yaml, while an encrypted file of the store is not encrypted for the people it names, and while the store's encryption policy does not name exactly them: a name somebody pushed into recipients.yaml is let in by ` + "`ezc store rewrap`" + `, which asks, before any repo follows it. A checkout with neither an encrypted file nor a policy is skipped, and one whose files are already for the store's recipients is not written to. Each secret a key that has left a file could read is named, with the command that gives it a new value.
+Refused before anything is written when the store has no recipients.yaml, while an encrypted file of the store is not encrypted for the people it names, and while the store's encryption policy does not name exactly them: a name somebody pushed into recipients.yaml is let in by ` + "`ezc store rewrap`" + `, which asks, before any repo follows it. A checkout with neither an encrypted file nor a policy gets its first policy when it is the working repo or the one named, after the same question for everyone recipients.yaml names, and is skipped with --all; one whose files are already for the store's recipients is not written to. Each secret a key that has left a file could read is named, with the command that gives it a new value.
 
 Read ` + "`ezc user list`" + ` first. Each name that would gain access to a repo's secrets is printed before anything is written there, and the command asks ` + "`Let <names> read <id>'s secrets? [y/N]`" + ` on a terminal; anything but y leaves that repo as it is. Without a terminal it needs --yes.
 
@@ -497,7 +497,7 @@ func repoRewrapAll(sys System, cmd *cobra.Command, args []string, all, yes bool)
 		if !t.Here || sameDir(t.Ezc, p.StoreEzc()) {
 			continue
 		}
-		gains[i], gainErrs[i] = repoGains(b, t.Ezc, reg)
+		gains[i], gainErrs[i] = repoGains(b, t.Ezc, reg, !all)
 		if len(gains[i]) > 0 {
 			gaining = append(gaining, gains[i]...)
 			opened = append(opened, t.ID)
@@ -540,7 +540,7 @@ func repoRewrapAll(sys System, cmd *cobra.Command, args []string, all, yes bool)
 				}
 			}
 		}
-		r, err := rewrapRepo(sys, b, t.Ezc, reg, "")
+		r, err := rewrapRepo(sys, b, t.Ezc, reg, "", !all)
 		var left *repoLeftError
 		switch {
 		case errors.As(err, &left):

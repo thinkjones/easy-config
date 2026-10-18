@@ -457,7 +457,7 @@ func (a *access) rewrapRepos(c change) {
 			fmt.Fprintf(w, "! %s's checkout is the store's own folder, so it was not re-wrapped as a repo. Correct [checkouts] in config.toml.\n", id)
 			continue
 		}
-		gains, err := repoGains(a.b, ezc, next)
+		gains, err := repoGains(a.b, ezc, next, false)
 		if err != nil {
 			a.left = append(a.left, id)
 			fmt.Fprintf(w, "! %s could not be re-wrapped (%s). Run ezc repo rewrap %s.\n", id, firstLineOf(err), id)
@@ -475,7 +475,7 @@ func (a *access) rewrapRepos(c change) {
 			fmt.Fprintf(w, "! %s: %s would also gain access to its secrets. Run ezc repo rewrap %s.\n", id, someNames(others), id)
 			continue
 		}
-		r, err := rewrapRepo(a.sys, a.b, ezc, next, c.retired)
+		r, err := rewrapRepo(a.sys, a.b, ezc, next, c.retired, false)
 		var left *repoLeftError
 		if err != nil {
 			a.left = append(a.left, id)

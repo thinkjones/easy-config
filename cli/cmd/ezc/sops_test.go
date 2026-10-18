@@ -298,8 +298,8 @@ func TestPolicyThatMatchesNothingEndToEnd(t *testing.T) {
 	}
 	stdout, stderr, code := e.run(e.repo, e2eSecret, "set", "API_TOKEN", "--type", "secret", "--desc", "token")
 	// The folder is named as the process sees it, which on macOS is under /private.
-	want := filepath.Join(dir, ".sops.yaml") + " has no rule that matches common.enc.yaml. See \"Encryption\" in the README.\n"
-	if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "ezc: ") || !strings.HasSuffix(stderr, want) || strings.Count(stderr, "README") != 1 {
+	want := filepath.Join(dir, ".sops.yaml") + " has no rule that matches common.enc.yaml. Run ezc repo rewrap to write it from the store's recipients.\n"
+	if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "ezc: ") || !strings.HasSuffix(stderr, want) || strings.Count(stderr, "rewrap") != 1 {
 		t.Fatalf("set: exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
 	}
 	after, err := os.ReadFile(filepath.Join(dir, "manifest.yaml"))

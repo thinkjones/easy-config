@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thinkjones/easy-config/cli/internal/backend"
 	"github.com/thinkjones/easy-config/cli/internal/config"
 	"github.com/thinkjones/easy-config/cli/internal/gitstore"
 	"github.com/thinkjones/easy-config/cli/internal/recipients"
@@ -228,5 +229,25 @@ func TestStoreWriteWithARegistryThatCannotBeRead(t *testing.T) {
 	}
 	if _, _, err := accessRun(f, "set", "-g", "TOKEN", "--env", "staging"); err == nil || err.Error() != want {
 		t.Fatalf("a new file: got %v\nwant %s", err, want)
+	}
+}
+
+// The no-policy error of ezc set -g says to run ezc store rewrap: it writes a store's missing policy.
+func TestStoreRewrapWritesAMissingPolicy(t *testing.T) {
+	f := newFake(t)
+	x := accessStore(t, f)
+	ezc := filepath.Join(x.store, ezcDir)
+	if err := os.Remove(filepath.Join(ezc, backend.FakePolicy)); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := x.g.Commit(x.store, "no policy", gitstore.Author{}, ezcDir); err != nil || !done {
+		t.Fatalf("commit: %v, %v", done, err)
+	}
+	x.push(x.store)
+	if _, _, err := accessRun(f, "store", "rewrap", "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	if keys, err := f.backend.PolicyRecipients(filepath.Join(ezc, "common.enc.yaml")); err != nil || !slices.Equal(keys, []string{accessGene}) {
+		t.Fatalf("policy = %v, %v", keys, err)
 	}
 }

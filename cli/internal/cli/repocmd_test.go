@@ -671,11 +671,31 @@ func TestRepoRewrap(t *testing.T) {
 	}
 }
 
-func TestRepoRewrapSkipsARepoWithNoSecrets(t *testing.T) {
+func TestRepoRewrapWritesARepoFirstPolicy(t *testing.T) {
+	f, _ := rewrapStore(t, map[string]recipients.Recipient{"gene": accessEntry(accessGene)}, accessGene)
+	top := rewrapCheckout(t, f, nil)
+	ezc := filepath.Join(top, ezcDir)
+	before := folderBytes(t, ezc)
+	// Whoever the policy names can read every secret set from now on: without a terminal that needs --yes.
+	if _, _, err := accessRun(f, "repo", "rewrap", "o/app"); err == nil || !strings.Contains(err.Error(), "this would let gene read the secrets of o/app") {
+		t.Fatalf("got %v", err)
+	}
+	if after := folderBytes(t, ezc); !maps.Equal(before, after) {
+		t.Fatalf("a refusal wrote to the checkout:\n%v", after)
+	}
+	rewrapWant(t, f, "✓ o/app: wrote the encryption policy in "+ezc+". Commit it there.\n", "! gene gain access to o/app's secrets.\n", "repo", "rewrap", "o/app", "--yes")
+	noGitIn(t, f, top)
+	if keys, err := f.backend.PolicyRecipients(filepath.Join(ezc, "common.enc.yaml")); err != nil || !slices.Equal(keys, []string{accessGene}) {
+		t.Fatalf("policy = %v, %v", keys, err)
+	}
+	accessWant(t, f, "✓ o/app: already encrypted for the store's recipients\n", "repo", "rewrap", "o/app")
+}
+
+func TestRepoRewrapAllSkipsARepoWithNoSecrets(t *testing.T) {
 	f, _ := rewrapStore(t, map[string]recipients.Recipient{"gene": accessEntry(accessGene)}, accessGene)
 	top := rewrapCheckout(t, f, nil)
 	before := folderBytes(t, filepath.Join(top, ezcDir))
-	accessWant(t, f, "- o/app: no secrets to re-wrap\n", "repo", "rewrap", "o/app")
+	accessWant(t, f, "- o/app: no secrets to re-wrap\n- o/gone: no checkout on this machine. Run ezc repo add inside it, then run this again.\n", "repo", "rewrap", "--all")
 	if after := folderBytes(t, filepath.Join(top, ezcDir)); !maps.Equal(before, after) {
 		t.Errorf("wrote to the checkout:\n%v", after)
 	}
