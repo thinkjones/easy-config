@@ -17,7 +17,7 @@ func newEnvCmd(sys System) *cobra.Command {
 	var verbose bool
 	cmd := &cobra.Command{
 		Use:   "env [ENV]",
-		Short: "check that an environment is complete and valid; `env export` prints it",
+		Short: "check that an environment is complete and valid; `env export` prints it, `env import` sets it from a .env file",
 		Long: `Compose ENV (else $EZC_ENV, $APP_ENV, then local) from the store and this repo's .ezc/, and check it against the manifest. Reports on stderr and prints no values.
 
 Exits 1 when a required variable is missing or invalid. Names and paths only; --verbose adds which file set each name.
