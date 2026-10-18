@@ -274,7 +274,7 @@ func TestEditSecretsWithoutPolicy(t *testing.T) {
 	if err := os.Remove(repoFile(f, backend.FakePolicy)); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.run("edit", "--secrets"); !errors.Is(err, backend.ErrNoPolicy) {
+	if err := f.run("edit", "--secrets"); !errors.Is(err, backend.ErrNoPolicy) || !strings.HasSuffix(err.Error(), "Run ezc repo rewrap to write it from the store's recipients.") {
 		t.Fatalf("got %v", err)
 	}
 }

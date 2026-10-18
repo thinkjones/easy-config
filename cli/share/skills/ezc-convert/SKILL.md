@@ -113,7 +113,7 @@ ezc set LLM_PROVIDER openrouter --env prod --type str --desc "Which LLM provider
 ezc set SOME_REPO_TOKEN --type secret --desc "Token for the one service only this repo calls."
 ```
 
-A secret is read from a hidden prompt or from stdin, never from the command line. `ezc set` writes literally (`$` stays `$`); `--expand` keeps `$NAME` references to earlier values. A repo with secrets of its own needs them encrypted for the store's recipients: run `ezc repo add`, then `ezc repo rewrap` if `ezc doctor` says the repo's recipients differ.
+A secret is read from a hidden prompt or from stdin, never from the command line. `ezc set` writes literally (`$` stays `$`); `--expand` keeps `$NAME` references to earlier values. A repo with secrets of its own needs an encryption policy before the first one can be set: run `ezc repo add`, then `ezc repo rewrap` in the repo, which writes `.ezc/.sops.yaml` from the store's recipients after asking whether they may read the repo's secrets (`--yes` without a terminal), and commit it. After that, run `ezc repo rewrap` again whenever `ezc doctor` says the repo's recipients differ.
 
 > **Moving a value from plaintext to a secret requires rotating it.** It is in git history in plaintext. Encrypting it now protects the future, not the past.
 

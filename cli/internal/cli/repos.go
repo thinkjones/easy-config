@@ -164,8 +164,10 @@ func (e *repoLeftError) Unwrap() error { return e.err }
 // rewrapRepo re-wraps the checkout's .ezc for the registry's keys with recipients.Rewrap, which puts everything back
 // when it fails. A checkout whose files and policy are already for them is not written to, and finding that out needs
 // no key. No git runs there: the result is for the repo's owner to commit. A file that only retired leaves lists no
-// leaked secret; "" is no such key.
-func rewrapRepo(sys System, b backend.Backend, ezc string, reg recipients.Registry, retired string) (repoRewrap, error) {
+// leaked secret; "" is no such key. A checkout with neither an encrypted file nor a policy is skipped, unless create
+// asks for its first policy: ezc repo rewrap of the repo named or worked in, never a re-wrap that follows an access
+// change or --all, which would give every registered repo a policy it may not want.
+func rewrapRepo(sys System, b backend.Backend, ezc string, reg recipients.Registry, retired string, create bool) (repoRewrap, error) {
 	enc, err := encryptedFiles(ezc)
 	if err != nil {
 		return repoRewrap{}, err
@@ -178,7 +180,7 @@ func rewrapRepo(sys System, b backend.Backend, ezc string, reg recipients.Regist
 	if err != nil {
 		return repoRewrap{}, err
 	}
-	if len(enc) == 0 && !hasPolicy {
+	if len(enc) == 0 && !hasPolicy && !create {
 		return repoRewrap{Skipped: true}, nil
 	}
 	diffs, err := recipients.Differences(ezc, reg, b, enc)
@@ -221,9 +223,9 @@ func rewrapRepo(sys System, b backend.Backend, ezc string, reg recipients.Regist
 }
 
 // repoGains are the names of the registry, sorted, that the checkout's secrets would be opened to by a re-wrap: those
-// whose key none of its encrypted files and not its policy holds. A checkout with neither has none: rewrapRepo
-// skips it. It needs no key.
-func repoGains(b backend.Backend, ezc string, reg recipients.Registry) ([]string, error) {
+// whose key none of its encrypted files and not its policy holds. A checkout with neither has none, as rewrapRepo
+// skips it, unless create: its first policy then opens it to every name. It needs no key.
+func repoGains(b backend.Backend, ezc string, reg recipients.Registry, create bool) ([]string, error) {
 	enc, err := encryptedFiles(ezc)
 	if err != nil {
 		return nil, err
@@ -235,7 +237,7 @@ func repoGains(b backend.Backend, ezc string, reg recipients.Registry) ([]string
 	if err != nil {
 		return nil, err
 	}
-	if len(enc) == 0 && !hasPolicy {
+	if len(enc) == 0 && !hasPolicy && !create {
 		return nil, nil
 	}
 	var held []string

@@ -298,7 +298,7 @@ func TestSetSecretWithoutPolicy(t *testing.T) {
 	repo(t, f, map[string]string{"manifest.yaml": mToken})
 	f.stdin = "v\n"
 	err := f.run("set", "TOKEN")
-	if !errors.Is(err, backend.ErrNoPolicy) || !strings.Contains(err.Error(), `See "Encryption" in the README.`) {
+	if !errors.Is(err, backend.ErrNoPolicy) || !strings.HasSuffix(err.Error(), "no encryption policy. Run ezc repo rewrap to write it from the store's recipients.") {
 		t.Fatalf("got %v", err)
 	}
 	err = f.run("set", "KEY", "--type", "secret", "--desc", "d")
@@ -977,5 +977,15 @@ func TestUnsetInARepoRunsNoGuard(t *testing.T) {
 	write(t, filepath.Join(x.f.wd, ezcDir, "manifest.yaml"), mToken)
 	if out := x.out("unset", "NAME"); strings.Contains(out, "!") {
 		t.Fatalf("got %q", out)
+	}
+}
+
+func TestSetSecretWithoutPolicyInTheStore(t *testing.T) {
+	f := newFake(t)
+	store(t, f, map[string]string{"manifest.yaml": mToken})
+	f.stdin = "v\n"
+	err := f.run("set", "-g", "TOKEN")
+	if !errors.Is(err, backend.ErrNoPolicy) || !strings.HasSuffix(err.Error(), "no encryption policy. Run ezc store rewrap to write it from recipients.yaml.") {
+		t.Fatalf("got %v", err)
 	}
 }

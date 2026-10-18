@@ -267,7 +267,7 @@ A name the scope's manifest does not declare is declared by this command, as req
 				if ok, err := be.HasPolicy(sc.dir); err != nil {
 					return err
 				} else if !ok {
-					return fmt.Errorf("%s: %w. See \"Encryption\" in the README.", sc.dir, backend.ErrNoPolicy)
+					return noPolicy(sc)
 				}
 			}
 
@@ -352,7 +352,7 @@ A name the scope's manifest does not declare is declared by this command, as req
 					return undeclare(err)
 				}
 			}
-			if err := writeValue(be, path, name, value, v.IsSecret(), expand); err != nil {
+			if err := writeValue(be, sc, path, name, value, v.IsSecret(), expand); err != nil {
 				return undeclare(err)
 			}
 			if expand {
@@ -453,7 +453,7 @@ func valueToSet(sys System, name string, secret bool, args []string) (string, er
 
 // writeValue stores the value, plaintext or through the backend. A plaintext value is written so that it
 // loads exactly as given, unless expand asks for it to be written as given.
-func writeValue(be backend.Backend, path, name, value string, secret, expand bool) error {
+func writeValue(be backend.Backend, sc scope, path, name, value string, secret, expand bool) error {
 	switch {
 	case !secret && expand:
 		return valuefile.Set(path, name, value)
@@ -462,9 +462,23 @@ func writeValue(be backend.Backend, path, name, value string, secret, expand boo
 	}
 	err := be.Set(path, name, value)
 	if errors.Is(err, backend.ErrNoPolicy) {
-		err = fmt.Errorf("%w See \"Encryption\" in the README.", err)
+		err = fmt.Errorf("%w %s", err, writePolicy(sc))
 	}
 	return err
+}
+
+// noPolicy is the error for a secret written to a folder with no encryption policy.
+func noPolicy(sc scope) error {
+	return fmt.Errorf("%s: %w. %s", sc.dir, backend.ErrNoPolicy, writePolicy(sc))
+}
+
+// writePolicy is the command that writes the scope's encryption policy: the store's from recipients.yaml, a repo's
+// from the store's.
+func writePolicy(sc scope) string {
+	if sc.layer == "store" {
+		return "Run ezc store rewrap to write it from " + recipients.File + "."
+	}
+	return "Run ezc repo rewrap to write it from the store's recipients."
 }
 
 // unresolved is the resolver's error when name, as now written in the file at path, cannot be expanded.

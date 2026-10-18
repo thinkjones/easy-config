@@ -161,7 +161,7 @@ func editSecrets(sys System, sc scope, env, path string, editor []string) error 
 	if ok, err := be.HasPolicy(sc.dir); err != nil {
 		return err
 	} else if !ok {
-		return fmt.Errorf("%s: %w. See \"Encryption\" in the README.", sc.dir, backend.ErrNoPolicy)
+		return noPolicy(sc)
 	}
 	show := sc.show(filepath.Base(path))
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
