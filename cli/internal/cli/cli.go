@@ -115,7 +115,26 @@ Config
 			return target.Help()
 		},
 	})
-	root.AddCommand(
+	root.AddGroup(
+		&cobra.Group{ID: "setup", Title: "Set up:"},
+		&cobra.Group{ID: "values", Title: "Variables and secrets:"},
+		&cobra.Group{ID: "access", Title: "Users and access:"},
+		&cobra.Group{ID: "codegen", Title: "Code generation:"},
+		&cobra.Group{ID: "maintenance", Title: "Maintenance:"},
+	)
+	root.SetHelpCommandGroupID("maintenance")
+	root.SetCompletionCommandGroupID("maintenance")
+	add := func(group string, cmds ...*cobra.Command) {
+		for _, c := range cmds {
+			c.GroupID = group
+			root.AddCommand(c)
+		}
+	}
+	add("setup", newSetupCmd(sys), newRepoCmd(sys))
+	add("values", newManifestCmd(sys), newEnvCmd(sys), newListCmd(sys), newGetCmd(sys), newSetCmd(sys), newUnsetCmd(sys), newEditCmd(sys), newRunCmd(sys), newTUICmd(sys))
+	add("access", newUserCmd(sys), newBotCmd(sys), newJoinCmd(sys))
+	add("codegen", newCodegenCmd(sys))
+	add("maintenance",
 		&cobra.Command{
 			Use:   "version",
 			Short: "print ezc's version",
@@ -125,23 +144,8 @@ Config
 				return nil
 			},
 		},
-		newEnvCmd(sys),
-		newRunCmd(sys),
-		newManifestCmd(sys),
-		newCodegenCmd(sys),
-		newListCmd(sys),
-		newGetCmd(sys),
-		newSetCmd(sys),
-		newUnsetCmd(sys),
-		newEditCmd(sys),
-		newStoreCmd(sys),
-		newUserCmd(sys),
-		newBotCmd(sys),
 		newDoctorCmd(sys),
-		newSetupCmd(sys),
-		newJoinCmd(sys),
-		newRepoCmd(sys),
-		newTUICmd(sys),
+		newStoreCmd(sys),
 		newMigrateCmd(sys),
 	)
 	return root

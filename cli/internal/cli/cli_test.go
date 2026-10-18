@@ -1394,3 +1394,50 @@ func TestKeySource(t *testing.T) {
 	f.env["SOPS_AGE_KEY"] = "AGE-SECRET-KEY-x"
 	check("SOPS_AGE_KEY", true)
 }
+
+func TestHelpGroupsTheCommands(t *testing.T) {
+	f := newFake(t)
+	if err := f.run("help"); err != nil {
+		t.Fatal(err)
+	}
+	out := f.out.String()
+	groups := []struct {
+		title    string
+		commands []string
+	}{
+		{"Set up:", []string{"repo", "setup"}},
+		{"Variables and secrets:", []string{"edit", "env", "get", "list", "manifest", "run", "set", "tui", "unset"}},
+		{"Users and access:", []string{"bot", "join", "user"}},
+		{"Code generation:", []string{"codegen"}},
+		{"Maintenance:", []string{"completion", "doctor", "help", "migrate", "store", "version"}},
+	}
+	if strings.Contains(out, "Additional Commands:") || strings.Contains(out, "Available Commands:") {
+		t.Fatalf("a command is outside the groups:\n%s", out)
+	}
+	at := 0
+	for i, g := range groups {
+		start := strings.Index(out, "\n"+g.title+"\n")
+		if start < at {
+			t.Fatalf("%q missing or out of order:\n%s", g.title, out)
+		}
+		end := len(out)
+		if i+1 < len(groups) {
+			if next := strings.Index(out, "\n"+groups[i+1].title+"\n"); next > start {
+				end = next
+			}
+		}
+		var got []string
+		for _, line := range strings.Split(out[start:end], "\n")[2:] {
+			if line == "" {
+				break
+			}
+			if fields := strings.Fields(line); len(fields) > 0 && strings.HasPrefix(line, "  ") {
+				got = append(got, fields[0])
+			}
+		}
+		if !slices.Equal(got, g.commands) {
+			t.Errorf("%s got %v, want %v", g.title, got, g.commands)
+		}
+		at = start
+	}
+}
