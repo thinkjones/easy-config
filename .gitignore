@@ -9,3 +9,10 @@ CLAUDE.local.md
 docs/_site/
 docs/.jekyll-cache/
 docs/Gemfile.lock
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*
