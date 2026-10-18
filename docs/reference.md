@@ -109,7 +109,7 @@ store  common.yaml → common.enc.yaml → env.<name>.yaml → env.<name>.enc.ya
 repo   common.yaml → common.enc.yaml → env.<name>.yaml → env.<name>.enc.yaml
 ```
 
-`<name>` matches `^[A-Za-z0-9][A-Za-z0-9_-]*$`, and `enc` is reserved (`env.enc.yaml` is not an environment file). It is the command's argument, else `$EZC_ENV`, else `$APP_ENV`, else `local`. With no name given and no `env.local.yaml`, only the `common` files load, and `ezc` says so on stderr. A missing store is not an error: the repo's files compose alone. A store that is there but is not a folder, or cannot be read, is an error, and so is an `EZC_STORE` that names a folder which does not exist.
+`<name>` matches `^[A-Za-z0-9][A-Za-z0-9_-]*$`, and `enc` and `common` are reserved (`env.enc.yaml` is not an environment file, and `common` names the files every environment loads). An `env.common.yaml` or `env.common.enc.yaml` loads nowhere, and `ezc env` says so on stderr. It is the command's argument, else `$EZC_ENV`, else `$APP_ENV`, else `local`. With no name given and no `env.local.yaml`, only the `common` files load, and `ezc` says so on stderr. A missing store is not an error: the repo's files compose alone. A store that is there but is not a folder, or cannot be read, is an error, and so is an `EZC_STORE` that names a folder which does not exist.
 
 - Within a file, order is semantic.
 - A value may reference `$NAME` or `${NAME}` for a name already resolved, earlier in the same file or in an earlier file. `$$` is a literal `$`. `ezc set` writes a value literally, doubling each `$` for you; `ezc set --expand`, or `ezc edit`, writes a reference.

@@ -213,3 +213,15 @@ func TestEnvImportLeavesOutEmptyValues(t *testing.T) {
 	}
 	missing(t, repoFile(f, "env.prod.enc.yaml"))
 }
+
+func TestEnvWarnsAboutAnEnvCommonFile(t *testing.T) {
+	f := newFake(t)
+	repo(t, f, map[string]string{"manifest.yaml": m1, "common.yaml": "NAME: a\nSIZE: 1\n", "env.common.yaml": "NAME: b\n"})
+	store(t, f, map[string]string{"env.common.enc.yaml": ""})
+	p, _ := storePaths(f.sys())
+	want := "! " + filepath.Join(p.StoreEzc(), "env.common.enc.yaml") + " is loaded by no environment: common is not an environment name. Move its values to common.enc.yaml (ezc env import common FILE, or ezc edit), then delete it.\n" +
+		"! " + repoFile(f, "env.common.yaml") + " is loaded by no environment: common is not an environment name. Move its values to common.yaml (ezc env import common FILE, or ezc edit), then delete it.\n"
+	if got := stderrOf(t, f, "env"); !strings.HasPrefix(got, want) {
+		t.Fatalf("stderr %q", got)
+	}
+}

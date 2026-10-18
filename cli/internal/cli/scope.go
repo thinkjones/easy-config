@@ -315,6 +315,22 @@ func loadManifest(path string, explicit bool) (manifest.Manifest, error) {
 
 // warn prints the stderr notes a Result carries. repo is "" when no repo is in scope.
 func warn(sys System, res resolve.Result, repo string) {
+	// common is not an environment name, so these files, made before it was reserved, load nowhere.
+	var dirs []string
+	if p, _, err := storePathsLoose(sys); err == nil {
+		dirs = append(dirs, p.StoreEzc())
+	}
+	if repo != "" && (len(dirs) == 0 || !sameDir(repo, dirs[0])) {
+		dirs = append(dirs, repo)
+	}
+	for _, dir := range dirs {
+		for _, enc := range []bool{true, false} {
+			stray := filepath.Join(dir, valuesFile("env."+resolve.CommonEnv, enc))
+			if _, err := os.Stat(stray); err == nil {
+				fmt.Fprintf(sys.Stderr, "! %s is loaded by no environment: common is not an environment name. Move its values to %s (ezc env import common FILE, or ezc edit), then delete it.\n", stray, valuesFile("common", enc))
+			}
+		}
+	}
 	if res.StoreMissing {
 		p, err := paths.Resolve(sys.Getenv, sys.GOOS)
 		where := p.Store()

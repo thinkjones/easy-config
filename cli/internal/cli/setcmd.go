@@ -146,6 +146,8 @@ func checkEnvName(cmd string, env string) error {
 		return nil
 	case env == resolve.ReservedEnv:
 		return usagef("ezc %s: %s is a reserved name; it marks encrypted files (env.<name>.enc.yaml).", cmd, env)
+	case env == resolve.CommonEnv:
+		return usagef("ezc %s: %s is a reserved name; leave --env out to use common.yaml.", cmd, env)
 	}
 	return usagef("ezc %s: that is not a valid environment name; use letters, digits, - and _.", cmd)
 }

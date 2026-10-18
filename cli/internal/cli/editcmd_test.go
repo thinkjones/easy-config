@@ -122,6 +122,7 @@ func TestEditBadEnvName(t *testing.T) {
 	f := editFake(t, "nano", "")
 	wantUsage(t, f.run("edit", "--env", "a b"), "not a valid environment name")
 	wantUsage(t, f.run("edit", "--env", "enc"), "reserved")
+	wantUsage(t, f.run("edit", "--env", "common"), "common is a reserved name")
 	if len(f.execs) != 0 {
 		t.Fatal("the editor ran")
 	}
