@@ -21,7 +21,7 @@ func newImportCmd(sys System) *cobra.Command {
 		Short: "set an environment's values from a .env file",
 		Long: `Set every name in FILE, a .env file, in the repo's env.ENV.yaml, or env.ENV.enc.yaml for a name the manifest declares a secret. ENV common means common.yaml and common.enc.yaml, which every environment loads. With -g the store's files are used instead.
 
-Every name must already be declared in the scope's manifest, and every value is checked as ` + "`ezc set`" + ` checks it, before anything is written: one problem and nothing is imported. Values are stored literally, as ` + "`ezc set`" + ` stores them without --expand. EZC_ENV and APP_ENV name the environment and are left out.
+Every name must already be declared in the scope's manifest, and every value is checked as ` + "`ezc set`" + ` checks it, before anything is written: one problem and nothing is imported. Values are stored literally, as ` + "`ezc set`" + ` stores them without --expand. EZC_ENV and APP_ENV name the environment and are left out, and so is a name with an empty value (NAME=), which a .env file uses for not set.
 
 FILE takes NAME=VALUE lines, # comments, an optional export, 'literal' and "double-quoted" values (\n, \t, \", \\ and \$; they may span lines). A name given twice takes its last value. Values are never printed; an error names the line.`,
 		Args: exactArgs(2, "an environment name and a file"),
@@ -62,16 +62,25 @@ func importEnv(sys System, global bool, env, file string) error {
 	}
 
 	var kept []dotenv.Entry
-	var undeclared []string
+	var undeclared, empty []string
 	for _, e := range entries {
 		switch _, ok := m.Lookup(e.Name); {
 		case slices.Contains(resolve.SelectorVars, e.Name):
 			fmt.Fprintf(sys.Stderr, "! %s names the environment and was not imported.\n", e.Name)
+		case e.Value == "": // NAME= in a .env file means not set
+			empty = append(empty, e.Name)
 		case !ok:
 			undeclared = append(undeclared, e.Name)
 		default:
 			kept = append(kept, e)
 		}
+	}
+	switch len(empty) {
+	case 0:
+	case 1:
+		fmt.Fprintf(sys.Stderr, "! %s is empty in the file and was not imported.\n", empty[0])
+	default:
+		fmt.Fprintf(sys.Stderr, "! %s and %s are empty in the file and were not imported.\n", strings.Join(empty[:len(empty)-1], ", "), empty[len(empty)-1])
 	}
 	if len(undeclared) > 0 {
 		slices.Sort(undeclared)

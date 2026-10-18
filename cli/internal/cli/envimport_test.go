@@ -59,7 +59,7 @@ func TestEnvImportChecksEveryValueBeforeWriting(t *testing.T) {
 	before := snapshot(t, f)
 	for _, tc := range []struct{ src, want string }{
 		{"NAME=alice\nSIZE=99\n", "SIZE: above the maximum of 9. Nothing was imported."},
-		{"NAME=\nSIZE=3\n", "NAME: empty. Nothing was imported."},
+		{"NAME=\" \"\nSIZE=3\n", "NAME: empty. Nothing was imported."},
 		{"NAME=~/x\n", "NAME: a value that starts with ~ is expanded to your home folder when loaded. Take it out of the file and run ezc set --expand. Nothing was imported."},
 	} {
 		err := f.run("env", "import", "prod", dotenvFile(t, tc.src))
@@ -200,4 +200,16 @@ func TestEnvImportCommonWritesTheCommonFiles(t *testing.T) {
 	}
 	missing(t, repoFile(f, "env.common.yaml"))
 	missing(t, repoFile(f, "env.common.enc.yaml"))
+}
+
+func TestEnvImportLeavesOutEmptyValues(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{})
+	if got := stderrOf(t, f, "env", "import", "prod", dotenvFile(t, "NAME=alice\nTOKEN=\nSIZE=''\n")); got != "! TOKEN and SIZE are empty in the file and were not imported.\n" {
+		t.Fatalf("stderr %q", got)
+	}
+	if got := f.out.String(); got != "set NAME in repo/env.prod.yaml\n" {
+		t.Fatalf("got %q", got)
+	}
+	missing(t, repoFile(f, "env.prod.enc.yaml"))
 }
