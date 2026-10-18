@@ -184,3 +184,20 @@ func TestEnvImportGlobalCommitsAndClearsRotationDue(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestEnvImportCommonWritesTheCommonFiles(t *testing.T) {
+	f := newFake(t)
+	setRepo(t, f, map[string]string{"common.enc.yaml": ""})
+	secretIn(t, f, "repo", "common.enc.yaml", "OLD", "kept")
+	if err := f.run("env", "import", "common", dotenvFile(t, "NAME=alice\nTOKEN=t\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.out.String(); got != "set NAME in repo/common.yaml\nset TOKEN in repo/common.enc.yaml\n" {
+		t.Fatalf("got %q", got)
+	}
+	if v, ok := stored(t, f, "common.enc.yaml", "OLD"); !ok || v != "kept" {
+		t.Fatal("the import dropped a secret the file already held")
+	}
+	missing(t, repoFile(f, "env.common.yaml"))
+	missing(t, repoFile(f, "env.common.enc.yaml"))
+}

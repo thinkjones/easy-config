@@ -19,7 +19,7 @@ func newImportCmd(sys System) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "import ENV FILE",
 		Short: "set an environment's values from a .env file",
-		Long: `Set every name in FILE, a .env file, in the repo's env.ENV.yaml, or env.ENV.enc.yaml for a name the manifest declares a secret. With -g the store's files are used instead.
+		Long: `Set every name in FILE, a .env file, in the repo's env.ENV.yaml, or env.ENV.enc.yaml for a name the manifest declares a secret. ENV common means common.yaml and common.enc.yaml, which every environment loads. With -g the store's files are used instead.
 
 Every name must already be declared in the scope's manifest, and every value is checked as ` + "`ezc set`" + ` checks it, before anything is written: one problem and nothing is imported. Values are stored literally, as ` + "`ezc set`" + ` stores them without --expand. EZC_ENV and APP_ENV name the environment and are left out.
 
@@ -39,7 +39,10 @@ func importEnv(sys System, global bool, env, file string) error {
 		return err
 	}
 	if env == "" {
-		return usagef("ezc env import: give an environment name.")
+		return usagef("ezc env import: give an environment name, or common.")
+	}
+	if env == "common" {
+		env = "" // the common files, not env.common.yaml
 	}
 	sc, err := scopeFor(sys, global)
 	if err != nil {
