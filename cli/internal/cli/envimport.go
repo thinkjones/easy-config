@@ -35,14 +35,14 @@ FILE takes NAME=VALUE lines, # comments, an optional export, 'literal' and "doub
 
 // importEnv is `ezc env import`: everything is checked, then every value is written, then the store commits once.
 func importEnv(sys System, global bool, env, file string) error {
+	switch env {
+	case "":
+		return usagef("ezc env import: give an environment name, or common.")
+	case resolve.CommonEnv:
+		env = "" // the common files, which no environment is named after
+	}
 	if err := checkEnvName("env import", env); err != nil {
 		return err
-	}
-	if env == "" {
-		return usagef("ezc env import: give an environment name, or common.")
-	}
-	if env == "common" {
-		env = "" // the common files, not env.common.yaml
 	}
 	sc, err := scopeFor(sys, global)
 	if err != nil {

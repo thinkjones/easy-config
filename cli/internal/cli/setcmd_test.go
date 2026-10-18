@@ -390,6 +390,7 @@ func TestSetBadEnvName(t *testing.T) {
 	f := newFake(t)
 	setRepo(t, f, map[string]string{})
 	wantUsage(t, f.run("set", "NAME", "x", "--env", "enc"), "reserved")
+	wantUsage(t, f.run("set", "NAME", "x", "--env", "common"), "common is a reserved name; leave --env out to use common.yaml.")
 	wantUsage(t, f.run("set", "NAME", "x", "--env", "a/b"), "not a valid environment name")
 }
 

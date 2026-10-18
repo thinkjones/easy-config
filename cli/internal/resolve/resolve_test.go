@@ -210,7 +210,7 @@ func TestEncryptedFilePresentWithoutDecrypter(t *testing.T) {
 func TestEnvs(t *testing.T) {
 	store, repo := tree(t, map[string]string{
 		"store/env.local.yaml": "A: 1\n", "store/env.prod.enc.yaml": "x: y\n",
-		"repo/env.prod.yaml": "A: 1\n", "repo/common.yaml": "A: 1\n",
+		"repo/env.prod.yaml": "A: 1\n", "repo/common.yaml": "A: 1\n", "repo/env.common.yaml": "A: 1\n",
 	})
 	if got, err := Envs(store, repo); err != nil || !slices.Equal(got, []string{"local", "prod"}) {
 		t.Errorf("got %v, %v", got, err)
@@ -365,6 +365,13 @@ func TestReservedEnvName(t *testing.T) {
 	_, err := Load(Options{RepoDir: repo, Env: "enc"})
 	if err == nil || !strings.Contains(err.Error(), "enc is a reserved name") {
 		t.Errorf("got %v", err)
+	}
+	_, err = Load(Options{RepoDir: repo, Env: "common"})
+	if err == nil || err.Error() != "common is a reserved name; it names the files every environment loads (common.yaml, common.enc.yaml)" {
+		t.Errorf("got %v", err)
+	}
+	if ValidEnvName("common") {
+		t.Error("common is a valid environment name")
 	}
 }
 

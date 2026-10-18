@@ -28,10 +28,15 @@ const DefaultEnv = "local"
 // ReservedEnv is not an environment name: it marks encrypted files (env.<name>.enc.yaml).
 const ReservedEnv = "enc"
 
+// CommonEnv is not an environment name either: it names the files every environment loads.
+const CommonEnv = "common"
+
 var envNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
 // ValidEnvName reports whether s can name an environment.
-func ValidEnvName(s string) bool { return envNamePattern.MatchString(s) && s != ReservedEnv }
+func ValidEnvName(s string) bool {
+	return envNamePattern.MatchString(s) && s != ReservedEnv && s != CommonEnv
+}
 
 // SelectorVars are the variables that name the environment. They are recorded
 // in a Result and never exported.
@@ -174,6 +179,8 @@ func Load(o Options) (Result, error) {
 	switch {
 	case o.Env == ReservedEnv:
 		return res, fmt.Errorf("%s is a reserved name; it marks encrypted files (env.<name>.enc.yaml)", ReservedEnv)
+	case o.Env == CommonEnv:
+		return res, fmt.Errorf("%s is a reserved name; it names the files every environment loads (common.yaml, common.enc.yaml)", CommonEnv)
 	case o.Env != "" && !ValidEnvName(o.Env):
 		return res, fmt.Errorf("%q is not a valid environment name; use letters, digits, - and _", o.Env)
 	}
