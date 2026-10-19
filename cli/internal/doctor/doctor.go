@@ -1,7 +1,7 @@
 // Package doctor reports the health of the machine, the store and the repo.
 //
-// Nearly every way this tool goes wrong is quiet: a missing key loads nothing, an out-of-date shim
-// evaluates to an empty environment, a misspelt file name is simply never read. `check` says an
+// Nearly every way this tool goes wrong is quiet: a missing key loads nothing, a broken manifest
+// passes unnoticed, a misspelt file name is simply never read. `check` says an
 // environment is wrong; doctor says where the setup is.
 //
 // Nothing here reads the process environment: the command passes in everything. Nothing here ever
@@ -24,7 +24,6 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
 	"github.com/thinkjones/easy-config/cli/internal/resolve"
 	"github.com/thinkjones/easy-config/cli/internal/storeaudit"
-	"github.com/thinkjones/easy-config/cli/share"
 )
 
 // State is how one line reads. Warn is worth saying and does not fail the command; Broken does.
@@ -383,7 +382,7 @@ func repo(o Options) []Item {
 	m, item, valid := manifestItem(o.RepoDir, func(m manifest.Manifest) string {
 		return fmt.Sprintf("%d required, %d optional", len(m.Required), len(m.Optional))
 	}, Broken)
-	items = append(items, item, shimItem(o.RepoDir), environmentsItem(o))
+	items = append(items, item, environmentsItem(o))
 	if valid {
 		items = append(items, environmentItem(o, m))
 	}
@@ -431,30 +430,6 @@ func manifestItem(dir string, summary func(manifest.Manifest) string, absent Sta
 		return m, Item{Broken, "manifest", detail, ""}, false
 	}
 	return m, Item{OK, "manifest", summary(m), ""}, true
-}
-
-// shimItem compares the repo's env.sh with the one this binary carries. A stale shim is invisible
-// otherwise: the file is there, it evaluates, and it can load nothing.
-func shimItem(dir string) Item {
-	const fix = "Run `ezc repo init`."
-	data, err := os.ReadFile(filepath.Join(dir, "env.sh"))
-	if errors.Is(err, fs.ErrNotExist) {
-		return Item{Warn, "shim", "no .ezc/env.sh", fix}
-	}
-	if err != nil {
-		return Item{Broken, "shim", firstLine(err), ""}
-	}
-	got, ok := share.VersionOf(string(data))
-	switch {
-	case !ok:
-		return Item{Broken, "shim", "no version marker", fix}
-	case got > share.ShimVersion:
-		// repo init keeps it, so the fix is a newer ezc, not a rewrite.
-		return Item{Warn, "shim", fmt.Sprintf("version %d, newer than this ezc (%d)", got, share.ShimVersion), "Upgrade ezc."}
-	case got != share.ShimVersion:
-		return Item{Broken, "shim", fmt.Sprintf("version %d, want %d", got, share.ShimVersion), fix}
-	}
-	return Item{OK, "shim", fmt.Sprintf("version %d", got), ""}
 }
 
 func environmentsItem(o Options) Item {

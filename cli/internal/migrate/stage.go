@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/thinkjones/easy-config/cli/internal/gen"
 	"github.com/thinkjones/easy-config/cli/internal/recipients"
-	"github.com/thinkjones/easy-config/cli/share"
 )
 
 // staged is the new .ezc, built in a temporary folder.
@@ -64,14 +64,14 @@ func stageStore(o Options) (staged, error) {
 	return s, s.list()
 }
 
-// stageRepo builds a repo's new .ezc: every file copied, the manifest's $schema replaced, and the shim. The
+// stageRepo builds a repo's new .ezc: every file copied, the manifest's $schema replaced, and the mise loader. The
 // repo's policy file is copied as it is; ezc repo rewrap writes it from the store's registry later.
 func stageRepo(o Options) (staged, error) {
 	s, err := o.stage(nil)
 	if err != nil {
 		return s, err
 	}
-	if err := os.WriteFile(filepath.Join(s.dir, "env.sh"), []byte(share.EnvSh), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(s.dir, "env.sh"), []byte(gen.Loaders["mise"]), 0o644); err != nil {
 		return s, fmt.Errorf("could not write env.sh (%s).", reason(err))
 	}
 	return s, s.list()

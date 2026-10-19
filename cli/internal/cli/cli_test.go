@@ -19,7 +19,6 @@ import (
 	"github.com/thinkjones/easy-config/cli/internal/gitstore/gittest"
 	"github.com/thinkjones/easy-config/cli/internal/manifest"
 	"github.com/thinkjones/easy-config/cli/internal/proc"
-	"github.com/thinkjones/easy-config/cli/share"
 )
 
 // fake is a System over temp directories. home is $HOME, ezcHome is $EZC_HOME, wd is the working directory.
@@ -1105,13 +1104,17 @@ func TestRepoInit(t *testing.T) {
 	if err := f.run("repo", "init"); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"manifest.yaml", "env.local.yaml", "env.sh"} {
+	for _, name := range []string{"manifest.yaml", "env.local.yaml"} {
 		if _, err := os.Stat(filepath.Join(f.wd, ".ezc", name)); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// How the environment is loaded is the user's choice: init writes no loader, and names the ways.
+	if _, err := os.Stat(filepath.Join(f.wd, ".ezc", "env.sh")); !os.IsNotExist(err) {
+		t.Fatalf("repo init wrote env.sh: %v", err)
+	}
 	got := f.out.String()
-	if !strings.HasPrefix(got, "created .ezc/manifest.yaml\ncreated .ezc/env.local.yaml\ncreated .ezc/env.sh\n") || !strings.Contains(got, `_.source = ".ezc/env.sh"`) {
+	if !strings.HasPrefix(got, "created .ezc/manifest.yaml\ncreated .ezc/env.local.yaml\n") || !strings.Contains(got, "ezc run -- <command>") || !strings.Contains(got, "ezc codegen shell") {
 		t.Fatalf("got %q", got)
 	}
 	if err := f.run("manifest", "validate"); err != nil {
@@ -1127,6 +1130,8 @@ func TestRepoInitKeepsExistingFiles(t *testing.T) {
 	manifestPath := filepath.Join(f.wd, ".ezc", "manifest.yaml")
 	const content = "schemaVersion: v1\nrequired: {}\n# mine\n"
 	write(t, manifestPath, content)
+	loader := filepath.Join(f.wd, ".ezc", "env.sh")
+	write(t, loader, "# my own loader\n")
 	if err := f.run("repo", "init"); err != nil {
 		t.Fatal(err)
 	}
@@ -1136,44 +1141,15 @@ func TestRepoInitKeepsExistingFiles(t *testing.T) {
 	if b, _ := os.ReadFile(manifestPath); string(b) != content {
 		t.Fatalf("manifest changed: %q", b)
 	}
+	if b, _ := os.ReadFile(loader); string(b) != "# my own loader\n" {
+		t.Fatalf("env.sh changed: %q", b)
+	}
 	f.out.Reset()
 	if err := f.run("repo", "init"); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(f.out.String(), "kept .ezc/"); got != 3 {
-		t.Fatalf("want three kept, got %q", f.out.String())
-	}
-}
-
-func TestRepoInitUpdatesAnOldShim(t *testing.T) {
-	f := newFake(t)
-	shim := filepath.Join(f.wd, ".ezc", "env.sh")
-	write(t, shim, "# ezc-shim: 0\necho old\n")
-	if err := f.run("repo", "init"); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(f.out.String(), "updated .ezc/env.sh\n") {
-		t.Fatalf("got %q", f.out.String())
-	}
-	if b, _ := os.ReadFile(shim); string(b) != share.EnvSh {
-		t.Fatalf("shim not rewritten: %q", b)
-	}
-}
-
-func TestRepoInitKeepsANewerShim(t *testing.T) {
-	f := newFake(t)
-	shim := filepath.Join(f.wd, ".ezc", "env.sh")
-	newer := fmt.Sprintf("# ezc-shim: %d\necho newer\n", share.ShimVersion+1)
-	write(t, shim, newer)
-	if err := f.run("repo", "init"); err != nil {
-		t.Fatal(err)
-	}
-	want := fmt.Sprintf("kept .ezc/env.sh (version %d, newer than this ezc)\n", share.ShimVersion+1)
-	if !strings.Contains(f.out.String(), want) {
-		t.Fatalf("got %q", f.out.String())
-	}
-	if b, _ := os.ReadFile(shim); string(b) != newer {
-		t.Fatalf("shim changed: %q", b)
+	if got := strings.Count(f.out.String(), "kept .ezc/"); got != 2 {
+		t.Fatalf("want two kept, got %q", f.out.String())
 	}
 }
 
@@ -1192,9 +1168,42 @@ func TestRepoInitInsideAnotherRepo(t *testing.T) {
 	}
 }
 
-func TestShimVersionMatchesFile(t *testing.T) {
-	if !strings.HasPrefix(share.EnvSh, fmt.Sprintf("# ezc-shim: %d\n", share.ShimVersion)) {
-		t.Fatalf("shim starts %q", share.EnvSh[:20])
+// Each loader opens with comments that say how to use it, carries the guard that stops a mise-installed ezc from
+// loading it again, and needs no repo: it holds no value.
+func TestCodegenLoaders(t *testing.T) {
+	for _, tc := range []struct{ name, usage string }{
+		{"shell", `eval "$(ezc codegen shell)"`},
+		{"mise", `_.source = ".ezc/env.sh"`},
+		{"direnv", "direnv allow"},
+	} {
+		f := newFake(t)
+		if err := f.run("codegen", tc.name); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		got := f.out.String()
+		if !strings.HasPrefix(got, "# ") || !strings.Contains(got, "ezc codegen "+tc.name) || !strings.Contains(got, tc.usage) {
+			t.Errorf("%s: no usage at the top:\n%s", tc.name, got)
+		}
+		if !strings.Contains(got, `[ -z "${EZC_SHIM_LOADING:-}" ]`) || !strings.Contains(got, "EZC_SHIM_LOADING=1 ezc env export") {
+			t.Errorf("%s: no guard:\n%s", tc.name, got)
+		}
+		if f.errOut.String() != "" {
+			t.Errorf("%s: stderr %q", tc.name, f.errOut.String())
+		}
+	}
+}
+
+func TestCodegenMiseWritesTheFile(t *testing.T) {
+	f := newFake(t)
+	if err := f.run("codegen", "mise", "-o", ".ezc/env.sh"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(f.wd, ".ezc", "env.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "EZC_SHIM_LOADING=1 ezc env export") {
+		t.Fatalf("got %q", b)
 	}
 }
 

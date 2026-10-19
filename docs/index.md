@@ -46,7 +46,7 @@ When something does not work, run `ezc doctor`: it checks the machine, the store
 - **The store is a git repo.** Every write to it is one commit that names the files it changed and never a value.
 - **Who can read it is one file**, `recipients.yaml`, and every encrypted file is encrypted for exactly the keys it names.
 
-A repo loads its environment through mise (`_.source = ".ezc/env.sh"` in `[env]`), direnv (`source_env .ezc/env.sh`) or `ezc run -- <command>`.
+How a repo loads its environment is up to you: `ezc run -- <command>`, `eval "$(ezc env export)"`, or a script from `ezc codegen shell`, `ezc codegen mise` or `ezc codegen direnv`.
 
 ## The pages
 

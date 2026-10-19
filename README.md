@@ -53,13 +53,14 @@ The environment is named by the argument, else `EZC_ENV`, else `APP_ENV`; with n
 
 ## How a repo loads its environment
 
-There are three ways in:
+How it gets there is up to you. ezc gives the environment two ways out, and any tool can use them:
 
-- mise: in `mise.toml`, `[env]` then `_.source = ".ezc/env.sh"`. `ezc repo init` writes `.ezc/env.sh`.
-- direnv: `source_env .ezc/env.sh` in `.envrc`.
-- neither: `ezc run -- <command>` runs one command with the variables and leaves the shell alone.
+- `ezc run -- <command>` runs one command with the variables and leaves the shell alone.
+- `ezc env export` prints `export NAME='value'` lines: `eval "$(ezc env export)"`.
 
-The shim never fails the shell, so a broken config does not make `cd` unusable. `ezc env` is the check that fails; make tasks depend on it.
+For a script that does it for you, `ezc codegen shell`, `ezc codegen mise` and `ezc codegen direnv` print one, with how to use it in the comments at its top (for mise: `ezc codegen mise -o .ezc/env.sh`, then `_.source = ".ezc/env.sh"` under `[env]`). They never fail the shell, so a broken config does not make `cd` unusable: `ezc env` is the check that fails, so make tasks depend on it.
+
+> If you load the environment from mise with a script of your own, and `ezc` is itself installed through mise (`go install` with mise's Go, say), the script must not let the `ezc` it runs load it again: mise loads `_.source` before it runs any tool, `ezc` included. The generated scripts set `EZC_SHIM_LOADING=1` on the `ezc` they run and do nothing when it is set.
 
 ## Sharing a store
 
@@ -87,7 +88,7 @@ Who can read the store is written in one file, `recipients.yaml`, and every encr
 | --- | --- |
 | `ezc setup` | Take a machine from nothing to a working store: check the tools, create your key, create or clone the store, write the config, and install the `ezc-convert` and `ezc-migrate` agent skills for Claude Code. `--ci` sets a CI job up to read a store. |
 | `ezc join` | Ask for access to an existing store from this machine. |
-| `ezc repo init` | Create `.ezc/` in the working directory with a manifest, `env.local.yaml` and the `env.sh` shim. |
+| `ezc repo init` | Create `.ezc/` in the working directory with a manifest and `env.local.yaml`. |
 | `ezc repo add`, `remove`, `list`, `check`, `uses`, `rewrap` | Register the repos that use the store; check them all, find who uses a name, and keep their own secrets encrypted for the store's recipients. |
 | `ezc env` | Check an environment against the manifest. `ezc env export` prints it, for `eval` or as JSON; `ezc env import ENV FILE` sets its values from a `.env` file, secrets encrypted. |
 | `ezc run` | Run a command with the environment added to its own. |
@@ -102,6 +103,7 @@ Who can read the store is written in one file, `recipients.yaml`, and every encr
 | `ezc doctor` | Report the health of the machine, the store and the repo, with the fix for each finding. |
 | `ezc manifest validate`, `ezc manifest schema` | Check that the manifest is well formed; print its JSON Schema. |
 | `ezc codegen python` | Generate a pydantic config module from the manifest. |
+| `ezc codegen shell\|mise\|direnv` | Print a script that loads the environment, with how to use it at its top. |
 
 Every flag and every exit status is in the [command reference](docs/reference.md#commands); `ezc help <command>` gives a command's flags on the command line.
 

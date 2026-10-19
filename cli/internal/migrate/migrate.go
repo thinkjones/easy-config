@@ -120,7 +120,7 @@ func runStore(o Options) error {
 	return nil
 }
 
-// runRepo migrates a repo that loads its environment through the old tool: .ezc/ with the shim takes the place
+// runRepo migrates a repo that loads its environment through the old tool: .ezc/ with the mise loader (.ezc/env.sh) takes the place
 // of .fs-config/, and its mise files are rewritten to ezc. Each environment is proved over the ezc store.
 func runRepo(o Options) error {
 	if st, err := os.Stat(o.StoreEzc); o.StoreEzc == "" || err != nil || !st.IsDir() {
@@ -404,7 +404,7 @@ const (
 	Short = "convert a store or a repo from fsconfig's .fs-config/ to .ezc/, proving the environment unchanged"
 	Long  = `Convert the store or the repo in the working directory from fsconfig's .fs-config/ folder to ezc's .ezc/.
 
-Run it in the old store first: .ezc/ is written beside .fs-config/ (global.* become common.*, recipients.yaml is converted, its bots' repos become repos.yaml, and the encryption policy is written for its keys). Commit and push it, run ezc setup --store on each machine, then run ezc migrate in each repo: .ezc/ with the env.sh shim replaces .fs-config/, and its mise files (mise.toml, .mise.toml, .config/mise.toml and the like) are rewritten to ezc.
+Run it in the old store first: .ezc/ is written beside .fs-config/ (global.* become common.*, recipients.yaml is converted, its bots' repos become repos.yaml, and the encryption policy is written for its keys). Commit and push it, run ezc setup --store on each machine, then run ezc migrate in each repo: .ezc/ with the mise loader (.ezc/env.sh) replaces .fs-config/, and its mise files (mise.toml, .mise.toml, .config/mise.toml and the like) are rewritten to ezc.
 
 Nothing is written until the proof passes: the environment is composed by fsconfig codegen shell (which must be on PATH) and by ezc, for the store alone or for every environment the repo names, and every name and value must be identical. Differences are listed by name, never by value. What still names fsconfig, and CI that passes its key in the old variable, is reported, not changed. No git runs: review the result and commit it.
 

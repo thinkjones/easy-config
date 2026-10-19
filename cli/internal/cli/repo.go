@@ -6,11 +6,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
-
-	"github.com/thinkjones/easy-config/cli/share"
 )
 
 const manifestTemplate = `# What this repo needs from its environment. ` + "`ezc env`" + ` checks it.
@@ -30,10 +27,10 @@ const envLocalTemplate = `# Values for the local environment. Plain NAME: value 
 `
 
 const nextSteps = `
-Load the environment with one of:
-  mise     [env]  _.source = ".ezc/env.sh"
-  direnv   source_env .ezc/env.sh
-  neither  ezc run -- <command>
+Load the environment however you like, for example:
+  ezc run -- <command>
+  eval "$(ezc env export)"
+  ezc codegen shell, ezc codegen mise or ezc codegen direnv: a script that loads it, with how to use it at the top
 
 Check it with: ezc env
 `
@@ -46,15 +43,15 @@ func newRepoCmd(sys System) *cobra.Command {
 	cmd.AddCommand(newRepoAddCmd(sys), newRepoRemoveCmd(sys), newRepoListCmd(sys), newRepoCheckCmd(sys), newRepoUsesCmd(sys), newRepoRewrapCmd(sys))
 	cmd.AddCommand(&cobra.Command{
 		Use:   "init",
-		Short: "create .ezc/ with a manifest, a local values file and the env.sh shim",
-		Long:  "Create .ezc/ in the working directory (never in a parent) with manifest.yaml, env.local.yaml and env.sh. Files that exist are kept, except an env.sh from an older shim, which is updated.",
+		Short: "create .ezc/ with a manifest and a local values file",
+		Long:  "Create .ezc/ in the working directory (never in a parent) with manifest.yaml and env.local.yaml. Files that exist are kept. How the environment is loaded is yours to choose: `ezc run`, `ezc env export`, or a script from `ezc codegen shell|mise|direnv`.",
 		Args:  noArgs,
 		RunE:  func(*cobra.Command, []string) error { return repoInit(sys) },
 	})
 	return cmd
 }
 
-// repoInit writes the three files into the working directory's .ezc, one status line each.
+// repoInit writes the two files into the working directory's .ezc, one status line each.
 func repoInit(sys System) error {
 	wd, err := sys.Getwd()
 	if err != nil {
@@ -67,35 +64,26 @@ func repoInit(sys System) error {
 	files := []struct{ name, content string }{
 		{manifestName, manifestTemplate},
 		{"env.local.yaml", envLocalTemplate},
-		{"env.sh", share.EnvSh},
 	}
 	for _, f := range files {
-		status, note, err := ensureFile(filepath.Join(dir, f.name), f.content, f.name == "env.sh")
+		status, err := ensureFile(filepath.Join(dir, f.name), f.content)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(sys.Stdout, "%s %s/%s%s\n", status, ezcDir, f.name, note)
+		fmt.Fprintf(sys.Stdout, "%s %s/%s\n", status, ezcDir, f.name)
 	}
 	_, err = fmt.Fprint(sys.Stdout, nextSteps)
 	return err
 }
 
-// ensureFile writes content to path unless it exists, and says "created" or "kept". For a shim, an existing file with a different first line is rewritten ("updated"), unless it is newer than the embedded one: that is kept, with a note, so a teammate's newer shim is not downgraded.
-func ensureFile(path, content string, shim bool) (status, note string, err error) {
-	old, err := os.ReadFile(path)
+// ensureFile writes content to path unless it exists, and says "created" or "kept".
+func ensureFile(path, content string) (string, error) {
+	_, err := os.Stat(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return "created", "", os.WriteFile(path, []byte(content), 0o644)
+		return "created", os.WriteFile(path, []byte(content), 0o644)
 	}
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	first, _, _ := strings.Cut(content, "\n")
-	oldFirst, _, _ := strings.Cut(string(old), "\n")
-	if shim && oldFirst != first {
-		if n, ok := share.VersionOf(string(old)); ok && n > share.ShimVersion {
-			return "kept", fmt.Sprintf(" (version %d, newer than this ezc)", n), nil
-		}
-		return "updated", "", os.WriteFile(path, []byte(content), 0o644)
-	}
-	return "kept", "", nil
+	return "kept", nil
 }
