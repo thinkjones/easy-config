@@ -87,9 +87,32 @@ func newManifestSchemaCmd(sys System) *cobra.Command {
 func newCodegenCmd(sys System) *cobra.Command {
 	cmd := verbs(&cobra.Command{
 		Use:   "codegen",
-		Short: "generate typed config code from the manifest",
-	}, "python")
+		Short: "generate typed config code from the manifest, or a script that loads the environment",
+	}, "python, shell, mise or direnv")
 	cmd.AddCommand(newCodegenPythonCmd(sys))
+	for _, l := range []struct{ name, short string }{
+		{"shell", "print a script that loads the environment into a shell"},
+		{"mise", "print a script for mise's [env] _.source that loads the environment"},
+		{"direnv", "print an .envrc that loads the environment"},
+	} {
+		cmd.AddCommand(newCodegenLoaderCmd(sys, l.name, l.short))
+	}
+	return cmd
+}
+
+// newCodegenLoaderCmd prints one of gen.Loaders. It reads nothing, so it works anywhere.
+func newCodegenLoaderCmd(sys System, name, short string) *cobra.Command {
+	var out string
+	cmd := &cobra.Command{
+		Use:   name,
+		Short: short,
+		Long:  short + ". It runs `ezc env export` when it is loaded and holds no value; the comments at its top say how to use it.",
+		Args:  noArgs,
+		RunE: func(*cobra.Command, []string) error {
+			return writeOut(sys, out, []byte(gen.Loaders[name]))
+		},
+	}
+	cmd.Flags().StringVarP(&out, "output", "o", "", "write to FILE instead of stdout")
 	return cmd
 }
 

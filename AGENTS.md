@@ -34,7 +34,7 @@ The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-
 | `cli/internal/setup` | What `ezc setup` does to a machine: creates the key file, creates the store as a git repo (manifest, `recipients.yaml`, policy, one commit) or clones it (`CloneShallowStore` for a CI job: with git and a token, one commit deep), adopts one made by hand (`Adopt`: a git repo, a manifest, and a registry and a policy where they are missing and the store holds no encrypted values yet), and publishes it to GitHub through `gh`. Flags, prompts and printing are in `cli/internal/cli/setupcmd.go`. It leaves alone whatever is already there. |
 | `cli/internal/doctor` | Reports the health of the machine, the store and the repo (`ezc doctor`): checks, warnings and problems with their fixes, and the files in a `.ezc/` that ezc does not read. Never a value. |
 | `cli/cmd/ezc` | `main.go` wires the process into `cli.Run` and holds the version. Its tests drive the built binary: `store_test.go` (setup, two machines, sync, `setup --ci`) and `access_test.go` (join and approve, remove, bots, rotate, and what an access change that crossed a write or was not pushed leaves) with real git and real sops, and a fake `gh` that only records. |
-| `cli/share` | Files ezc writes elsewhere, embedded: the `env.sh` shim (`EnvSh`, `ShimVersion`) and the agent skills (`Skills`: `skills/ezc-convert`, `skills/ezc-migrate`), which `ezc setup` installs. |
+| `cli/share` | Files ezc writes elsewhere, embedded: the agent skills (`Skills`: `skills/ezc-convert`, `skills/ezc-migrate`), which `ezc setup` installs. |
 | `bin/ezc` | Shim that builds `cli/bin/ezc` when a Go source changes and runs it; `direnv allow` puts `bin/` on PATH. |
 | `README.md`, `docs/*.md` | User docs. The README is the homepage (what ezc is, quick start, a short command table); `docs/` holds the detail: `setup.md`, `store.md`, `access.md`, `repos.md`, `ci.md`, `tui.md`, `reference.md` (every command and flag, files, encryption, resolution) and `troubleshooting.md`. A command, flag or message that changes is changed there in the same commit. |
 | `assets/readme/` | The README's SVGs (hero, layering diagram), written by hand: light background `#f8fafc`, text `#0f172a`, accent `#e85d26`, corners 4px at most, system fonts only. Render with `rsvg-convert -w 900` to check one. |
@@ -52,7 +52,7 @@ In a repo, `.ezc/` holds:
 | `.ezc/env.<name>.yaml` | Plaintext values for one environment; `env.local.yaml` is the default. |
 | `.ezc/common.enc.yaml`, `.ezc/env.<name>.enc.yaml` | Encrypted values, for every environment and for one. |
 | `.ezc/.sops.yaml` | The encryption policy, without which nothing can be encrypted in the folder. In the store `ezc setup` writes it from `recipients.yaml`; in a repo `ezc repo rewrap` writes it from the store's `recipients.yaml`, and leaves it for the repo's owner to commit. |
-| `.ezc/env.sh` | The shim mise or direnv sources, written by `ezc repo init` from `cli/share/env.sh`. |
+| `.ezc/env.sh` | Not ezc's: where `ezc codegen mise -o .ezc/env.sh` puts mise's loader (`gen.Loaders` in `cli/internal/gen/loaders.go`), and where `ezc migrate` writes it. |
 
 The store's `.ezc/` holds the same files without `env.sh`, and `recipients.yaml` (who can decrypt the store, by name and public key), `rotation-due.yaml` (the secrets a removed key could read, until each gets a new value; absent when there are none) and `requests/<name>.yaml` (a join request whose pull request was merged; a request normally stays on its branch `ezc/join-<name>`).
 

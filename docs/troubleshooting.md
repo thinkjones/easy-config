@@ -41,8 +41,6 @@ For the detail of a single failure, `ezc env` lists what is wrong with the envir
 | What doctor finds | What to do |
 | --- | --- |
 | A repo manifest that does not parse | Fix the file; `ezc manifest validate` checks it. |
-| An `env.sh` written by an older `ezc` | Run `ezc repo init`. |
-| An `env.sh` written by a newer `ezc` | A warning: upgrade `ezc`. `ezc repo init` leaves that shim alone. |
 | An environment that does not resolve or does not pass the manifest | `ezc env` lists what is wrong. |
 | `recipients`: the repo's encrypted files are not encrypted for the store's recipients | Run `ezc repo rewrap`, then commit the result in the repo. It is refused until the store itself agrees with `recipients.yaml` (`ezc store rewrap`). |
 

@@ -75,7 +75,7 @@ If a variable is used by **two or more** repos, put it in the store instead: see
 ezc repo init
 ```
 
-This writes `.ezc/manifest.yaml`, `.ezc/env.local.yaml` and the `.ezc/env.sh` shim, and keeps any that exist. Declare what the repo requires from the store in the manifest by hand:
+This writes `.ezc/manifest.yaml` and `.ezc/env.local.yaml`, and keeps any that exist. Declare what the repo requires from the store in the manifest by hand:
 
 ```yaml
 schemaVersion: v1
@@ -117,7 +117,13 @@ A secret is read from a hidden prompt or from stdin, never from the command line
 
 > **Moving a value from plaintext to a secret requires rotating it.** It is in git history in plaintext. Encrypting it now protects the future, not the past.
 
-## Step 5: Wire mise or direnv
+## Step 5: Wire how the repo loads it
+
+Use what the repo already uses. For mise, generate the loader and commit it:
+
+```bash
+ezc codegen mise -o .ezc/env.sh
+```
 
 ```toml
 [env]
@@ -128,7 +134,7 @@ hide = true
 run = "ezc env"
 ```
 
-Then `depends = ["env:check"]` on **every** task that touches real infrastructure. With direnv instead: `source_env .ezc/env.sh` in `.envrc`. With neither: `ezc run -- <command>`.
+Then `depends = ["env:check"]` on **every** task that touches real infrastructure. With direnv instead: `ezc codegen direnv -o .envrc` (or add its lines to the `.envrc` there is), then `direnv allow`. With neither: `ezc run -- <command>`. Every generated loader says how to use it at its top. A hand-written loader that mise sources must keep the `EZC_SHIM_LOADING` guard the generated ones carry, or an `ezc` installed through mise loads it again without end.
 
 > **`_.source` takes a FILE PATH.** There is no command syntax in mise's `[env]`, and an unresolvable `_.source` loads nothing and reports no error. That silence is why `env:check` is not optional.
 
@@ -185,7 +191,7 @@ The output is derived: regenerate it, never hand-edit it, and add a CI drift che
 
 ## When a converted repo loads nothing
 
-1. `ezc doctor`: the shim's version, the store, the key, the repo's environments.
+1. `ezc doctor`: the store, the key, the repo's environments. Then check that the loader is there and is the one `ezc codegen mise` prints.
 2. `ezc env`: the actual check, with the file to open for each problem. No output at all means the command never ran, not that it passed.
 3. `env -u __MISE_DIFF -u __MISE_SESSION mise env | grep <VAR>`: mise keeps unwinding a variable it once owned until the shell is replaced.
 4. `mise run env:check` directly, to confirm the task exists and is wired.

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thinkjones/easy-config/cli/share"
+	"github.com/thinkjones/easy-config/cli/internal/gen"
 )
 
 const oldMise = `[env]
@@ -57,8 +57,8 @@ func TestRepoMigrates(t *testing.T) {
 	if got, want := names(filepath.Join(dir, ".ezc")), append(oldNamesList, "env.sh"); !sameSet(got, want) {
 		t.Errorf(".ezc holds %v, want %v", got, want)
 	}
-	if read(t, filepath.Join(dir, ".ezc", "env.sh")) != share.EnvSh {
-		t.Error("env.sh is not the shim")
+	if read(t, filepath.Join(dir, ".ezc", "env.sh")) != gen.Loaders["mise"] {
+		t.Error("env.sh is not the mise loader")
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".fs-config")); !errors.Is(err, os.ErrNotExist) {
 		t.Error(".fs-config/ still there")

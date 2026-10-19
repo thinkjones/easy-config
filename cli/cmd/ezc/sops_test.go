@@ -183,17 +183,18 @@ func TestSecretsEndToEnd(t *testing.T) {
 func TestNoKeyEndToEnd(t *testing.T) {
 	e := newE2E(t)
 	e.mustRun(e.repo, "", "repo", "init")
+	e.mustRun(e.repo, "", "codegen", "mise", "-o", ".ezc/env.sh")
 	e.setSecret(e2eSecret)
-	// The shim runs the ezc it finds on PATH, so the built one must be there for its steps to test anything.
-	shim := func(script string) (stdout, stderr string, code int) {
+	// The loader runs the ezc it finds on PATH, so the built one must be there for its steps to test anything.
+	loader := func(script string) (stdout, stderr string, code int) {
 		t.Helper()
 		saved := e.path
 		defer func() { e.path = saved }()
 		e.path = filepath.Dir(binary) + string(os.PathListSeparator) + saved
 		return e.exec(e.repo, "", "sh", "-c", ". .ezc/env.sh; "+script)
 	}
-	if out, errOut, code := shim(`printf %s "$API_TOKEN"`); code != 0 || out != e2eSecret || errOut != "" {
-		t.Fatalf("shim with the key: exit %d stdout %q stderr %q", code, out, errOut)
+	if out, errOut, code := loader(`printf %s "$API_TOKEN"`); code != 0 || out != e2eSecret || errOut != "" {
+		t.Fatalf("loader with the key: exit %d stdout %q stderr %q", code, out, errOut)
 	}
 	writeAgeKey(t, e.key) // a different key now sits where the right one was
 
@@ -204,8 +205,8 @@ func TestNoKeyEndToEnd(t *testing.T) {
 	if stdout, _, code := e.run(e.repo, "", "env", "export"); code != 1 || stdout != "" {
 		t.Fatalf("env export: exit %d stdout %q", code, stdout)
 	}
-	if out, errOut, code := shim(`printf %s "$API_TOKEN"; echo ok`); code != 0 || out != "ok\n" || errOut != "" {
-		t.Fatalf("shim without the key: exit %d stdout %q stderr %q", code, out, errOut)
+	if out, errOut, code := loader(`printf %s "$API_TOKEN"; echo ok`); code != 0 || out != "ok\n" || errOut != "" {
+		t.Fatalf("loader without the key: exit %d stdout %q stderr %q", code, out, errOut)
 	}
 	stdout, stderr, code = e.run(e.repo, "", "doctor")
 	if code != 0 || !strings.Contains(stdout, "cannot decrypt: no key") || strings.Contains(stdout+stderr, e2eSecret) {

@@ -1,7 +1,6 @@
 package doctor
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/thinkjones/easy-config/cli/internal/backend"
-	"github.com/thinkjones/easy-config/cli/share"
 )
 
 const storeManifest = "schemaVersion: v1\nrequired:\n  NAME: {type: str, desc: who}\n"
@@ -49,7 +47,6 @@ func healthy(t *testing.T) Options {
 	put(t, filepath.Join(o.StoreDir, "common.yaml"), "NAME: n\n")
 	put(t, filepath.Join(o.RepoDir, "manifest.yaml"), repoManifest)
 	put(t, filepath.Join(o.RepoDir, "env.local.yaml"), "EXTRA: x\n")
-	put(t, filepath.Join(o.RepoDir, "env.sh"), share.EnvSh)
 	return o
 }
 
@@ -281,35 +278,27 @@ func TestNotInARepo(t *testing.T) {
 	}
 }
 
-func TestShimStates(t *testing.T) {
+// How a repo loads its environment is its own business: no loader, an old one and one written by hand are all fine.
+func TestDoctorLeavesTheLoaderAlone(t *testing.T) {
 	o := healthy(t)
-	shim := filepath.Join(o.RepoDir, "env.sh")
-	if err := os.Remove(shim); err != nil {
-		t.Fatal(err)
-	}
-	if it := item(t, Collect(o), "repo", "shim"); it.State != Warn || it.Detail != "no .ezc/env.sh" {
-		t.Fatalf("%+v", it)
-	}
-	put(t, shim, "# ezc-shim: 0\n")
-	if it := item(t, Collect(o), "repo", "shim"); it.State != Broken || it.Fix != "Run `ezc repo init`." {
-		t.Fatalf("%+v", it)
-	}
-	put(t, shim, "echo hi\n")
-	if it := item(t, Collect(o), "repo", "shim"); it.State != Broken {
-		t.Fatalf("%+v", it)
-	}
-	put(t, shim, "# ezc-shim: x\n")
-	if it := item(t, Collect(o), "repo", "shim"); it.State != Broken {
-		t.Fatalf("%+v", it)
-	}
-	put(t, shim, fmt.Sprintf("# ezc-shim: %d\n", share.ShimVersion+1))
-	it := item(t, Collect(o), "repo", "shim")
-	if it.State != Warn || it.Fix != "Upgrade ezc." || !strings.Contains(it.Detail, "newer than this ezc") {
-		t.Fatalf("%+v", it)
-	}
-	put(t, shim, share.EnvSh)
-	if it := item(t, Collect(o), "repo", "shim"); it.State != OK || it.Detail != fmt.Sprintf("version %d", share.ShimVersion) {
-		t.Fatalf("%+v", it)
+	loader := filepath.Join(o.RepoDir, "env.sh")
+	for _, content := range []string{"", "# ezc-shim: 0\n", "echo hi\n"} {
+		if content == "" {
+			os.Remove(loader)
+		} else {
+			put(t, loader, content)
+		}
+		r := Collect(o)
+		for _, s := range r.Sections {
+			for _, it := range s.Items {
+				if it.Label == "shim" || strings.Contains(it.Detail, "env.sh") {
+					t.Errorf("%q: doctor judged the loader: %+v", content, it)
+				}
+			}
+		}
+		if r.Broken() {
+			t.Errorf("%q: broken:\n%s", content, r)
+		}
 	}
 }
 
