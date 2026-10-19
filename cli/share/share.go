@@ -19,7 +19,7 @@ var EnvSh string
 var Skills embed.FS
 
 // ShimVersion is the number on the first line of EnvSh ("# ezc-shim: 1").
-const ShimVersion = 1
+const ShimVersion = 2
 
 var shimMarker = regexp.MustCompile(`^#\s*ezc-shim:\s*(\d+)\s*$`)
 
