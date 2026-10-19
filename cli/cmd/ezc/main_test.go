@@ -155,3 +155,46 @@ func TestShimLoadsTheEnvironment(t *testing.T) {
 		t.Fatalf("broken config: exit %d stdout %q", code, out)
 	}
 }
+
+// An ezc that mise installed is a mise shim, and mise loads the repo's environment (the shim) before it runs the
+// tool: the shim's own ezc would load the shim again, without end. The fake here does what that shim does, and gives
+// up after a few rounds so that a failing test ends.
+func TestShimIsNotLoadedAgainByTheEzcItRuns(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	dir, bin := t.TempDir(), t.TempDir()
+	rounds := filepath.Join(t.TempDir(), "rounds")
+	fake := "#!/bin/sh\n" +
+		"echo x >> \"$ROUNDS\"\n" +
+		"[ \"$(wc -l < \"$ROUNDS\")\" -gt 5 ] && exit 0\n" +
+		". \"$REPO/.ezc/env.sh\"\n" +
+		"exec \"$REAL\" \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "ezc"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"HOME=" + t.TempDir(), "EZC_HOME=" + t.TempDir(), "ROUNDS=" + rounds, "REPO=" + dir, "REAL=" + binary,
+		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")}
+	init := exec.Command(binary, "repo", "init")
+	init.Dir, init.Env = dir, env
+	if out, err := init.CombinedOutput(); err != nil {
+		t.Fatalf("repo init: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".ezc", "env.local.yaml"), []byte("GREETING: hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(sh, "-c", `. .ezc/env.sh; printf %s "$GREETING"`)
+	cmd.Dir, cmd.Env = dir, env
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(rounds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(got), "x"); n != 1 || string(out) != "hello" {
+		t.Fatalf("the shim ran ezc %d times (want 1), stdout %q", n, out)
+	}
+}
