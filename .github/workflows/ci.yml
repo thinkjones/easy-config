@@ -51,8 +51,13 @@ jobs:
   ci-gate:
     name: "CI Gate: all required checks passed"
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false || github.event_name != 'pull_request'
+    if: always() && (github.event.pull_request.draft == false || github.event_name != 'pull_request')
     needs: [cli-test]
     steps:
       - name: Gate
-        run: echo "The required checks passed."
+        run: |
+          if [ "${{ needs.cli-test.result }}" != "success" ]; then
+            echo "cli-test: ${{ needs.cli-test.result }}" >&2
+            exit 1
+          fi
+          echo "The required checks passed."
