@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  cli-test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false || github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache: false
+      - name: gofmt
+        working-directory: cli
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; echo "gofmt: the files above need gofmt -w" >&2; exit 1; }
+      - name: go vet
+        working-directory: cli
+        run: go vet ./...
+      - name: go test
+        working-directory: cli
+        run: go test ./...
+
+  cli-test-sops:
+    name: Full suite (sops and git required)
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false || github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache: false
+      - name: Install sops
+        run: |
+          curl -fsSL -o sops https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
+          sudo install -m 0755 sops /usr/local/bin/sops
+      - name: go test (sops and git required)
+        working-directory: cli
+        env:
+          EZC_REQUIRE_SOPS: "1"
+          EZC_REQUIRE_GIT: "1"
+        run: go test ./...
+
+  ci-gate:
+    name: "CI Gate: all required checks passed"
+    runs-on: ubuntu-latest
+    if: always() && (github.event.pull_request.draft == false || github.event_name != 'pull_request')
+    needs: [cli-test]
+    steps:
+      - name: Gate
+        run: |
+          if [ "${{ needs.cli-test.result }}" != "success" ]; then
+            echo "cli-test: ${{ needs.cli-test.result }}" >&2
+            exit 1
+          fi
+          echo "The required checks passed."
