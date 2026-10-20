@@ -1,0 +1,127 @@
+# lefthook.yml — the local gate for this repository.
+#
+# pre-commit: gofmt, go vet and the affected packages' tests over the staged
+#   cli/**/*.go files. The file set comes from the index and so does the
+#   content judged, so a change that is only in the work tree never refuses a
+#   commit.
+# pre-push: the full `mise run cli:test` — or `cli:test:sops` when sops and
+#   git are on PATH — refused on failure.
+#
+# Lefthook runs a `run:` script with `sh`, so these scripts are POSIX sh:
+# no bashisms, no NUL bytes in a shell variable, no `case` inside a command
+# substitution. See AGENTS.md ("Where things are") and CLAUDE.md (commands
+# table) for the gate and how to bypass it.
+
+auto_install: true
+
+pre-commit:
+  parallel: false
+  commands:
+    gate:
+      run: |
+        set -eu
+
+        # The staged set: the index's own, rename- and delete-aware, filtered
+        # to Go files under cli/. Git quotes unusual path names, so one path
+        # per line is safe.
+        files=$(git diff --cached --name-only --diff-filter=ACMR -- 'cli/**/*.go')
+        [ -n "$files" ] || exit 0
+
+        # The content judged is the index's content: the index is written to a
+        # temporary tree outside the repository and every check reads from
+        # there. Nothing in the work tree, the index or any config is touched.
+        tmp=$(mktemp -d)
+        trap 'rm -rf "$tmp"' 0 INT TERM HUP
+        mkdir -p "$tmp/tree"
+        git checkout-index --all --prefix="$tmp/tree/"
+
+        # 1. gofmt over exactly the staged files, named by their path in the
+        #    repository. `gofmt -l` exits 0 even when it lists files, so the
+        #    non-empty result is what refuses the commit.
+        dirty=$(cd "$tmp/tree" && printf '%s\n' "$files" | while IFS= read -r f; do
+          gofmt -l "$f"
+        done)
+        if [ -n "$dirty" ]; then
+          printf '%s\n' "$dirty"
+          echo "gofmt: the files above need gofmt -w" >&2
+          exit 1
+        fi
+
+        # 2. The packages the staged files belong to, as paths inside the
+        #    module (cli/ is the module root).
+        dirs=$(printf '%s\n' "$files" | while IFS= read -r f; do
+          d=${f#cli/}
+          if [ "${d#*/}" != "$d" ]; then
+            printf './%s\n' "${d%/*}"
+          else
+            printf '.\n'
+          fi
+        done | sort -u)
+
+        # 3. vet and test, run from the module root so the context matches
+        #    `mise run cli:test`.
+        (cd "$tmp/tree/cli" && go vet $dirs)
+        (cd "$tmp/tree/cli" && go test $dirs)
+      fail_text: |
+        The local gate refused this commit. See the output above.
+
+pre-push:
+  parallel: false
+  # Lefthook skips a pre-push command whose push-file list is empty ("no
+  # matching push files"), so a push of a commit the branch's upstream already
+  # holds would go through with no gate at all. The file named here is what
+  # keeps the command unconditional: the run script below names it, and
+  # lefthook runs a command that names a file whatever the push files hold.
+  files: "git ls-files -- lefthook.yml"
+  commands:
+    full-gate:
+      # `use_stdin` belongs to the command, not to the hook: lefthook reads
+      # it from the command and ignores it on the hook, so a hook-level one
+      # leaves this command with an empty stdin and no ref lines to read.
+      use_stdin: true
+      run: |
+        set -eu
+
+        # The gate is unconditional: lefthook skips a pre-push command whose
+        # push-file list is empty, and the file named by the hook's `files` is
+        # what keeps it from skipping. The file is {files}.
+
+        # The branch being pushed to. Git passes one line per ref on stdin;
+        # lefthook only forwards it when `use_stdin: true` is set above.
+        target=
+        while read -r local_ref local_sha remote_ref remote_sha; do
+          if [ "${remote_ref#refs/heads/}" != "$remote_ref" ]; then
+            target=${remote_ref#refs/heads/}
+          fi
+        done
+
+        missing=
+        if ! command -v sops >/dev/null 2>&1; then
+          missing="sops"
+        fi
+        if ! command -v git >/dev/null 2>&1; then
+          if [ -n "$missing" ]; then
+            missing="$missing and git"
+          else
+            missing="git"
+          fi
+        fi
+
+        if [ -n "$missing" ]; then
+          echo "$missing missing on PATH - cli:test:sops did not run; the real-sops / real-git end-to-end tests were skipped." >&2
+          gate="mise run cli:test"
+        else
+          gate="mise run cli:test:sops"
+        fi
+
+        if [ "$target" = "main" ]; then
+          echo "Pushing to main. The gate is $gate." >&2
+        fi
+
+        if [ -n "$missing" ]; then
+          mise run cli:test || { echo "The push gate failed: mise run cli:test" >&2; exit 1; }
+        else
+          mise run cli:test:sops || { echo "The push gate failed: mise run cli:test:sops" >&2; exit 1; }
+        fi
+      fail_text: |
+        The push was refused by the local gate. See the output above.

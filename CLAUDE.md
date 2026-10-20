@@ -10,6 +10,7 @@ Guidance for Claude Code in this repository. [`AGENTS.md`](AGENTS.md) is the rou
 | Build `ezc` into `cli/bin/` | `mise run cli:build` |
 | Test changes to `cli/` (the gate: gofmt, vet, tests) | `mise run cli:test` |
 | Same gate with the real-sops and real-git tests required, not skipped | `mise run cli:test:sops` |
+| Run / bypass the local commit-push gate | `lefthook.yml` is the gate; `git commit --no-verify` and `git push --no-verify` are the deliberate-bypass escape hatches. |
 | Regenerate the committed manifest JSON Schema | `mise run schema:build` |
 | Fail when the committed schema is stale | `mise run schema:check` |
 | Build the docs site locally, as GitHub Pages does (Ruby 3) | `cd docs && bundle install && bundle exec jekyll serve` |
