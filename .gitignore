@@ -9,3 +9,34 @@ CLAUDE.local.md
 docs/_site/
 docs/.jekyll-cache/
 docs/Gemfile.lock
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*
+
+# Gas City
+.beads/*
+!.beads/identity.toml
+
+# Gas City
+.mcp.json
+.gemini/settings.json
+.codex/config.toml
+.cursor/mcp.json
+opencode.json
+mimocode.json
+
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/fs-app-design/
+!.claude/skills/scope-roadmap/
+!.claude/skills/business-logic-gap-analysis/
+.gemini/
+.codex/
+CLAUDE.md
+.gc
+.stitch
