@@ -11,10 +11,18 @@ Guidance for Claude Code in this repository. [`AGENTS.md`](AGENTS.md) is the rou
 | Test changes to `cli/` (the gate: gofmt, vet, tests) | `mise run cli:test` |
 | Same gate with the real-sops and real-git tests required, not skipped | `mise run cli:test:sops` |
 | Run / bypass the local commit-push gate | `lefthook.yml` is the gate; `git commit --no-verify` and `git push --no-verify` are the deliberate-bypass escape hatches. |
+| Write the local gate into the hooks git runs (mise does this itself) | `mise run hooks:install` |
 | Regenerate the committed manifest JSON Schema | `mise run schema:build` |
 | Fail when the committed schema is stale | `mise run schema:check` |
 | Build the docs site locally, as GitHub Pages does (Ruby 3) | `cd docs && bundle install && bundle exec jekyll serve` |
 | Rewrite the TUI's golden screens (read the diff before committing) | `cd cli && go test ./internal/tui -run Golden -update` |
+
+## The gate
+
+- **One definition of the gate**: `mise run cli:test` (gofmt, `go vet`, `go test ./...`) and `mise run cli:test:sops` (the same with the real-sops and real-git tests required instead of skipped). CI runs those tasks, never a copy of the steps, so a green laptop and a green CI mean the same thing.
+- **The CI Gate waits for every job it needs.** `ci-gate` needs `cli-test`, `cli-test-sops` and `schema-check`, and fails when any of them did not succeed. A job id with a hyphen is read with the index syntax (`needs['cli-test-sops'].result`); there is no dynamic index, so each needed job is named in full. A job added to the workflow must be added to that list, or it runs beside the gate and nobody reads it.
+- **A push to `main` is refused** by the pre-push hook, and the CI Gate is the server-side half. **`main` is not protected yet** — no branch protection, no ruleset — so nothing on GitHub requires the CI Gate and a merge is not held by it. The check to require is named `CI Gate: all required checks passed`: the job's `name`, not its id (`ci-gate`). The daily job in `.github/workflows/scheduled.yml` runs the full suite and the schema check against `main`'s HEAD so a red `main` is visible without it.
+- **The hooks live where git looks for them.** `scripts/install-hooks.sh` writes them into `core.hooksPath` when it is set and `.git/hooks` otherwise, and appends to a hook file another tool owns rather than overwriting it. **beads sets `core.hooksPath` to `.beads/hooks`**, so a hook file written into `.git/hooks` never runs, and `lefthook install` refuses for the same reason.
 
 ## Sharp edges
 

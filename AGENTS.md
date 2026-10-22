@@ -36,7 +36,8 @@ The design and its parts are in [the ezc design](docs/superpowers/specs/2026-10-
 | `cli/cmd/ezc` | `main.go` wires the process into `cli.Run` and holds the version. Its tests drive the built binary: `store_test.go` (setup, two machines, sync, `setup --ci`) and `access_test.go` (join and approve, remove, bots, rotate, and what an access change that crossed a write or was not pushed leaves) with real git and real sops, and a fake `gh` that only records. |
 | `cli/share` | Files ezc writes elsewhere, embedded: the agent skills (`Skills`: `skills/ezc-convert`, `skills/ezc-migrate`), which `ezc setup` installs. |
 | `bin/ezc` | Shim that builds `cli/bin/ezc` when a Go source changes and runs it; `direnv allow` puts `bin/` on PATH. |
-| `lefthook.yml` | The local commit-push gate: `gofmt`, `go vet` and tests over staged `cli/**/*.go`; `mise run cli:test` on push, `cli:test:sops` when `sops` and `git` are on `PATH`. `auto_install: true`. The hooks are installed by `direnv allow` (`.envrc` runs `mise install` and `lefthook install`). Bypass with `git commit --no-verify` and `git push --no-verify` — both hooks stay declared and only the gate is skipped. |
+| `lefthook.yml` | The local commit-push gate: `gofmt`, `go vet` and tests over staged `cli/**/*.go`; a push to `main` is refused; `mise run cli:test` on push, `cli:test:sops` when `sops` and `git` are on `PATH`. The hooks are written by `scripts/install-hooks.sh` (see `scripts/`), so a clone needs no command. Bypass with `git commit --no-verify` and `git push --no-verify` — both hooks stay declared and only the gate is skipped. |
+| `scripts/install-hooks.sh` | Writes the local gate into the directory git runs hooks from: `core.hooksPath` when it is set, `.git/hooks` otherwise. It never overwrites a hook file it did not write — another tool's file (beads installs its hooks into `.beads/hooks` and points `core.hooksPath` there) gets the gate appended outside that tool's own markers, which the tool preserves. Run by mise's `postinstall` and `enter` hooks, so `mise install` or entering the project with mise active is enough. It never fails the caller. |
 | `README.md`, `docs/*.md` | User docs. The README is the homepage (what ezc is, quick start, a short command table); `docs/` holds the detail: `setup.md`, `store.md`, `access.md`, `repos.md`, `ci.md`, `tui.md`, `reference.md` (every command and flag, files, encryption, resolution) and `troubleshooting.md`. A command, flag or message that changes is changed there in the same commit. |
 | `assets/readme/` | The README's SVGs (hero, layering diagram), written by hand: light background `#f8fafc`, text `#0f172a`, accent `#e85d26`, corners 4px at most, system fonts only. Render with `rsvg-convert -w 900` to check one. |
 | `docs/superpowers/` | Design specs and implementation plans. Historical: never rewrite them to match the code. |
@@ -56,6 +57,19 @@ In a repo, `.ezc/` holds:
 | `.ezc/env.sh` | Not ezc's: where `ezc codegen mise -o .ezc/env.sh` puts mise's loader (`gen.Loaders` in `cli/internal/gen/loaders.go`), and where `ezc migrate` writes it. |
 
 The store's `.ezc/` holds the same files without `env.sh`, and `recipients.yaml` (who can decrypt the store, by name and public key), `rotation-due.yaml` (the secrets a removed key could read, until each gets a new value; absent when there are none) and `requests/<name>.yaml` (a join request whose pull request was merged; a request normally stays on its branch `ezc/join-<name>`).
+
+## The gate
+
+Two things run the same checks, and both call the tasks in `mise.toml`: the local hooks (`lefthook.yml`) and the CI Gate in `.github/workflows/ci.yml`. There is one definition of the gate — `cli:test` for `gofmt`, `go vet` and `go test`, `cli:test:sops` for the same with the real-sops and real-git tests required instead of skipped, `schema:check` for the committed manifest schema being current.
+
+| Guard | Where it runs | Bypassable |
+| --- | --- | --- |
+| Pre-commit hook: `gofmt`, `go vet`, the staged packages' tests | the machine, before a commit | yes — `git commit --no-verify` |
+| Pre-push hook: a push to `main` is refused, and the full suite runs | the machine, before a push | yes — `git push --no-verify` |
+| `CI Gate: all required checks passed` | GitHub, on a pull request and on `main` | no |
+| The daily job: the full suite and the schema check against `main`'s HEAD | GitHub, every day | no |
+
+**`main` is not protected yet.** There is no branch protection and no ruleset, so nothing on GitHub requires the CI Gate and a merge is not held by it. The check to require is named `CI Gate: all required checks passed` — the job's `name`, not its id (`ci-gate`). Until that lands, the pre-push hook and the daily job are what stand behind the gate.
 
 ## Conventions
 
@@ -77,4 +91,4 @@ The store's `.ezc/` holds the same files without `env.sh`, and `recipients.yaml`
 - **Comments are short**: one or two lines saying what a thing is.
 - **Commit messages are conventional** (`feat(resolve): …`, `docs: …`).
 
-[`CLAUDE.md`](CLAUDE.md) has the commands and the sharp edges.
+[`CLAUDE.md`](CLAUDE.md) has the commands and the sharp edges. [`CONTRIBUTING.md`](CONTRIBUTING.md) is how a person works on the repo: the setup, the gate and what enforces it.

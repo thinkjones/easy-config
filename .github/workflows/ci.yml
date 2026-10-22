@@ -4,6 +4,14 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same branch cancels the run it supersedes, so a stale red
+# run never sits on the branch. The event is part of the key, so a push run
+# never cancels a manual run.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   cli-test:
@@ -16,16 +24,14 @@ jobs:
         with:
           go-version-file: cli/go.mod
           cache: false
-      - name: gofmt
-        working-directory: cli
-        run: |
-          test -z "$(gofmt -l .)" || { gofmt -l .; echo "gofmt: the files above need gofmt -w" >&2; exit 1; }
-      - name: go vet
-        working-directory: cli
-        run: go vet ./...
-      - name: go test
-        working-directory: cli
-        run: go test ./...
+      # mise 2026.10.8 — the version the tasks in mise.toml were verified
+      # against. The job runs the task, so CI and a laptop run the same
+      # commands; mise.toml is the only definition of the gate.
+      - uses: jdx/mise-action@v5
+        with:
+          version: 2026.10.8
+      - name: mise run cli:test
+        run: mise run cli:test
 
   cli-test-sops:
     name: Full suite (sops and git required)
@@ -37,27 +43,63 @@ jobs:
         with:
           go-version-file: cli/go.mod
           cache: false
+      - uses: jdx/mise-action@v5
+        with:
+          version: 2026.10.8
+      # sops is the runner's own setup, so the task that needs it does not have
+      # to know where it came from.
       - name: Install sops
         run: |
           curl -fsSL -o sops https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
           sudo install -m 0755 sops /usr/local/bin/sops
-      - name: go test (sops and git required)
-        working-directory: cli
-        env:
-          EZC_REQUIRE_SOPS: "1"
-          EZC_REQUIRE_GIT: "1"
-        run: go test ./...
+      - name: mise run cli:test:sops
+        run: mise run cli:test:sops
+
+  # The committed manifest JSON Schema is generated from the Go types. A pull
+  # request that changes them and forgets to regenerate it leaves the repo
+  # inconsistent, so it is caught here and not a day later.
+  schema-check:
+    name: Manifest schema is current
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false || github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache: false
+      - uses: jdx/mise-action@v5
+        with:
+          version: 2026.10.8
+      - name: mise run schema:check
+        run: mise run schema:check
 
   ci-gate:
     name: "CI Gate: all required checks passed"
     runs-on: ubuntu-latest
-    if: always() && (github.event.pull_request.draft == false || github.event_name != 'pull_request')
-    needs: [cli-test]
+    # !cancelled() rather than always(): a run that was superseded must not
+    # post a red gate. A needed job that failed, was cancelled or timed out
+    # still fails the gate below. The expression is wrapped because a bare `!`
+    # at the start of a YAML scalar is read as a tag.
+    if: ${{ !cancelled() && (github.event.pull_request.draft == false || github.event_name != 'pull_request') }}
+    # Every job that proves the product works. A job added here must be added
+    # to this list, or it runs beside the gate and nobody reads it.
+    needs: [cli-test, cli-test-sops, schema-check]
     steps:
       - name: Gate
+        # A job id with a hyphen is read with the index syntax; there is no
+        # dynamic index, so each needed job is named in full.
         run: |
           if [ "${{ needs.cli-test.result }}" != "success" ]; then
             echo "cli-test: ${{ needs.cli-test.result }}" >&2
+            exit 1
+          fi
+          if [ "${{ needs['cli-test-sops'].result }}" != "success" ]; then
+            echo "cli-test-sops: ${{ needs['cli-test-sops'].result }}" >&2
+            exit 1
+          fi
+          if [ "${{ needs.schema-check.result }}" != "success" ]; then
+            echo "schema-check: ${{ needs.schema-check.result }}" >&2
             exit 1
           fi
           echo "The required checks passed."

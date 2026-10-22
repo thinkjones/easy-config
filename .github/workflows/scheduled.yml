@@ -1,0 +1,52 @@
+name: Scheduled
+
+on:
+  # A minute off the hour, so the run does not queue behind everyone else's
+  # midnight jobs.
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+jobs:
+  # The committed manifest JSON Schema is generated from the Go types. The
+  # probe that catches it going stale (mise run schema:check) has to run
+  # somewhere, or nothing does until a user notices.
+  schema-check:
+    name: Manifest schema is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache: false
+      # mise 2026.10.8 — the version the tasks in mise.toml were verified
+      # against.
+      - uses: jdx/mise-action@v5
+        with:
+          version: 2026.10.8
+      - name: mise run schema:check
+        run: mise run schema:check
+
+  # main is not protected yet, so nothing requires the CI Gate there. This job
+  # is the backstop: it runs the full suite against main's HEAD every day, so
+  # a red main shows up as a red check instead of being found later. It goes
+  # away when branch protection lands.
+  main-health:
+    name: Full suite on main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache: false
+      - uses: jdx/mise-action@v5
+        with:
+          version: 2026.10.8
+      - name: Install sops
+        run: |
+          curl -fsSL -o sops https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
+          sudo install -m 0755 sops /usr/local/bin/sops
+      - name: mise run cli:test:sops
+        run: mise run cli:test:sops
