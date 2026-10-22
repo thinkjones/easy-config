@@ -140,7 +140,7 @@ mise run cli:test        # the gate: gofmt, vet, tests
 mise run cli:test:sops   # the same, with the real-sops and real-git tests required
 ```
 
-[`AGENTS.md`](AGENTS.md) says where things are and [`CLAUDE.md`](CLAUDE.md) lists the sharp edges.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) is how to work on the repo: the setup, the gate and what enforces it. [`AGENTS.md`](AGENTS.md) says where things are and [`CLAUDE.md`](CLAUDE.md) lists the sharp edges.
 
 ## License
 

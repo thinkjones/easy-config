@@ -4,6 +4,18 @@
 [tools]
 lefthook = "2.1.14"
 
+# The local gate's hooks are written when mise installs this project's tools
+# and when a shell enters the project, so a fresh clone is guarded without a
+# command to run. scripts/install-hooks.sh puts them in the directory git runs
+# hooks from and never overwrites a hook file another tool owns.
+[hooks]
+postinstall = "sh scripts/install-hooks.sh"
+enter = "sh scripts/install-hooks.sh"
+
+[tasks."hooks:install"]
+description = "Write the local gate into the hooks git runs (mise does this itself)"
+run = "sh scripts/install-hooks.sh"
+
 [tasks."cli:build"]
 description = "Build ezc into cli/bin/ (bin/ezc also does this on demand)"
 dir = "cli"

@@ -4,8 +4,13 @@
 #   cli/**/*.go files. The file set comes from the index and so does the
 #   content judged, so a change that is only in the work tree never refuses a
 #   commit.
-# pre-push: the full `mise run cli:test` — or `cli:test:sops` when sops and
-#   git are on PATH — refused on failure.
+# pre-push: a push to main is refused; anything else runs the full
+#   `mise run cli:test` — or `cli:test:sops` when sops and git are on PATH —
+#   refused on failure.
+#
+# The hooks are written by scripts/install-hooks.sh, which mise runs when it
+# installs this project's tools and when a shell enters the project. It writes
+# them into the directory git runs hooks from, so a clone needs no command.
 #
 # Lefthook runs a `run:` script with `sh`, so these scripts are POSIX sh:
 # no bashisms, no NUL bytes in a shell variable, no `case` inside a command
@@ -87,11 +92,15 @@ pre-push:
         # what keeps it from skipping. The file is {files}.
 
         # The branch being pushed to. Git passes one line per ref on stdin;
-        # lefthook only forwards it when `use_stdin: true` is set above.
-        target=
+        # lefthook only forwards it when `use_stdin: true` is set above. Every
+        # ref is looked at, so a push of two branches is refused when one of
+        # them is main.
+        pushing_main=
         while read -r local_ref local_sha remote_ref remote_sha; do
           if [ "${remote_ref#refs/heads/}" != "$remote_ref" ]; then
-            target=${remote_ref#refs/heads/}
+            if [ "${remote_ref#refs/heads/}" = "main" ]; then
+              pushing_main=1
+            fi
           fi
         done
 
@@ -114,8 +123,11 @@ pre-push:
           gate="mise run cli:test:sops"
         fi
 
-        if [ "$target" = "main" ]; then
-          echo "Pushing to main. The gate is $gate." >&2
+        if [ -n "$pushing_main" ]; then
+          echo "Refusing to push to main." >&2
+          echo "main is merged through a pull request and the CI Gate. Run the gate yourself first: $gate" >&2
+          echo "Bypass with: git push --no-verify." >&2
+          exit 1
         fi
 
         if [ -n "$missing" ]; then
