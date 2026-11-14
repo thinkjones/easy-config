@@ -146,7 +146,6 @@ Config
 		},
 		newDoctorCmd(sys),
 		newStoreCmd(sys),
-		newMigrateCmd(sys),
 	)
 	return root
 }

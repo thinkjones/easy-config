@@ -1418,7 +1418,7 @@ func TestHelpGroupsTheCommands(t *testing.T) {
 		{"Variables and secrets:", []string{"edit", "env", "get", "list", "manifest", "run", "set", "tui", "unset"}},
 		{"Users and access:", []string{"bot", "join", "user"}},
 		{"Code generation:", []string{"codegen"}},
-		{"Maintenance:", []string{"completion", "doctor", "help", "migrate", "store", "version"}},
+		{"Maintenance:", []string{"completion", "doctor", "help", "store", "version"}},
 	}
 	if strings.Contains(out, "Additional Commands:") || strings.Contains(out, "Available Commands:") {
 		t.Fatalf("a command is outside the groups:\n%s", out)
