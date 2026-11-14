@@ -5,7 +5,7 @@ nav_order: 8
 
 # Migrating from fsconfig
 
-`ezc migrate` moves a store or a repo from fsconfig's `.fs-config/` folder to ezc's `.ezc/`, and proves that the environment it composes is the same before and after. The `ezc-migrate` skill, which `ezc setup` installs, walks an agent through every repo in order.
+`ezc migrate` moves a store or a repo from fsconfig's `.fs-config/` folder to ezc's `.ezc/`, and proves that the environment it composes is the same before and after. The `ezc-migrate` agent skill ([`cli/share/skills/ezc-migrate`](https://github.com/thinkjones/easy-config/tree/main/cli/share/skills/ezc-migrate); copy it to `~/.claude/skills/` to use it) walks an agent through every repo in order.
 
 ```sh
 ezc migrate --dry-run   # prove and report; write nothing
