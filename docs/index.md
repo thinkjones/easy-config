@@ -58,6 +58,5 @@ How a repo loads its environment is up to you: `ezc run -- <command>`, `eval "$(
 | [Repos](repos.md) | `repos.yaml`, where each repo is checked out, checking every repo, and how a repo's own secrets follow the store's recipients. |
 | [Bots and CI](ci.md) | A key for a bot, the two secrets a job needs, and a GitHub Actions workflow. |
 | [The TUI](tui.md) | `ezc tui`: the four views, their keys, what a change runs, and the setup wizard. |
-| [Migrating from fsconfig](migrate.md) | `ezc migrate`: the order, the proof, what it changes and what it reports. |
 | [Reference](reference.md) | Every command, the files, encryption and the resolution rules. |
 | [When something is wrong](troubleshooting.md) | What `ezc doctor` reports and what to do about it. |

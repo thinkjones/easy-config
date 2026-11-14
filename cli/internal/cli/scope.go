@@ -126,8 +126,7 @@ func policyFiles(sys System) []string {
 // keyFileVariable names, in the environment, the key file the default backend reads with; it wins over the config's.
 const keyFileVariable = "SOPS_AGE_KEY_FILE"
 
-// keyTextVariable names, in the environment, the key text the default backend reads; a CI job of the tool ezc
-// replaced passed its key in it, which ezc migrate reports.
+// keyTextVariable names, in the environment, the key text the default backend reads.
 const keyTextVariable = "SOPS_AGE_KEY"
 
 // keySource says where the default backend finds the key, for display, and whether a key is there: the key
